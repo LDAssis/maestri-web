@@ -128,6 +128,15 @@ fastify.post<{ Params: { id: string }; Body: { nodes: any[]; edges: any[] } }>("
   return { ok: true };
 });
 
+// Prepend CLI tools paths (agy, claude, opencode) para garantir que estejam no PATH do terminal
+const extraPaths = [
+  "C:\\Users\\ti\\AppData\\Local\\agy\\bin",
+  "C:\\Users\\ti\\.local\\bin",
+  "C:\\Users\\ti\\AppData\\Roaming\\npm",
+].join(";");
+
+const enrichedPath = `${extraPaths};${process.env.PATH || ""}`;
+
 // WebSocket Terminal para invocar bash em qualquer projeto/worktree
 fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
   const url = new URL(req.url, "http://localhost:4000");
@@ -139,6 +148,8 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
     cwd,
     env: {
       ...process.env,
+      PATH: enrichedPath,
+      Path: enrichedPath,
       TERM: "xterm-256color",
       FORCE_COLOR: "1",
     },
