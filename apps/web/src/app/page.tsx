@@ -131,9 +131,9 @@ export default function App() {
       </nav>
 
       {/* Conteúdo Principal */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden relative">
         {/* Top Header com Seletor de Projetos */}
-        <header className="h-14 border-b border-slate-800/80 px-6 flex items-center justify-between bg-slate-950/80 backdrop-blur-md z-10">
+        <header className="h-14 border-b border-slate-800/80 px-6 flex items-center justify-between bg-slate-950/95 backdrop-blur-md relative z-50">
           <div className="flex items-center gap-4">
             <span className="font-semibold text-sm tracking-wide text-white">
               MAESTRI WEB
@@ -152,7 +152,7 @@ export default function App() {
               </button>
 
               {isDropdownOpen && (
-                <div className="absolute top-10 left-0 w-72 rounded-xl border border-slate-800 bg-slate-950/95 shadow-2xl backdrop-blur-md py-1 z-30">
+                <div className="absolute top-11 left-0 w-72 rounded-xl border border-slate-800 bg-slate-950 shadow-2xl py-1 z-50">
                   <div className="px-3 py-1.5 text-[10px] font-mono uppercase text-slate-500 border-b border-slate-800/80">
                     Selecione o Projeto / Ambiente
                   </div>
