@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   ReactFlow,
   MiniMap,
@@ -14,12 +14,14 @@ import {
   Node,
   BackgroundVariant,
   MarkerType,
+  Viewport,
+  ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
 import PortalNode, { PortalNodeData } from "./PortalNode";
-import { Plus, RefreshCw, StickyNote, Globe, Bookmark, FolderOpen, Save } from "lucide-react";
+import { Plus, RefreshCw, StickyNote, Globe, Save } from "lucide-react";
 
 interface MaestriCanvasProps {
   projectId: string;
@@ -91,7 +93,7 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
       style: { width: 480, height: 330 },
       data: {
         title: "Portal Web: Live Preview",
-        url: "http://localhost:3000",
+        url: "",
       },
     },
     {
@@ -191,45 +193,95 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<any>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [saveStatus, setSaveStatus] = useState<string>("");
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [loadError, setLoadError] = useState<string>("");
+  const [initialViewport, setInitialViewport] = useState<Viewport | undefined>(undefined);
+  const [viewport, setViewport] = useState<Viewport | undefined>(undefined);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const flowRef = useRef<ReactFlowInstance | null>(null);
+  const lastSavedRef = useRef<string>("");
+  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Serializa só o que é persistente (sem selected, dragging, measured...)
+  const serializeCanvas = (n: Node<any>[], e: Edge[], v?: Viewport) =>
+    JSON.stringify({
+      nodes: n.map(({ selected, dragging, measured, resizing, ...rest }: any) => rest),
+      edges: e.map(({ selected, ...rest }: any) => rest),
+      viewport: v,
+    });
 
   // Carrega o canvas específico deste projeto
-  useEffect(() => {
-    async function loadProjectCanvas() {
-      try {
-        const res = await fetch(`http://localhost:4000/api/projects/${projectId}/canvas`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.nodes && data.nodes.length > 0) {
-            setNodes(data.nodes);
-            setEdges(data.edges || []);
-            return;
-          }
-        }
-      } catch {}
-
-      // Fallback para Partitura padrão
-      setNodes(defaultPartituraFullstack.nodes);
-      setEdges(defaultPartituraFullstack.edges);
+  const loadProjectCanvas = useCallback(async () => {
+    setLoadState("loading");
+    setLoadError("");
+    try {
+      const res = await fetch(`http://localhost:4000/api/projects/${projectId}/canvas`);
+      if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);
+      const data = await res.json();
+      const hasNodes = Array.isArray(data?.nodes) && data.nodes.length > 0;
+      // Padrão só quando o backend responde sem canvas salvo
+      const loadedNodes = hasNodes ? data.nodes : defaultPartituraFullstack.nodes;
+      const loadedEdges = hasNodes ? data.edges || [] : defaultPartituraFullstack.edges;
+      const loadedViewport: Viewport | undefined = hasNodes ? data.viewport : undefined;
+      setNodes(loadedNodes);
+      setEdges(loadedEdges);
+      setInitialViewport(loadedViewport);
+      setViewport(loadedViewport);
+      lastSavedRef.current = serializeCanvas(loadedNodes, loadedEdges, loadedViewport);
+      setLoadState("ready");
+    } catch (err: any) {
+      setLoadError(err?.message || "Falha de rede");
+      setLoadState("error");
     }
-
-    loadProjectCanvas();
   }, [projectId, setNodes, setEdges]);
 
-  // Salva o canvas deste projeto no backend
-  const saveProjectCanvas = async () => {
-    setSaveStatus("Salvando...");
-    try {
-      await fetch(`http://localhost:4000/api/projects/${projectId}/canvas`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nodes, edges }),
-      });
-      setSaveStatus("Salvo!");
-      setTimeout(() => setSaveStatus(""), 2000);
-    } catch {
-      setSaveStatus("Erro ao salvar");
-    }
-  };
+  useEffect(() => {
+    loadProjectCanvas();
+  }, [loadProjectCanvas]);
+
+  const flashStatus = useCallback((msg: string, ms?: number) => {
+    if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+    setSaveStatus(msg);
+    if (ms) statusTimerRef.current = setTimeout(() => setSaveStatus(""), ms);
+  }, []);
+
+  // Salva o canvas deste projeto no backend (manual e autosave)
+  const saveProjectCanvas = useCallback(
+    async (auto = false) => {
+      if (loadState !== "ready") return;
+      const body = serializeCanvas(nodes, edges, viewport);
+      if (auto && body === lastSavedRef.current) return;
+      flashStatus(auto ? "Salvando automaticamente..." : "Salvando...");
+      try {
+        const res = await fetch(`http://localhost:4000/api/projects/${projectId}/canvas`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);
+        lastSavedRef.current = body;
+        flashStatus("Salvo!", 2000);
+      } catch (err: any) {
+        flashStatus(`Erro ao salvar: ${err?.message || "falha de rede"}`);
+      }
+    },
+    [loadState, nodes, edges, viewport, projectId, flashStatus]
+  );
+
+  // Autosave com debounce após mudanças
+  useEffect(() => {
+    if (loadState !== "ready") return;
+    if (serializeCanvas(nodes, edges, viewport) === lastSavedRef.current) return;
+    const t = setTimeout(() => saveProjectCanvas(true), 1500);
+    return () => clearTimeout(t);
+  }, [loadState, nodes, edges, viewport, saveProjectCanvas]);
+
+  useEffect(
+    () => () => {
+      if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+    },
+    []
+  );
 
   const onConnect = useCallback(
     (params: Connection) =>
@@ -247,19 +299,46 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
     [setEdges]
   );
 
+  // Centro da viewport atual (nó centralizado), deslocado em passos de 40px até não sobrepor outro nó
+  const getSpawnPosition = (w: number, h: number) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    const flow = flowRef.current;
+    if (!rect || !flow) return { x: 300, y: 200 };
+    const c = flow.screenToFlowPosition({
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    });
+    const size = (n: Node<any>) => ({
+      w: Number(n.measured?.width ?? n.style?.width ?? 300) || 300,
+      h: Number(n.measured?.height ?? n.style?.height ?? 200) || 200,
+    });
+    let pos = { x: c.x - w / 2, y: c.y - h / 2 };
+    // Empurra para a direita do nó que cobre a posição até achar espaço livre (x só cresce, então termina)
+    for (;;) {
+      const { x, y } = pos;
+      const hit = nodes.find((n) => {
+        const s = size(n);
+        return x < n.position.x + s.w && x + w > n.position.x && y < n.position.y + s.h && y + h > n.position.y;
+      });
+      if (!hit) return pos;
+      pos = { x: hit.position.x + size(hit).w + 40, y };
+    }
+  };
+
   const addAgent = () => {
     const newId = `agent-${Date.now().toString().slice(-4)}`;
     const newNode: Node<AgentNodeData> = {
       id: newId,
       type: "agentTerminal",
-      position: { x: 450 + Math.random() * 50, y: 400 + Math.random() * 50 },
+      position: getSpawnPosition(460, 330),
+      style: { width: 460, height: 330 },
       data: {
         title: `Agente Especialista ${nodes.length + 1}`,
         role: "DevOps / Worker CLI",
         model: "Claude 3.5 Sonnet",
         status: "idle",
         branch: `agent/${newId}`,
-        defaultCmd: `echo 'Agente inicializado para o projeto: ${projectName}'`,
+        defaultCmd: `echo 'Agente inicializado'`,
       },
     };
     setNodes((nds) => [...nds, newNode]);
@@ -270,7 +349,8 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
     const newNode: Node<StickyNoteData> = {
       id: newId,
       type: "stickyNote",
-      position: { x: 300 + Math.random() * 60, y: 200 + Math.random() * 60 },
+      position: getSpawnPosition(280, 200),
+      style: { width: 280, height: 200 },
       data: {
         title: `Nota: ${projectName}`,
         color: "amber",
@@ -286,10 +366,11 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
     const newNode: Node<PortalNodeData> = {
       id: newId,
       type: "portal",
-      position: { x: 800 + Math.random() * 60, y: 250 + Math.random() * 60 },
+      position: getSpawnPosition(480, 330),
+      style: { width: 480, height: 330 },
       data: {
         title: `Portal: ${projectName}`,
-        url: "http://localhost:3000",
+        url: "",
       },
     };
     setNodes((nds) => [...nds, newNode]);
@@ -301,7 +382,7 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
   };
 
   return (
-    <div className="relative w-full h-full bg-[#0a0f1d] overflow-hidden">
+    <div ref={containerRef} className="relative w-full h-full bg-[#0a0f1d] overflow-hidden">
       {/* Floating Toolbar do Canvas */}
       <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-slate-900/90 border border-slate-800 rounded-xl p-2 backdrop-blur-md shadow-xl flex-wrap max-w-[calc(100vw-350px)]">
         <button
@@ -331,8 +412,9 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
         <div className="h-4 w-[1px] bg-slate-700 mx-1"></div>
 
         <button
-          onClick={saveProjectCanvas}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition"
+          onClick={() => saveProjectCanvas()}
+          disabled={loadState !== "ready"}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
           title="Salvar canvas deste projeto"
         >
           <Save className="h-3.5 w-3.5" />
@@ -359,15 +441,41 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
         💡 Cada projeto tem seus próprios agentes, terminais PTY, notas e portais web salvos de forma independente
       </div>
 
+      {loadState === "loading" && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#080d1a] text-slate-500 font-mono text-xs">
+          Carregando canvas do projeto...
+        </div>
+      )}
+
+      {loadState === "error" && (
+        <div
+          role="alert"
+          className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-[#080d1a] text-xs"
+        >
+          <p className="text-rose-300">Não foi possível carregar o canvas: {loadError}</p>
+          <p className="text-slate-500">O salvamento está bloqueado para não sobrescrever seus dados.</p>
+          <button
+            onClick={loadProjectCanvas}
+            className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      )}
+
       {/* O Canvas Principal com React Flow */}
+      {loadState === "ready" && (
       <ReactFlow
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onInit={(instance) => (flowRef.current = instance)}
         nodeTypes={nodeTypes}
-        fitView
+        defaultViewport={initialViewport}
+        fitView={!initialViewport}
+        onMoveEnd={(event, v) => event && setViewport(v)}
         className="bg-[#080d1a]"
       >
         <Background
@@ -389,6 +497,7 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
           maskColor="rgba(15, 23, 42, 0.7)"
         />
       </ReactFlow>
+      )}
     </div>
   );
 }

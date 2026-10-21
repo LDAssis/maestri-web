@@ -3,14 +3,14 @@
     "id": "proj-maestri-web",
     "name": "Maestri Web (Principal)",
     "description": "Orquestrador web com Git Worktrees e agentes",
-    "repoPath": "C:\\Users\\ti\\.gemini\\antigravity\\scratch\\maestri-web",
+    "repoPath": ".",
     "createdAt": "2026-10-21T19:54:51.371Z"
   },
   {
     "id": "proj-ecommerce-api",
     "name": "Microserviço E-commerce",
     "description": "Backend de pagamentos e catálogo com agentes dedicados",
-    "repoPath": "C:\\Users\\ti\\.gemini\\antigravity\\scratch\\maestri-web",
+    "repoPath": ".",
     "createdAt": "2026-10-21T19:54:51.375Z"
   }
 ]

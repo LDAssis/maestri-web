@@ -4,6 +4,7 @@ import websocket from "@fastify/websocket";
 import pty from "node-pty";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { WorktreeManager, WorktreeSession } from "./worktree.js";
 
 // Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
@@ -15,16 +16,25 @@ process.on("unhandledRejection", (reason) => {
   console.error("Unhandled Rejection prevenida:", reason);
 });
 
-const fastify = Fastify({ logger: true });
+export const fastify = Fastify({ logger: true });
 
-await fastify.register(cors, { origin: true });
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+await fastify.register(cors, { origin: allowedOrigins });
 await fastify.register(websocket);
 
+const isWindows = process.platform === "win32";
 const gitBashPath = "C:\\Program Files\\Git\\bin\\bash.exe";
-const defaultShell = fs.existsSync(gitBashPath) ? gitBashPath : "powershell.exe";
+const defaultShell = isWindows
+  ? fs.existsSync(gitBashPath) ? gitBashPath : "powershell.exe"
+  : process.env.SHELL || "/bin/bash";
 
 // Diretório base dos projetos e persistência
-const defaultRepo = process.env.REPO_PATH || path.resolve("C:/Users/ti/.gemini/antigravity/scratch/maestri-web");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const defaultRepo = path.resolve(process.env.REPO_PATH || repoRoot);
 const dataDir = path.resolve(defaultRepo, ".maestri_data");
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -66,11 +76,30 @@ if (projects.length === 0) {
       createdAt: new Date().toISOString(),
     },
   ];
-  fs.writeFileSync(projectsFile, JSON.stringify(projects, null, 2));
+  writeJsonAtomic(projectsFile, projects);
+}
+
+// repoPath relativo (ex.: ".") é resolvido a partir de defaultRepo, para o projects.json ser portátil
+projects = projects.map((p) => ({ ...p, repoPath: path.resolve(defaultRepo, p.repoPath) }));
+
+function writeJsonAtomic(file: string, data: unknown) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, file);
 }
 
 function saveProjects() {
-  fs.writeFileSync(projectsFile, JSON.stringify(projects, null, 2));
+  // Grava repoPath relativo a defaultRepo para o projects.json continuar portátil
+  writeJsonAtomic(projectsFile, projects.map((p) => ({ ...p, repoPath: path.relative(defaultRepo, p.repoPath) || "." })));
+}
+
+function isInside(parent: string, child: string) {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function canvasFileFor(id: string) {
+  return /^[\w-]+$/.test(id) && projects.some((p) => p.id === id) ? path.join(dataDir, `canvas_${id}.json`) : null;
 }
 
 // Endpoints de Projetos
@@ -79,8 +108,8 @@ fastify.get("/api/projects", async () => {
 });
 
 fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }>("/api/projects", async (req, reply) => {
-  const { name, description = "", repoPath = defaultRepo } = req.body;
-  if (!name) {
+  const { name, description = "", repoPath = defaultRepo } = req.body ?? {};
+  if (!name || typeof name !== "string") {
     return reply.status(400).send({ error: "Nome do projeto é obrigatório." });
   }
 
@@ -110,7 +139,13 @@ fastify.delete<{ Params: { id: string } }>("/api/projects/:id", async (req, repl
 
 // Estado do Canvas por Projeto
 fastify.get<{ Params: { id: string } }>("/api/projects/:id/canvas", async (req, reply) => {
-  const canvasFile = path.join(dataDir, `canvas_${req.params.id}.json`);
+  const canvasFile = canvasFileFor(req.params.id);
+  if (!/^[\w-]+$/.test(req.params.id)) {
+    return reply.status(400).send({ error: "Id de projeto inválido." });
+  }
+  if (!canvasFile) {
+    return reply.status(404).send({ error: "Projeto não encontrado." });
+  }
   if (fs.existsSync(canvasFile)) {
     try {
       const state = JSON.parse(fs.readFileSync(canvasFile, "utf-8"));
@@ -121,19 +156,27 @@ fastify.get<{ Params: { id: string } }>("/api/projects/:id/canvas", async (req, 
 });
 
 fastify.post<{ Params: { id: string }; Body: { nodes: any[]; edges: any[] } }>("/api/projects/:id/canvas", async (req, reply) => {
-  const canvasFile = path.join(dataDir, `canvas_${req.params.id}.json`);
-  fs.writeFileSync(canvasFile, JSON.stringify(req.body, null, 2));
+  const canvasFile = canvasFileFor(req.params.id);
+  if (!/^[\w-]+$/.test(req.params.id)) {
+    return reply.status(400).send({ error: "Id de projeto inválido." });
+  }
+  if (!canvasFile) {
+    return reply.status(404).send({ error: "Projeto não encontrado." });
+  }
+  writeJsonAtomic(canvasFile, req.body);
   return { ok: true };
 });
 
-// Prepend CLI tools paths (agy, claude, opencode)
-const extraPaths = [
-  "C:\\Users\\ti\\AppData\\Local\\agy\\bin",
-  "C:\\Users\\ti\\.local\\bin",
-  "C:\\Users\\ti\\AppData\\Roaming\\npm",
-].join(";");
+// Prepend CLI tools paths (agy, claude, opencode) — só no Windows
+const extraPaths = isWindows
+  ? [
+      "C:\\Users\\ti\\AppData\\Local\\agy\\bin",
+      "C:\\Users\\ti\\.local\\bin",
+      "C:\\Users\\ti\\AppData\\Roaming\\npm",
+    ]
+  : [];
 
-const enrichedPath = `${extraPaths};${process.env.PATH || ""}`;
+const enrichedPath = [...extraPaths, process.env.PATH || ""].join(path.delimiter);
 
 // WebSocket Terminal com ConPTY e proteção contra EAGAIN
 fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
@@ -141,15 +184,35 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
     console.error("WebSocket socket error capturado:", err.message);
   });
 
-  const url = new URL(req.url, "http://localhost:4000");
-  const rawCwd = url.searchParams.get("cwd");
-  const cwd = rawCwd && rawCwd.trim() && fs.existsSync(rawCwd) ? path.resolve(rawCwd) : defaultRepo;
+  // Navegadores sempre enviam Origin; clientes sem Origin (CLI/ws) não são alvo de CSRF
+  const origin = req.headers.origin;
+  if (origin && !allowedOrigins.includes(origin)) {
+    socket.close(1008, "Origin não permitido");
+    return;
+  }
+
+  const url = new URL(req.url, "http://localhost");
+  const rawCwd = url.searchParams.get("cwd")?.trim();
+  let cwd = defaultRepo;
+  if (rawCwd) {
+    try {
+      const real = fs.realpathSync(path.resolve(rawCwd));
+      const allowed = [defaultRepo, ...projects.map((p) => p.repoPath)].some((root) => {
+        try {
+          return isInside(fs.realpathSync(root), real);
+        } catch {
+          return false;
+        }
+      });
+      if (allowed && fs.statSync(real).isDirectory()) cwd = real;
+    } catch {}
+  }
   const initialCommand = url.searchParams.get("cmd") || "";
 
   let ptyProcess: pty.IPty | null = null;
 
   try {
-    const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : ["-NoLogo"];
+    const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : isWindows ? ["-NoLogo"] : [];
     ptyProcess = pty.spawn(defaultShell, shellArgs, {
       name: "xterm-256color",
       cols: 80,
@@ -157,8 +220,8 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
       cwd,
       env: {
         ...process.env,
+        ...(isWindows ? { Path: enrichedPath } : {}),
         PATH: enrichedPath,
-        Path: enrichedPath,
         TERM: "xterm-256color",
         COLORTERM: "truecolor",
       },
@@ -195,8 +258,10 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
       if (!ptyProcess) return;
       const text = message.toString();
       if (text.startsWith('{"type":"resize"')) {
-        const parsed = JSON.parse(text);
-        ptyProcess.resize(Math.max(10, parsed.cols), Math.max(5, parsed.rows));
+        const { cols, rows } = JSON.parse(text);
+        if (Number.isFinite(cols) && Number.isFinite(rows)) {
+          ptyProcess.resize(Math.min(500, Math.max(10, Math.floor(cols))), Math.min(200, Math.max(5, Math.floor(rows))));
+        }
         return;
       }
       ptyProcess.write(text);
@@ -207,9 +272,21 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
 
   const cleanup = () => {
     if (ptyProcess) {
+      const { pid } = ptyProcess;
       try {
         ptyProcess.kill();
       } catch {}
+      if (!isWindows) {
+        // node-pty faz setsid: o shell lidera o grupo; mata também os filhos (claude, npm run dev...)
+        try {
+          process.kill(-pid, "SIGHUP");
+        } catch {}
+        setTimeout(() => {
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch {}
+        }, 2000).unref();
+      }
       ptyProcess = null;
     }
   };
@@ -227,14 +304,17 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
   });
 });
 
+const port = Number(process.env.PORT) || 4000;
+const host = process.env.HOST || "127.0.0.1";
+
 const start = async () => {
   try {
-    await fastify.listen({ port: 4000, host: "0.0.0.0" });
-    console.log("Maestri Server com ConPTY Blindado rodando em http://localhost:4000");
+    await fastify.listen({ port, host });
+    console.log(`Maestri Server com ConPTY Blindado rodando em http://${host}:${port}`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);
   }
 };
 
-start();
+if (process.env.NODE_ENV !== "test") start();

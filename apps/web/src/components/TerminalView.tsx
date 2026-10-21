@@ -76,6 +76,8 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
+        // Terminal escondido (face Chat): não ajustar para 0x0, senão o PTY encolhe
+        if (width === 0 || height === 0) continue;
         if (Math.abs(width - lastWidth) > 4 || Math.abs(height - lastHeight) > 4) {
           lastWidth = width;
           lastHeight = height;
