@@ -6,6 +6,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { WorktreeManager, WorktreeSession } from "./worktree.js";
 
+// Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception prevenida:", err.message);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection prevenida:", reason);
+});
+
 const fastify = Fastify({ logger: true });
 
 await fastify.register(cors, { origin: true });
@@ -117,7 +126,7 @@ fastify.post<{ Params: { id: string }; Body: { nodes: any[]; edges: any[] } }>("
   return { ok: true };
 });
 
-// Prepend CLI tools paths (agy, claude, opencode) para garantir que estejam no PATH do terminal
+// Prepend CLI tools paths (agy, claude, opencode)
 const extraPaths = [
   "C:\\Users\\ti\\AppData\\Local\\agy\\bin",
   "C:\\Users\\ti\\.local\\bin",
@@ -126,75 +135,102 @@ const extraPaths = [
 
 const enrichedPath = `${extraPaths};${process.env.PATH || ""}`;
 
-// WebSocket Terminal com PTY REAL (ConPTY) - suporte completo a agy, claude, opencode e TTY
+// WebSocket Terminal com ConPTY e proteção contra EAGAIN
 fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
+  socket.on("error", (err) => {
+    console.error("WebSocket socket error capturado:", err.message);
+  });
+
   const url = new URL(req.url, "http://localhost:4000");
-  const cwd = url.searchParams.get("cwd") || defaultRepo;
+  const rawCwd = url.searchParams.get("cwd");
+  const cwd = rawCwd && rawCwd.trim() && fs.existsSync(rawCwd) ? path.resolve(rawCwd) : defaultRepo;
   const initialCommand = url.searchParams.get("cmd") || "";
 
-  // Usa ConPTY real via node-pty
-  const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : ["-NoLogo"];
-  const ptyProcess = pty.spawn(defaultShell, shellArgs, {
-    name: "xterm-256color",
-    cols: 80,
-    rows: 24,
-    cwd,
-    env: {
-      ...process.env,
-      PATH: enrichedPath,
-      Path: enrichedPath,
-      TERM: "xterm-256color",
-      COLORTERM: "truecolor",
-    },
-  });
+  let ptyProcess: pty.IPty | null = null;
+
+  try {
+    const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : ["-NoLogo"];
+    ptyProcess = pty.spawn(defaultShell, shellArgs, {
+      name: "xterm-256color",
+      cols: 80,
+      rows: 24,
+      cwd,
+      env: {
+        ...process.env,
+        PATH: enrichedPath,
+        Path: enrichedPath,
+        TERM: "xterm-256color",
+        COLORTERM: "truecolor",
+      },
+    });
+  } catch (err: any) {
+    console.error("Erro ao iniciar ConPTY:", err.message);
+    socket.send(`\r\n\x1b[31m[Erro]: Falha ao iniciar ConPTY: ${err.message}\x1b[0m\r\n`);
+    socket.close();
+    return;
+  }
 
   socket.send(`\r\n\x1b[32m[Maestri Web - ConPTY Ativo]\x1b[0m Terminal pronto em: ${cwd}\r\n`);
 
   if (initialCommand) {
     setTimeout(() => {
-      ptyProcess.write(`${initialCommand}\r`);
+      try {
+        ptyProcess?.write(`${initialCommand}\r`);
+      } catch {}
     }, 600);
   }
 
   ptyProcess.onData((data: string) => {
     try {
-      socket.send(data);
-    } catch {}
+      if (socket.readyState === 1 /* OPEN */) {
+        socket.send(data);
+      }
+    } catch (e: any) {
+      console.warn("Aviso ao enviar data para socket:", e.message);
+    }
   });
 
   socket.on("message", (message: Buffer | string) => {
     try {
+      if (!ptyProcess) return;
       const text = message.toString();
-      // Suporte a mensagens de redimensionamento caso venha em JSON
       if (text.startsWith('{"type":"resize"')) {
         const parsed = JSON.parse(text);
-        ptyProcess.resize(parsed.cols, parsed.rows);
+        ptyProcess.resize(Math.max(10, parsed.cols), Math.max(5, parsed.rows));
         return;
       }
       ptyProcess.write(text);
-    } catch (e) {
-      console.error("Erro ao enviar para PTY:", e);
+    } catch (e: any) {
+      console.error("Erro ao escrever no PTY:", e.message);
     }
   });
 
-  socket.on("close", () => {
-    try {
-      ptyProcess.kill();
-    } catch {}
-  });
+  const cleanup = () => {
+    if (ptyProcess) {
+      try {
+        ptyProcess.kill();
+      } catch {}
+      ptyProcess = null;
+    }
+  };
+
+  socket.on("close", cleanup);
 
   ptyProcess.onExit((event) => {
     try {
-      socket.send(`\r\n\x1b[33m[PTY finalizado (exitCode: ${event.exitCode})]\x1b[0m\r\n`);
-      socket.close();
+      if (socket.readyState === 1) {
+        socket.send(`\r\n\x1b[33m[PTY finalizado (exitCode: ${event.exitCode})]\x1b[0m\r\n`);
+        socket.close();
+      }
     } catch {}
+    cleanup();
   });
 });
 
 const start = async () => {
   try {
     await fastify.listen({ port: 4000, host: "0.0.0.0" });
-    console.log("Maestri Server com ConPTY Real rodando em http://localhost:4000");
+    console.log("Maestri Server com ConPTY Blindado rodando em http://localhost:4000");
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);
