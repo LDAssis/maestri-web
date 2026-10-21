@@ -10,6 +10,19 @@ export interface PortalNodeData extends Record<string, unknown> {
   device?: "browser" | "mobile";
 }
 
+// Só http/https; "exemplo.com" vira "http://exemplo.com". Retorna "" se inválida ou de outro esquema.
+function normalizeUrl(raw: string): string {
+  const v = raw.trim();
+  if (!v) return "";
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(v) ? v : /^(javascript|data|vbscript|file|blob|about):/i.test(v) ? "" : `http://${v}`;
+  try {
+    const u = new URL(withScheme);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.href : "";
+  } catch {
+    return "";
+  }
+}
+
 export default function PortalNode({
   id,
   data,
@@ -19,8 +32,9 @@ export default function PortalNode({
   data: PortalNodeData;
   selected?: boolean;
 }) {
-  const [currentUrl, setCurrentUrl] = useState(data.url || "http://localhost:3000");
-  const [inputUrl, setInputUrl] = useState(data.url || "http://localhost:3000");
+  const [currentUrl, setCurrentUrl] = useState(normalizeUrl(data.url || ""));
+  const [inputUrl, setInputUrl] = useState(data.url || "");
+  const [invalid, setInvalid] = useState(false);
   const [key, setKey] = useState(0);
   const { updateNodeData } = useReactFlow();
 
@@ -30,10 +44,15 @@ export default function PortalNode({
 
   const handleNavigate = (e: React.FormEvent) => {
     e.preventDefault();
-    setCurrentUrl(inputUrl);
-    updateNodeData(id, { url: inputUrl });
+    const next = normalizeUrl(inputUrl);
+    setInvalid(!next && !!inputUrl.trim());
+    setCurrentUrl(next);
+    if (next) setInputUrl(next);
+    updateNodeData(id, { url: next });
     setKey((prev) => prev + 1);
   };
+
+  const isSelf = !!currentUrl && new URL(currentUrl).origin === location.origin;
 
   return (
     <div className="w-full h-full min-w-[380px] min-h-[260px] rounded-2xl border border-slate-700 bg-slate-900/95 shadow-2xl backdrop-blur-md overflow-hidden text-slate-100 font-sans transition hover:border-cyan-500 flex flex-col">
@@ -75,7 +94,7 @@ export default function PortalNode({
             <RefreshCw className="h-3 w-3" />
           </button>
           <a
-            href={currentUrl}
+            href={currentUrl || undefined}
             target="_blank"
             rel="noopener noreferrer"
             className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition"
@@ -97,7 +116,7 @@ export default function PortalNode({
           value={inputUrl}
           onChange={(e) => setInputUrl(e.target.value)}
           className="flex-1 bg-slate-950 border border-slate-800 rounded px-2 py-0.5 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-500"
-          placeholder="http://localhost:3000"
+          placeholder="Digite a URL…"
         />
         <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/80 font-mono">
           DOM Inspector
@@ -106,13 +125,23 @@ export default function PortalNode({
 
       {/* Viewport do Navegador (Iframe auto-expansível) */}
       <div className="flex-1 w-full bg-slate-950 relative overflow-hidden">
-        <iframe
-          key={key}
-          src={currentUrl}
-          title="Portal Web do Agente"
-          className="w-full h-full border-0 bg-white"
-          sandbox="allow-scripts allow-same-origin allow-forms"
-        />
+        {currentUrl && !isSelf ? (
+          <iframe
+            key={key}
+            src={currentUrl}
+            title="Portal Web do Agente"
+            className="w-full h-full border-0 bg-white"
+            sandbox="allow-scripts allow-same-origin allow-forms"
+          />
+        ) : (
+          <div className="h-full flex items-center justify-center p-4 text-center text-xs text-slate-500">
+            {isSelf
+              ? "Este portal apontaria para o próprio Maestri Web. Informe a URL do app que você quer testar."
+              : invalid
+              ? "URL inválida: use http:// ou https://"
+              : "Digite a URL acima para abrir uma página."}
+          </div>
+        )}
       </div>
 
       {/* Footer bar */}

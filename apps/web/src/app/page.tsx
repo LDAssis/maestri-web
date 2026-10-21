@@ -40,17 +40,21 @@ export default function App() {
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDesc, setNewProjectDesc] = useState("");
 
+  const [projectsError, setProjectsError] = useState("");
+
   const fetchProjects = async () => {
+    setProjectsError("");
     try {
       const res = await fetch("http://localhost:4000/api/projects");
-      if (res.ok) {
-        const data = await res.json();
-        setProjects(data);
-        if (!activeProject && data.length > 0) {
-          setActiveProject(data[0]);
-        }
+      if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);
+      const data = await res.json();
+      setProjects(data);
+      if (!activeProject && data.length > 0) {
+        setActiveProject(data[0]);
       }
-    } catch {}
+    } catch (err: any) {
+      setProjectsError(err?.message || "Falha de rede");
+    }
   };
 
   useEffect(() => {
@@ -147,7 +151,9 @@ export default function App() {
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-xs font-medium text-slate-200 transition"
               >
                 <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
-                <span>{activeProject?.name || "Carregando projeto..."}</span>
+                <span>
+                  {activeProject?.name || (projectsError ? "Erro ao carregar" : "Carregando projeto...")}
+                </span>
                 <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
               </button>
 
@@ -229,6 +235,19 @@ export default function App() {
                 projectId={activeProject.id}
                 projectName={activeProject.name}
               />
+            ) : projectsError ? (
+              <div
+                role="alert"
+                className="flex h-full flex-col items-center justify-center gap-3 bg-[#080d1a] text-xs"
+              >
+                <p className="text-rose-300">Não foi possível carregar os projetos: {projectsError}</p>
+                <button
+                  onClick={fetchProjects}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition"
+                >
+                  Tentar novamente
+                </button>
+              </div>
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-slate-500 font-mono">
                 Selecione um projeto para abrir o canvas.

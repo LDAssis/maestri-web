@@ -15,6 +15,7 @@ import {
   BackgroundVariant,
   MarkerType,
   Viewport,
+  ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
@@ -92,7 +93,7 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
       style: { width: 480, height: 330 },
       data: {
         title: "Portal Web: Live Preview",
-        url: "http://localhost:3000",
+        url: "",
       },
     },
     {
@@ -196,6 +197,8 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
   const [loadError, setLoadError] = useState<string>("");
   const [initialViewport, setInitialViewport] = useState<Viewport | undefined>(undefined);
   const [viewport, setViewport] = useState<Viewport | undefined>(undefined);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const flowRef = useRef<ReactFlowInstance | null>(null);
   const lastSavedRef = useRef<string>("");
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -296,12 +299,39 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
     [setEdges]
   );
 
+  // Centro da viewport atual (nó centralizado), deslocado em passos de 40px até não sobrepor outro nó
+  const getSpawnPosition = (w: number, h: number) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    const flow = flowRef.current;
+    if (!rect || !flow) return { x: 300, y: 200 };
+    const c = flow.screenToFlowPosition({
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    });
+    const size = (n: Node<any>) => ({
+      w: Number(n.measured?.width ?? n.style?.width ?? 300) || 300,
+      h: Number(n.measured?.height ?? n.style?.height ?? 200) || 200,
+    });
+    let pos = { x: c.x - w / 2, y: c.y - h / 2 };
+    // Empurra para a direita do nó que cobre a posição até achar espaço livre (x só cresce, então termina)
+    for (;;) {
+      const { x, y } = pos;
+      const hit = nodes.find((n) => {
+        const s = size(n);
+        return x < n.position.x + s.w && x + w > n.position.x && y < n.position.y + s.h && y + h > n.position.y;
+      });
+      if (!hit) return pos;
+      pos = { x: hit.position.x + size(hit).w + 40, y };
+    }
+  };
+
   const addAgent = () => {
     const newId = `agent-${Date.now().toString().slice(-4)}`;
     const newNode: Node<AgentNodeData> = {
       id: newId,
       type: "agentTerminal",
-      position: { x: 450 + Math.random() * 50, y: 400 + Math.random() * 50 },
+      position: getSpawnPosition(460, 330),
+      style: { width: 460, height: 330 },
       data: {
         title: `Agente Especialista ${nodes.length + 1}`,
         role: "DevOps / Worker CLI",
@@ -319,7 +349,8 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
     const newNode: Node<StickyNoteData> = {
       id: newId,
       type: "stickyNote",
-      position: { x: 300 + Math.random() * 60, y: 200 + Math.random() * 60 },
+      position: getSpawnPosition(280, 200),
+      style: { width: 280, height: 200 },
       data: {
         title: `Nota: ${projectName}`,
         color: "amber",
@@ -335,10 +366,11 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
     const newNode: Node<PortalNodeData> = {
       id: newId,
       type: "portal",
-      position: { x: 800 + Math.random() * 60, y: 250 + Math.random() * 60 },
+      position: getSpawnPosition(480, 330),
+      style: { width: 480, height: 330 },
       data: {
         title: `Portal: ${projectName}`,
-        url: "http://localhost:3000",
+        url: "",
       },
     };
     setNodes((nds) => [...nds, newNode]);
@@ -350,7 +382,7 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
   };
 
   return (
-    <div className="relative w-full h-full bg-[#0a0f1d] overflow-hidden">
+    <div ref={containerRef} className="relative w-full h-full bg-[#0a0f1d] overflow-hidden">
       {/* Floating Toolbar do Canvas */}
       <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-slate-900/90 border border-slate-800 rounded-xl p-2 backdrop-blur-md shadow-xl flex-wrap max-w-[calc(100vw-350px)]">
         <button
@@ -439,6 +471,7 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onInit={(instance) => (flowRef.current = instance)}
         nodeTypes={nodeTypes}
         defaultViewport={initialViewport}
         fitView={!initialViewport}
