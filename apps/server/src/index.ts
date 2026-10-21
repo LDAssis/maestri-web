@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { spawn } from "node:child_process";
+import pty from "node-pty";
 import fs from "node:fs";
 import path from "node:path";
 import { WorktreeManager, WorktreeSession } from "./worktree.js";
@@ -62,17 +62,6 @@ if (projects.length === 0) {
 
 function saveProjects() {
   fs.writeFileSync(projectsFile, JSON.stringify(projects, null, 2));
-}
-
-// Map de WorktreeManagers por repositório
-const worktreeManagers = new Map<string, WorktreeManager>();
-function getWorktreeManager(repoPath: string): WorktreeManager {
-  if (!worktreeManagers.has(repoPath)) {
-    const mgr = new WorktreeManager(repoPath);
-    mgr.init().catch(console.error);
-    worktreeManagers.set(repoPath, mgr);
-  }
-  return worktreeManagers.get(repoPath)!;
 }
 
 // Endpoints de Projetos
@@ -137,59 +126,66 @@ const extraPaths = [
 
 const enrichedPath = `${extraPaths};${process.env.PATH || ""}`;
 
-// WebSocket Terminal para invocar bash em qualquer projeto/worktree
+// WebSocket Terminal com PTY REAL (ConPTY) - suporte completo a agy, claude, opencode e TTY
 fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
   const url = new URL(req.url, "http://localhost:4000");
   const cwd = url.searchParams.get("cwd") || defaultRepo;
   const initialCommand = url.searchParams.get("cmd") || "";
 
+  // Usa ConPTY real via node-pty
   const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : ["-NoLogo"];
-  const proc = spawn(defaultShell, shellArgs, {
+  const ptyProcess = pty.spawn(defaultShell, shellArgs, {
+    name: "xterm-256color",
+    cols: 80,
+    rows: 24,
     cwd,
     env: {
       ...process.env,
       PATH: enrichedPath,
       Path: enrichedPath,
       TERM: "xterm-256color",
-      FORCE_COLOR: "1",
+      COLORTERM: "truecolor",
     },
-    shell: false,
   });
 
-  socket.send(`\r\n\x1b[32m[Maestri Web]\x1b[0m Terminal ativo em: ${cwd}\r\n`);
-  if (defaultShell.includes("bash")) {
-    socket.send(`\x1b[34m[Shell]\x1b[0m Git Bash pronto. Digite agy, claude, opencode ou comandos bash.\r\n\r\n`);
-  }
+  socket.send(`\r\n\x1b[32m[Maestri Web - ConPTY Ativo]\x1b[0m Terminal pronto em: ${cwd}\r\n`);
 
   if (initialCommand) {
     setTimeout(() => {
-      proc.stdin.write(`${initialCommand}\n`);
-    }, 500);
+      ptyProcess.write(`${initialCommand}\r`);
+    }, 600);
   }
 
-  proc.stdout.on("data", (chunk: Buffer) => {
-    socket.send(chunk.toString("utf-8"));
-  });
-
-  proc.stderr.on("data", (chunk: Buffer) => {
-    socket.send(chunk.toString("utf-8"));
+  ptyProcess.onData((data: string) => {
+    try {
+      socket.send(data);
+    } catch {}
   });
 
   socket.on("message", (message: Buffer | string) => {
     try {
-      proc.stdin.write(message.toString());
+      const text = message.toString();
+      // Suporte a mensagens de redimensionamento caso venha em JSON
+      if (text.startsWith('{"type":"resize"')) {
+        const parsed = JSON.parse(text);
+        ptyProcess.resize(parsed.cols, parsed.rows);
+        return;
+      }
+      ptyProcess.write(text);
     } catch (e) {
-      console.error("Erro ao enviar para stdin:", e);
+      console.error("Erro ao enviar para PTY:", e);
     }
   });
 
   socket.on("close", () => {
-    proc.kill();
+    try {
+      ptyProcess.kill();
+    } catch {}
   });
 
-  proc.on("close", (code) => {
+  ptyProcess.onExit((event) => {
     try {
-      socket.send(`\r\n\x1b[33m[Processo finalizado (code ${code})]\x1b[0m\r\n`);
+      socket.send(`\r\n\x1b[33m[PTY finalizado (exitCode: ${event.exitCode})]\x1b[0m\r\n`);
       socket.close();
     } catch {}
   });
@@ -198,7 +194,7 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
 const start = async () => {
   try {
     await fastify.listen({ port: 4000, host: "0.0.0.0" });
-    console.log("Maestri Server com Suporte a Multi-Projetos rodando em http://localhost:4000");
+    console.log("Maestri Server com ConPTY Real rodando em http://localhost:4000");
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

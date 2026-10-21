@@ -63,6 +63,12 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
       }
     });
 
+    term.onResize((size) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "resize", cols: size.cols, rows: size.rows }));
+      }
+    });
+
     const handleResize = () => {
       try {
         fitAddon.fit();
