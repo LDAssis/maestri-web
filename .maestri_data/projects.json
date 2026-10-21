@@ -3,21 +3,14 @@
     "id": "proj-maestri-web",
     "name": "Maestri Web (Principal)",
     "description": "Orquestrador web com Git Worktrees e agentes",
-    "repoPath": "/home/assis/Documentos/projetos/maestri-web",
+    "repoPath": ".",
     "createdAt": "2026-10-21T19:54:51.371Z"
   },
   {
     "id": "proj-ecommerce-api",
     "name": "Microserviço E-commerce",
     "description": "Backend de pagamentos e catálogo com agentes dedicados",
-    "repoPath": "/home/assis/Documentos/projetos/maestri-web",
+    "repoPath": ".",
     "createdAt": "2026-10-21T19:54:51.375Z"
-  },
-  {
-    "id": "proj-691024",
-    "name": "QA Proj2",
-    "description": "",
-    "repoPath": "/home/assis/Documentos/projetos/maestri-web",
-    "createdAt": "2026-10-21T23:18:11.024Z"
   }
 ]

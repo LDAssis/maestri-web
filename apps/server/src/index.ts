@@ -89,7 +89,8 @@ function writeJsonAtomic(file: string, data: unknown) {
 }
 
 function saveProjects() {
-  writeJsonAtomic(projectsFile, projects);
+  // Grava repoPath relativo a defaultRepo para o projects.json continuar portátil
+  writeJsonAtomic(projectsFile, projects.map((p) => ({ ...p, repoPath: path.relative(defaultRepo, p.repoPath) || "." })));
 }
 
 function isInside(parent: string, child: string) {
