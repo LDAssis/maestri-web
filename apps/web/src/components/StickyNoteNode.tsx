@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Handle, Position, NodeResizer } from "@xyflow/react";
+import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import { StickyNote, Edit3 } from "lucide-react";
 
 export interface StickyNoteData extends Record<string, unknown> {
@@ -12,15 +12,18 @@ export interface StickyNoteData extends Record<string, unknown> {
 }
 
 export default function StickyNoteNode({
+  id,
   data,
   selected,
 }: {
+  id: string;
   data: StickyNoteData;
   selected?: boolean;
 }) {
   const [content, setContent] = useState(data.content || "");
   const [title, setTitle] = useState(data.title || "Nota Adesiva");
   const [isEditing, setIsEditing] = useState(false);
+  const { updateNodeData } = useReactFlow();
 
   const getColorStyles = () => {
     switch (data.color) {
@@ -63,7 +66,10 @@ export default function StickyNoteNode({
             <input
               type="text"
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                updateNodeData(id, { title: e.target.value });
+              }}
               className="bg-black/40 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
             />
           ) : (
@@ -86,7 +92,10 @@ export default function StickyNoteNode({
         {isEditing ? (
           <textarea
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={(e) => {
+              setContent(e.target.value);
+              updateNodeData(id, { content: e.target.value });
+            }}
             className="w-full h-full bg-black/40 rounded-lg p-2 text-xs font-mono leading-relaxed text-white focus:outline-none resize-none"
           />
         ) : (

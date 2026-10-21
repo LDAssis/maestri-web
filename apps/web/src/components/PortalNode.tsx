@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Handle, Position, NodeResizer } from "@xyflow/react";
+import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import { Globe, RefreshCw, ExternalLink, ShieldCheck } from "lucide-react";
 
 export interface PortalNodeData extends Record<string, unknown> {
@@ -11,15 +11,18 @@ export interface PortalNodeData extends Record<string, unknown> {
 }
 
 export default function PortalNode({
+  id,
   data,
   selected,
 }: {
+  id: string;
   data: PortalNodeData;
   selected?: boolean;
 }) {
   const [currentUrl, setCurrentUrl] = useState(data.url || "http://localhost:3000");
   const [inputUrl, setInputUrl] = useState(data.url || "http://localhost:3000");
   const [key, setKey] = useState(0);
+  const { updateNodeData } = useReactFlow();
 
   const handleReload = () => {
     setKey((prev) => prev + 1);
@@ -28,6 +31,7 @@ export default function PortalNode({
   const handleNavigate = (e: React.FormEvent) => {
     e.preventDefault();
     setCurrentUrl(inputUrl);
+    updateNodeData(id, { url: inputUrl });
     setKey((prev) => prev + 1);
   };
 

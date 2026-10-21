@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Handle, Position, NodeResizer } from "@xyflow/react";
+import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import {
   Terminal,
   ShieldCheck,
@@ -36,15 +36,18 @@ export interface AgentNodeData extends Record<string, unknown> {
 }
 
 export default function AgentTerminalNode({
+  id,
   data,
   selected,
 }: {
+  id: string;
   data: AgentNodeData;
   selected?: boolean;
 }) {
   const nodeData = data;
   const [activeFace, setActiveFace] = useState<"terminal" | "chat">("terminal");
-  const [isMaestro, setIsMaestro] = useState<boolean>(Boolean(nodeData.isMaestro));
+  const { updateNodeData } = useReactFlow();
+  const isMaestro = Boolean(nodeData.isMaestro);
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<Array<{ sender: "user" | "agent"; text: string }>>([
     {
@@ -154,7 +157,7 @@ export default function AgentTerminalNode({
         {/* Toggle Maestro & Face Toggle */}
         <div className="flex items-center gap-1.5">
           <button
-            onClick={() => setIsMaestro(!isMaestro)}
+            onClick={() => updateNodeData(id, { isMaestro: !isMaestro })}
             className={`p-1 rounded-md text-[10px] font-medium border transition flex items-center gap-1 ${
               isMaestro
                 ? "bg-amber-500 text-slate-950 border-amber-400 font-bold"
@@ -199,14 +202,18 @@ export default function AgentTerminalNode({
 
       {/* Corpo do Nó: Terminal ou Face de Chat */}
       <div className="flex-1 w-full overflow-hidden flex flex-col min-h-0">
-        {activeFace === "terminal" ? (
-          <div className="w-full h-full flex flex-col min-h-0">
-            <TerminalView
-              cwd={nodeData.worktreePath}
-              initialCmd={nodeData.defaultCmd}
-            />
-          </div>
-        ) : (
+        {/* Terminal sempre montado (só escondido) para não matar o PTY ao ir para o Chat */}
+        <div
+          className={`w-full h-full flex-col min-h-0 ${
+            activeFace === "terminal" ? "flex" : "hidden"
+          }`}
+        >
+          <TerminalView
+            cwd={nodeData.worktreePath}
+            initialCmd={nodeData.defaultCmd}
+          />
+        </div>
+        {activeFace === "chat" && (
           <div className="w-full h-full bg-[#070b16] flex flex-col justify-between p-3 min-h-0">
             {/* Mensagens formatadas */}
             <div className="overflow-y-auto space-y-2 pr-1 flex-1 text-xs">
