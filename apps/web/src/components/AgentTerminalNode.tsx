@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Handle, Position } from "@xyflow/react";
+import { Handle, Position, NodeResizer } from "@xyflow/react";
 import {
   Terminal,
   ShieldCheck,
@@ -10,15 +10,14 @@ import {
   MessageSquare,
   Send,
   AtSign,
-  Maximize2,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 
 const TerminalView = dynamic(() => import("./TerminalView"), {
   ssr: false,
   loading: () => (
-    <div className="h-[230px] flex items-center justify-center font-mono text-[11px] text-slate-500 bg-[#050811]">
-      Iniciando Bash / PTY...
+    <div className="h-full flex items-center justify-center font-mono text-[11px] text-slate-500 bg-[#050811]">
+      Iniciando Bash / ConPTY...
     </div>
   ),
 });
@@ -33,7 +32,13 @@ export interface AgentNodeData extends Record<string, unknown> {
   defaultCmd?: string;
 }
 
-export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
+export default function AgentTerminalNode({
+  data,
+  selected,
+}: {
+  data: AgentNodeData;
+  selected?: boolean;
+}) {
   const nodeData = data;
   const [activeFace, setActiveFace] = useState<"terminal" | "chat">("terminal");
   const [chatInput, setChatInput] = useState("");
@@ -85,7 +90,16 @@ export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
   };
 
   return (
-    <div className="w-[450px] rounded-xl border border-slate-700 bg-slate-900/95 shadow-2xl backdrop-blur-md overflow-hidden text-slate-100 font-sans transition hover:border-indigo-500">
+    <div className="w-full h-full min-w-[360px] min-h-[260px] rounded-xl border border-slate-700 bg-slate-900/95 shadow-2xl backdrop-blur-md overflow-hidden text-slate-100 font-sans transition hover:border-indigo-500 flex flex-col">
+      {/* Redimensionador Oficial do React Flow */}
+      <NodeResizer
+        minWidth={360}
+        minHeight={260}
+        isVisible={selected}
+        lineClassName="!border-indigo-500"
+        handleClassName="!h-3 !w-3 !bg-indigo-500 !border-2 !border-slate-900 !rounded"
+      />
+
       {/* Entrada de conexões superior */}
       <Handle
         type="target"
@@ -94,7 +108,7 @@ export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
       />
 
       {/* Header do Agente */}
-      <div className="px-4 py-2.5 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between">
+      <div className="px-4 py-2.5 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2.5">
           <div className="p-1.5 rounded-lg bg-slate-800/80 border border-slate-700">
             {getRoleIcon()}
@@ -143,67 +157,69 @@ export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
         </div>
       </div>
 
-      {/* Corpo do Nó: Terminal ou Face de Chat */}
-      {activeFace === "terminal" ? (
-        <div className="h-[240px] w-full bg-[#050811] flex flex-col">
-          <TerminalView
-            cwd={nodeData.worktreePath}
-            initialCmd={nodeData.defaultCmd}
-          />
-        </div>
-      ) : (
-        <div className="h-[240px] w-full bg-[#070b16] flex flex-col justify-between p-3">
-          {/* Mensagens formatadas */}
-          <div className="overflow-y-auto space-y-2 pr-1 flex-1 text-xs">
-            {messages.map((m, i) => (
-              <div
-                key={i}
-                className={`p-2.5 rounded-xl max-w-[85%] leading-relaxed ${
-                  m.sender === "user"
-                    ? "ml-auto bg-indigo-600 text-white"
-                    : "bg-slate-900 border border-slate-800 text-slate-200"
-                }`}
-              >
-                {m.text}
-              </div>
-            ))}
-          </div>
-
-          {/* Prompt Composer com @ mention */}
-          <div className="mt-2 pt-2 border-t border-slate-800 flex items-center gap-2">
-            <button
-              onClick={() => setChatInput((prev) => prev + "@nota ")}
-              className="p-1 rounded text-slate-400 hover:text-indigo-400 hover:bg-slate-800"
-              title="Mencionar Nota ou Terminal (@)"
-            >
-              <AtSign className="h-3.5 w-3.5" />
-            </button>
-            <input
-              type="text"
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-              placeholder="Digite instrução ou @ para mencionar..."
-              className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs focus:outline-none focus:border-indigo-500"
+      {/* Corpo do Nó: Terminal ou Face de Chat (Flexível para redimensionamento) */}
+      <div className="flex-1 w-full overflow-hidden flex flex-col">
+        {activeFace === "terminal" ? (
+          <div className="w-full h-full flex flex-col">
+            <TerminalView
+              cwd={nodeData.worktreePath}
+              initialCmd={nodeData.defaultCmd}
             />
-            <button
-              onClick={handleSendMessage}
-              className="p-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition"
-            >
-              <Send className="h-3 w-3" />
-            </button>
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="w-full h-full bg-[#070b16] flex flex-col justify-between p-3">
+            {/* Mensagens formatadas */}
+            <div className="overflow-y-auto space-y-2 pr-1 flex-1 text-xs">
+              {messages.map((m, i) => (
+                <div
+                  key={i}
+                  className={`p-2.5 rounded-xl max-w-[85%] leading-relaxed ${
+                    m.sender === "user"
+                      ? "ml-auto bg-indigo-600 text-white"
+                      : "bg-slate-900 border border-slate-800 text-slate-200"
+                  }`}
+                >
+                  {m.text}
+                </div>
+              ))}
+            </div>
+
+            {/* Prompt Composer com @ mention */}
+            <div className="mt-2 pt-2 border-t border-slate-800 flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setChatInput((prev) => prev + "@nota ")}
+                className="p-1 rounded text-slate-400 hover:text-indigo-400 hover:bg-slate-800"
+                title="Mencionar Nota ou Terminal (@)"
+              >
+                <AtSign className="h-3.5 w-3.5" />
+              </button>
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                placeholder="Digite instrução ou @ para mencionar..."
+                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs focus:outline-none focus:border-indigo-500"
+              />
+              <button
+                onClick={handleSendMessage}
+                className="p-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition"
+              >
+                <Send className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Footer bar */}
-      <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+      <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 font-mono shrink-0">
         <span className="flex items-center gap-1 text-indigo-400">
           <Terminal className="h-3 w-3" />
           {nodeData.branch || "worktree isolado"}
         </span>
         <span className="text-slate-500">
-          {activeFace === "terminal" ? "Bash PTY Conectado" : "Face de Chat Ativa"}
+          {activeFace === "terminal" ? "ConPTY Conectado" : "Face de Chat Ativa"}
         </span>
       </div>
 

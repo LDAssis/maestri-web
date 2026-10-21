@@ -43,7 +43,6 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(containerRef.current);
-    fitAddon.fit();
     termRef.current = term;
 
     // Conecta via WebSocket ao Fastify Terminal
@@ -69,15 +68,25 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
       }
     });
 
-    const handleResize = () => {
+    // ResizeObserver: adapta o xterm imediatamente enquanto o usuário arrasta o redimensionador
+    const resizeObserver = new ResizeObserver(() => {
+      try {
+        fitAddon.fit();
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+        }
+      } catch {}
+    });
+
+    resizeObserver.observe(containerRef.current);
+    setTimeout(() => {
       try {
         fitAddon.fit();
       } catch {}
-    };
-    window.addEventListener("resize", handleResize);
+    }, 100);
 
     return () => {
-      window.removeEventListener("resize", handleResize);
+      resizeObserver.disconnect();
       ws.close();
       term.dispose();
     };
@@ -90,9 +99,9 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
   };
 
   return (
-    <div className="flex flex-col h-full w-full bg-[#050811] rounded-b-xl overflow-hidden">
+    <div className="flex flex-col h-full w-full bg-[#050811] overflow-hidden">
       {/* Quick Launchers for CLI Agents */}
-      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-950 border-b border-slate-800 text-[10px] font-mono">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-950 border-b border-slate-800 text-[10px] font-mono shrink-0">
         <span className="text-slate-500 mr-1">CLI Rápido:</span>
         <button
           onClick={() => sendCommand("agy")}
@@ -120,8 +129,8 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
         </button>
       </div>
 
-      {/* Terminal Canvas */}
-      <div ref={containerRef} className="flex-1 w-full p-2 overflow-hidden" />
+      {/* Terminal Canvas com auto-fit */}
+      <div ref={containerRef} className="flex-1 w-full h-full p-2 overflow-hidden" />
     </div>
   );
 }
