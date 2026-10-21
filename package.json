@@ -1,0 +1,14 @@
+{
+  "name": "maestri-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-agent coding environment for distributed teams with Git Worktree isolation",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:server": "npm --prefix apps/server run dev",
+    "dev:web": "npm --prefix apps/web run dev"
+  }
+}
