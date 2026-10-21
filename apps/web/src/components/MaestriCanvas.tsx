@@ -23,76 +23,53 @@ const initialNodes: Node<AgentNodeData>[] = [
   {
     id: "planner",
     type: "agentTerminal",
-    position: { x: 350, y: 30 },
+    position: { x: 380, y: 30 },
     data: {
-      title: "Agente 01: Arquiteto",
+      title: "Agente 01: Arquiteto (agy)",
       role: "Planejamento e Quebra de Tarefas",
       model: "Claude 3.5 Sonnet",
-      status: "done",
+      status: "running",
       branch: "main/planning",
-      lastCommand: "gerando sub-tarefas para os coders",
-      logs: [
-        "Lendo requisitos do projeto...",
-        "Analisando arquivos existentes no repo",
-        "Especificação OpenAPI definida",
-        "Sub-tarefas distribuídas para Coder 1 e Coder 2 [OK]",
-      ],
+      defaultCmd: "echo 'Arquiteto pronto. Digite agy ou comando bash:'",
     },
   },
   {
     id: "coder-backend",
     type: "agentTerminal",
-    position: { x: 80, y: 330 },
+    position: { x: 40, y: 380 },
     data: {
-      title: "Agente 02: Backend Coder",
-      role: "Implementação Fastify / Worktree 1",
+      title: "Agente 02: Backend Coder (claude)",
+      role: "Implementação API & Banco",
       model: "Claude 3.5 Sonnet",
-      status: "running",
-      branch: "agent/worktree-backend",
-      lastCommand: "npm run test -- auth.spec.ts",
-      logs: [
-        "Criou branch isolada 'agent/backend-oauth'",
-        "Criou rotas em apps/server/src/auth.ts",
-        "Executando migração de schema...",
-        "Testes unitários passando (4/4)",
-      ],
+      status: "idle",
+      branch: "agent/backend-oauth",
+      defaultCmd: "echo 'Backend Coder pronto. Clique no botão [claude] acima para iniciar:'",
     },
   },
   {
     id: "coder-frontend",
     type: "agentTerminal",
-    position: { x: 620, y: 330 },
+    position: { x: 720, y: 380 },
     data: {
-      title: "Agente 03: Frontend Coder",
-      role: "Telas e Componentes / Worktree 2",
+      title: "Agente 03: Frontend Coder (opencode)",
+      role: "Telas e Componentes UI",
       model: "GPT-4o",
-      status: "running",
-      branch: "agent/worktree-frontend",
-      lastCommand: "npx tailwindcss -i src/input.css",
-      logs: [
-        "Branch isolada 'agent/frontend-oauth' pronta",
-        "Construindo tela de login OAuth",
-        "Consumindo endpoints do backend",
-        "Layout responsivo validado [OK]",
-      ],
+      status: "idle",
+      branch: "agent/frontend-oauth",
+      defaultCmd: "echo 'Frontend Coder pronto. Clique no botão [opencode] acima para iniciar:'",
     },
   },
   {
     id: "reviewer",
     type: "agentTerminal",
-    position: { x: 350, y: 640 },
+    position: { x: 380, y: 740 },
     data: {
       title: "Agente 04: QA & Code Reviewer",
-      role: "Validação Cruzada e Testes E2E",
+      role: "Validação Cruzada de Diffs",
       model: "Gemini 1.5 Pro",
       status: "waiting",
       branch: "stage/review-gate",
-      lastCommand: "aguardando conclusão dos coders",
-      logs: [
-        "Pronto para receber diffs dos dois worktrees",
-        "Avaliando cobertura de testes",
-        "Verificação de vulnerabilidades agendada",
-      ],
+      defaultCmd: "git status",
     },
   },
 ];
@@ -103,7 +80,7 @@ const initialEdges: Edge[] = [
     source: "planner",
     target: "coder-backend",
     animated: true,
-    label: "Specs API & Tarefa Backend",
+    label: "Specs API & Tarefas",
     style: { stroke: "#818cf8", strokeWidth: 2 },
     labelStyle: { fill: "#cbd5e1", fontSize: 10, fontWeight: 500 },
     labelBgStyle: { fill: "#0f172a", fillOpacity: 0.9 },
@@ -174,50 +151,14 @@ export default function MaestriCanvas() {
       position: { x: 450 + Math.random() * 50, y: 350 + Math.random() * 50 },
       data: {
         title: `Agente Especialista ${nodes.length + 1}`,
-        role: "DevOps / Worker sob demanda",
+        role: "DevOps / Worker CLI",
         model: "Claude 3.5 Sonnet",
         status: "idle",
         branch: `agent/${newId}`,
-        lastCommand: "aguardando conexão no canvas",
-        logs: ["Ambiente isolado criado", "Aguardando pipeline"],
+        defaultCmd: "echo 'Novo agente inicializado em worktree isolado.'",
       },
     };
     setNodes((nds) => [...nds, newNode]);
-  };
-
-  const simulateStep = () => {
-    setNodes((nds) =>
-      nds.map((node) => {
-        if (node.id === "coder-backend") {
-          return {
-            ...node,
-            data: {
-              ...node.data,
-              status: "done",
-              logs: [...node.data.logs, "Git commit realizado", "PR #102 aberto [OK]"],
-              lastCommand: "git push origin agent/backend-oauth",
-            },
-          };
-        }
-        if (node.id === "reviewer") {
-          return {
-            ...node,
-            data: {
-              ...node.data,
-              status: "running",
-              logs: [
-                ...node.data.logs,
-                "Recebido PR #102 do Backend Coder",
-                "Rodando testes de integração no worktree...",
-                "Zero conflitos de merge detectados [OK]",
-              ],
-              lastCommand: "npm run test:e2e",
-            },
-          };
-        }
-        return node;
-      })
-    );
   };
 
   return (
@@ -230,14 +171,6 @@ export default function MaestriCanvas() {
         >
           <Plus className="h-3.5 w-3.5" />
           Adicionar Agente
-        </button>
-
-        <button
-          onClick={simulateStep}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition"
-        >
-          <Play className="h-3.5 w-3.5 fill-current" />
-          Disparar Fluxo em Equipe
         </button>
 
         <div className="h-4 w-[1px] bg-slate-700 mx-1"></div>
@@ -256,7 +189,7 @@ export default function MaestriCanvas() {
 
       {/* Dica de interação */}
       <div className="absolute bottom-4 left-4 z-10 bg-slate-900/80 border border-slate-800/80 rounded-lg px-3 py-1.5 text-[11px] text-slate-400 backdrop-blur-sm pointer-events-none">
-        💡 Arraste os terminais para organizar • Conecte os círculos azuis para criar fluxos de comunicação
+        💡 Terminais interativos reais: clique e digite comandos bash ou use os botões rápidos [agy], [claude], [opencode]
       </div>
 
       {/* O Canvas Principal com React Flow */}

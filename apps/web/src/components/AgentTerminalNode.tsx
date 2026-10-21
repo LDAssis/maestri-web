@@ -1,21 +1,32 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { Terminal, ShieldCheck, Cpu, Code2 } from "lucide-react";
+import { Terminal, ShieldCheck, Cpu, Code2, Play, ToggleLeft, ToggleRight } from "lucide-react";
+import dynamic from "next/dynamic";
+
+const TerminalView = dynamic(() => import("./TerminalView"), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[220px] flex items-center justify-center font-mono text-[11px] text-slate-500 bg-[#050811]">
+      Iniciando Bash / PTY...
+    </div>
+  ),
+});
 
 export interface AgentNodeData extends Record<string, unknown> {
   title: string;
   role: string;
   model: string;
   status: "idle" | "running" | "done" | "waiting";
-  logs: string[];
-  lastCommand?: string;
   branch?: string;
+  worktreePath?: string;
+  defaultCmd?: string;
 }
 
 export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
   const nodeData = data;
+  const [useInteractiveBash, setUseInteractiveBash] = useState(true);
 
   const getStatusColor = () => {
     switch (nodeData.status) {
@@ -41,7 +52,7 @@ export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
   };
 
   return (
-    <div className="w-[380px] rounded-xl border border-slate-700 bg-slate-900/95 shadow-2xl backdrop-blur-md overflow-hidden text-slate-100 font-sans transition hover:border-indigo-500">
+    <div className="w-[440px] rounded-xl border border-slate-700 bg-slate-900/95 shadow-2xl backdrop-blur-md overflow-hidden text-slate-100 font-sans transition hover:border-indigo-500">
       {/* Entrada de conexões superior */}
       <Handle
         type="target"
@@ -50,7 +61,7 @@ export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
       />
 
       {/* Header do Agente */}
-      <div className="px-4 py-3 border-b border-slate-800 bg-slate-950/70 flex items-center justify-between">
+      <div className="px-4 py-2.5 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div className="p-1.5 rounded-lg bg-slate-800/80 border border-slate-700">
             {getRoleIcon()}
@@ -66,7 +77,7 @@ export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-2">
           <span className={`h-2 w-2 rounded-full ${getStatusColor()}`}></span>
           <span className="text-[10px] font-mono capitalize text-slate-300">
             {nodeData.status}
@@ -74,51 +85,21 @@ export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
         </div>
       </div>
 
-      {/* Terminal Integrado */}
-      <div className="bg-black/90 p-3 font-mono text-[11px] leading-relaxed flex flex-col justify-between h-[180px]">
-        {/* Terminal Header bar */}
-        <div className="flex items-center justify-between text-slate-500 border-b border-slate-800/80 pb-1.5 mb-2">
-          <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-red-500/80 inline-block"></span>
-            <span className="h-2 w-2 rounded-full bg-yellow-500/80 inline-block"></span>
-            <span className="h-2 w-2 rounded-full bg-green-500/80 inline-block"></span>
-            <span className="ml-1 text-[10px] text-slate-400 flex items-center gap-1">
-              <Terminal className="h-2.5 w-2.5" />
-              {nodeData.branch || "terminal"}
-            </span>
-          </div>
-          <span className="text-[9px] text-slate-500">sh - worktree</span>
-        </div>
+      {/* Terminal Interativo com suporte a agy / claude / opencode */}
+      <div className="h-[230px] w-full bg-[#050811] flex flex-col">
+        <TerminalView
+          cwd={nodeData.worktreePath}
+          initialCmd={nodeData.defaultCmd}
+        />
+      </div>
 
-        {/* Logs do terminal com auto-scroll */}
-        <div className="overflow-y-auto space-y-1.5 pr-1 flex-1 text-slate-300">
-          {(nodeData.logs || []).map((log, i) => (
-            <div key={i} className="flex items-start gap-1.5">
-              <span className="text-slate-600 select-none">&gt;</span>
-              <span
-                className={
-                  log.includes("OK") || log.includes("sucesso") || log.includes("pass")
-                    ? "text-emerald-400"
-                    : log.includes("exec") || log.includes("run")
-                    ? "text-indigo-400"
-                    : log.includes("aviso")
-                    ? "text-amber-400"
-                    : "text-slate-300"
-                }
-              >
-                {log}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        {/* Linha de comando ativa */}
-        <div className="mt-2 pt-1 border-t border-slate-800/80 flex items-center gap-2 text-indigo-400">
-          <span className="animate-pulse">❯</span>
-          <span className="text-[10px] text-slate-300 truncate">
-            {nodeData.lastCommand || "aguardando instrução..."}
-          </span>
-        </div>
+      {/* Footer bar */}
+      <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+        <span className="flex items-center gap-1 text-indigo-400">
+          <Terminal className="h-3 w-3" />
+          {nodeData.branch || "worktree isolado"}
+        </span>
+        <span className="text-slate-500">Bash PTY Conectado</span>
       </div>
 
       {/* Saída de conexões inferior */}

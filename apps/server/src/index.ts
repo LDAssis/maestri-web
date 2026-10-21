@@ -1,6 +1,8 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
 import { WorktreeManager, WorktreeSession } from "./worktree.js";
 
 const fastify = Fastify({ logger: true });
@@ -8,7 +10,10 @@ const fastify = Fastify({ logger: true });
 await fastify.register(cors, { origin: true });
 await fastify.register(websocket);
 
-// Target repository root: can be configured via REPO_PATH env or current directory
+// Determina se o Git Bash existe no Windows
+const gitBashPath = "C:\\Program Files\\Git\\bin\\bash.exe";
+const defaultShell = fs.existsSync(gitBashPath) ? gitBashPath : "powershell.exe";
+
 const targetRepo = process.env.REPO_PATH || process.cwd();
 const worktreeManager = new WorktreeManager(targetRepo);
 const activeSessions = new Map<string, WorktreeSession>();
@@ -51,11 +56,70 @@ fastify.delete<{ Params: { id: string } }>("/api/sessions/:id", async (req, repl
   return { ok: true, message: `Sessão ${session.id} encerrada e worktree removido.` };
 });
 
+// WebSocket Terminal para invocar bash e agentes CLI (agy, claude, opencode, etc.)
+fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
+  const url = new URL(req.url, "http://localhost:4000");
+  const cwd = url.searchParams.get("cwd") || targetRepo;
+  const initialCommand = url.searchParams.get("cmd") || "";
+
+  // Inicia bash interativo com terminal colorido
+  const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : ["-NoLogo"];
+  const proc = spawn(defaultShell, shellArgs, {
+    cwd,
+    env: {
+      ...process.env,
+      TERM: "xterm-256color",
+      FORCE_COLOR: "1",
+    },
+    shell: false,
+  });
+
+  socket.send(`\r\n\x1b[32m[Maestri Web]\x1b[0m Terminal ativo em: ${cwd}\r\n`);
+  if (defaultShell.includes("bash")) {
+    socket.send(`\x1b[34m[Shell]\x1b[0m Bash iniciado (Git Bash). Digite agy, claude, opencode ou comandos bash.\r\n\r\n`);
+  }
+
+  // Se passou um comando inicial (ex: claude ou opencode ou agy)
+  if (initialCommand) {
+    setTimeout(() => {
+      proc.stdin.write(`${initialCommand}\n`);
+    }, 500);
+  }
+
+  proc.stdout.on("data", (chunk: Buffer) => {
+    socket.send(chunk.toString("utf-8"));
+  });
+
+  proc.stderr.on("data", (chunk: Buffer) => {
+    socket.send(chunk.toString("utf-8"));
+  });
+
+  socket.on("message", (message: Buffer | string) => {
+    try {
+      const text = message.toString();
+      proc.stdin.write(text);
+    } catch (e) {
+      console.error("Erro ao enviar para stdin:", e);
+    }
+  });
+
+  socket.on("close", () => {
+    proc.kill();
+  });
+
+  proc.on("close", (code) => {
+    try {
+      socket.send(`\r\n\x1b[33m[Processo finalizado (code ${code})]\x1b[0m\r\n`);
+      socket.close();
+    } catch {}
+  });
+});
+
 const start = async () => {
   try {
     await worktreeManager.init();
     await fastify.listen({ port: 4000, host: "0.0.0.0" });
-    console.log("Maestri Server rodando em http://localhost:4000");
+    console.log("Maestri Server com Terminal rodando em http://localhost:4000");
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);
