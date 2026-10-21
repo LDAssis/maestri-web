@@ -10,6 +10,8 @@ import {
   MessageSquare,
   Send,
   AtSign,
+  Crown,
+  Sparkles,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 
@@ -30,6 +32,7 @@ export interface AgentNodeData extends Record<string, unknown> {
   branch?: string;
   worktreePath?: string;
   defaultCmd?: string;
+  isMaestro?: boolean;
 }
 
 export default function AgentTerminalNode({
@@ -41,11 +44,12 @@ export default function AgentTerminalNode({
 }) {
   const nodeData = data;
   const [activeFace, setActiveFace] = useState<"terminal" | "chat">("terminal");
+  const [isMaestro, setIsMaestro] = useState<boolean>(Boolean(nodeData.isMaestro));
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<Array<{ sender: "user" | "agent"; text: string }>>([
     {
       sender: "agent",
-      text: `Olá! Sou o ${nodeData.title}. Aguardando comandos ou instruções via terminal/chat.`,
+      text: `Olá! Sou o ${nodeData.title}. Estou ciente do meu papel no canvas do Maestri.`,
     },
   ]);
 
@@ -63,6 +67,9 @@ export default function AgentTerminalNode({
   };
 
   const getRoleIcon = () => {
+    if (isMaestro) {
+      return <Crown className="h-4 w-4 text-amber-400" />;
+    }
     if (nodeData.role?.toLowerCase().includes("arquiteto") || nodeData.role?.toLowerCase().includes("planner")) {
       return <Cpu className="h-4 w-4 text-purple-400" />;
     }
@@ -90,42 +97,75 @@ export default function AgentTerminalNode({
   };
 
   return (
-    <div className="w-full h-full min-w-[360px] min-h-[260px] rounded-xl border border-slate-700 bg-slate-900/95 shadow-2xl backdrop-blur-md overflow-hidden text-slate-100 font-sans transition hover:border-indigo-500 flex flex-col">
+    <div
+      className={`w-full h-full min-w-[360px] min-h-[260px] rounded-xl border bg-slate-900/95 shadow-2xl backdrop-blur-md overflow-hidden text-slate-100 font-sans transition flex flex-col ${
+        isMaestro
+          ? "border-amber-500/90 shadow-amber-500/20 ring-1 ring-amber-400/40"
+          : "border-slate-700 hover:border-indigo-500"
+      }`}
+    >
       {/* Redimensionador Oficial do React Flow */}
       <NodeResizer
         minWidth={360}
         minHeight={260}
         isVisible={selected}
-        lineClassName="!border-indigo-500"
-        handleClassName="!h-3 !w-3 !bg-indigo-500 !border-2 !border-slate-900 !rounded"
+        lineClassName={isMaestro ? "!border-amber-400" : "!border-indigo-500"}
+        handleClassName={
+          isMaestro
+            ? "!h-3 !w-3 !bg-amber-400 !border-2 !border-slate-900 !rounded"
+            : "!h-3 !w-3 !bg-indigo-500 !border-2 !border-slate-900 !rounded"
+        }
       />
 
       {/* Entrada de conexões superior */}
       <Handle
         type="target"
         position={Position.Top}
-        className="!w-3 !h-3 !bg-indigo-500 !border-2 !border-slate-900"
+        className={`!w-3 !h-3 !border-2 !border-slate-900 ${
+          isMaestro ? "!bg-amber-400" : "!bg-indigo-500"
+        }`}
       />
 
       {/* Header do Agente */}
-      <div className="px-4 py-2.5 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2.5">
-          <div className="p-1.5 rounded-lg bg-slate-800/80 border border-slate-700">
+      <div className="px-3.5 py-2 border-b border-slate-800 bg-slate-950/90 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2">
+          <div
+            className={`p-1.5 rounded-lg border ${
+              isMaestro
+                ? "bg-amber-950/60 border-amber-600/60"
+                : "bg-slate-800/80 border-slate-700"
+            }`}
+          >
             {getRoleIcon()}
           </div>
           <div>
             <div className="font-semibold text-xs text-slate-100 flex items-center gap-1.5">
               {nodeData.title}
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">
-                {nodeData.model}
-              </span>
+              {isMaestro && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-700 font-medium flex items-center gap-0.5">
+                  <Crown className="h-2.5 w-2.5" /> Maestro
+                </span>
+              )}
             </div>
             <div className="text-[11px] text-slate-400">{nodeData.role}</div>
           </div>
         </div>
 
-        {/* Toggle Face: Terminal <-> Chat */}
-        <div className="flex items-center gap-2">
+        {/* Toggle Maestro & Face Toggle */}
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setIsMaestro(!isMaestro)}
+            className={`p-1 rounded-md text-[10px] font-medium border transition flex items-center gap-1 ${
+              isMaestro
+                ? "bg-amber-500 text-slate-950 border-amber-400 font-bold"
+                : "text-slate-400 hover:text-amber-300 border-slate-800 bg-slate-900"
+            }`}
+            title="Marcar este nó como Maestro (orquestrador com permissão para invocar agentes)"
+          >
+            <Crown className="h-3 w-3" />
+            {isMaestro ? "Maestro" : "Tornar Maestro"}
+          </button>
+
           <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg p-0.5 text-[11px]">
             <button
               onClick={() => setActiveFace("terminal")}
@@ -134,7 +174,7 @@ export default function AgentTerminalNode({
                   ? "bg-indigo-600 text-white font-medium"
                   : "text-slate-400 hover:text-white"
               }`}
-              title="Ver Terminal PTY"
+              title="Ver Terminal ConPTY"
             >
               <Terminal className="h-3 w-3" />
               Terminal
@@ -157,17 +197,17 @@ export default function AgentTerminalNode({
         </div>
       </div>
 
-      {/* Corpo do Nó: Terminal ou Face de Chat (Flexível para redimensionamento) */}
-      <div className="flex-1 w-full overflow-hidden flex flex-col">
+      {/* Corpo do Nó: Terminal ou Face de Chat */}
+      <div className="flex-1 w-full overflow-hidden flex flex-col min-h-0">
         {activeFace === "terminal" ? (
-          <div className="w-full h-full flex flex-col">
+          <div className="w-full h-full flex flex-col min-h-0">
             <TerminalView
               cwd={nodeData.worktreePath}
               initialCmd={nodeData.defaultCmd}
             />
           </div>
         ) : (
-          <div className="w-full h-full bg-[#070b16] flex flex-col justify-between p-3">
+          <div className="w-full h-full bg-[#070b16] flex flex-col justify-between p-3 min-h-0">
             {/* Mensagens formatadas */}
             <div className="overflow-y-auto space-y-2 pr-1 flex-1 text-xs">
               {messages.map((m, i) => (
@@ -213,13 +253,13 @@ export default function AgentTerminalNode({
       </div>
 
       {/* Footer bar */}
-      <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 font-mono shrink-0">
-        <span className="flex items-center gap-1 text-indigo-400">
+      <div className="px-3 py-1 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 font-mono shrink-0">
+        <span className="flex items-center gap-1 text-indigo-400 truncate max-w-[200px]">
           <Terminal className="h-3 w-3" />
           {nodeData.branch || "worktree isolado"}
         </span>
         <span className="text-slate-500">
-          {activeFace === "terminal" ? "ConPTY Conectado" : "Face de Chat Ativa"}
+          {isMaestro ? "👑 Coordenador da Orquestra" : "ConPTY Conectado"}
         </span>
       </div>
 
@@ -227,7 +267,9 @@ export default function AgentTerminalNode({
       <Handle
         type="source"
         position={Position.Bottom}
-        className="!w-3 !h-3 !bg-indigo-500 !border-2 !border-slate-900"
+        className={`!w-3 !h-3 !border-2 !border-slate-900 ${
+          isMaestro ? "!bg-amber-400" : "!bg-indigo-500"
+        }`}
       />
     </div>
   );

@@ -68,24 +68,41 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
       }
     });
 
-    // ResizeObserver: adapta o xterm imediatamente enquanto o usuário arrasta o redimensionador
-    const resizeObserver = new ResizeObserver(() => {
-      try {
-        fitAddon.fit();
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+    // Proteção contra loop infinito: debounce e verificação de alteração real de tamanho
+    let lastWidth = 0;
+    let lastHeight = 0;
+    let resizeTimer: NodeJS.Timeout | null = null;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (Math.abs(width - lastWidth) > 4 || Math.abs(height - lastHeight) > 4) {
+          lastWidth = width;
+          lastHeight = height;
+
+          if (resizeTimer) clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(() => {
+            try {
+              fitAddon.fit();
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+              }
+            } catch {}
+          }, 60);
         }
-      } catch {}
+      }
     });
 
     resizeObserver.observe(containerRef.current);
+
     setTimeout(() => {
       try {
         fitAddon.fit();
       } catch {}
-    }, 100);
+    }, 150);
 
     return () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
       resizeObserver.disconnect();
       ws.close();
       term.dispose();
@@ -99,7 +116,7 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
   };
 
   return (
-    <div className="flex flex-col h-full w-full bg-[#050811] overflow-hidden">
+    <div className="flex flex-col h-full w-full bg-[#050811] overflow-hidden min-h-0">
       {/* Quick Launchers for CLI Agents */}
       <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-950 border-b border-slate-800 text-[10px] font-mono shrink-0">
         <span className="text-slate-500 mr-1">CLI Rápido:</span>
@@ -129,8 +146,10 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
         </button>
       </div>
 
-      {/* Terminal Canvas com auto-fit */}
-      <div ref={containerRef} className="flex-1 w-full h-full p-2 overflow-hidden" />
+      {/* Terminal Container com posicionamento absoluto para prevenir expansão do container */}
+      <div className="flex-1 w-full relative overflow-hidden min-h-0">
+        <div ref={containerRef} className="absolute inset-0 p-2 overflow-hidden" />
+      </div>
     </div>
   );
 }

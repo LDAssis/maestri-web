@@ -32,23 +32,26 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
       id: "planner",
       type: "agentTerminal",
       position: { x: 440, y: 30 },
+      style: { width: 460, height: 330 },
       data: {
-        title: "Agente 01: Arquiteto (agy)",
-        role: "Planejamento e Quebra de Tarefas",
+        title: "Agente 01: Arquiteto",
+        role: "Planejamento e Orquestração",
         model: "Claude 3.5 Sonnet",
         status: "running",
         branch: "main/planning",
-        defaultCmd: "echo 'Arquiteto pronto. Digite agy ou comandos bash:'",
+        isMaestro: true,
+        defaultCmd: "maestri context",
       },
     },
     {
       id: "specs-note",
       type: "stickyNote",
       position: { x: 40, y: 40 },
+      style: { width: 280, height: 200 },
       data: {
         title: "Notas de Arquitetura",
         color: "amber",
-        author: "Agente 01 (Arquiteto)",
+        author: "👑 Maestro",
         content:
           "1. Autenticação via JWT + Cookies HTTP-Only\n2. Worktree isolado por dev\n3. Zero colisão de dependências\n4. Review obrigatório antes do merge",
       },
@@ -57,8 +60,9 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
       id: "coder-backend",
       type: "agentTerminal",
       position: { x: 40, y: 400 },
+      style: { width: 460, height: 330 },
       data: {
-        title: "Agente 02: Backend Coder (claude)",
+        title: "Agente 02: Backend Coder",
         role: "Implementação API & Banco",
         model: "Claude 3.5 Sonnet",
         status: "idle",
@@ -70,8 +74,9 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
       id: "coder-frontend",
       type: "agentTerminal",
       position: { x: 620, y: 400 },
+      style: { width: 460, height: 330 },
       data: {
-        title: "Agente 03: Frontend Coder (opencode)",
+        title: "Agente 03: Frontend Coder",
         role: "Telas e Componentes UI",
         model: "GPT-4o",
         status: "idle",
@@ -83,6 +88,7 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
       id: "portal-debug",
       type: "portal",
       position: { x: 1140, y: 400 },
+      style: { width: 480, height: 330 },
       data: {
         title: "Portal Web: Live Preview",
         url: "http://localhost:3000",
@@ -92,6 +98,7 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
       id: "reviewer",
       type: "agentTerminal",
       position: { x: 440, y: 800 },
+      style: { width: 460, height: 330 },
       data: {
         title: "Agente 04: QA & Code Reviewer",
         role: "Validação Cruzada de Diffs",
