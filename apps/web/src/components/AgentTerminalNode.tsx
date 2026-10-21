@@ -2,13 +2,22 @@
 
 import React, { useState } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { Terminal, ShieldCheck, Cpu, Code2, Play, ToggleLeft, ToggleRight } from "lucide-react";
+import {
+  Terminal,
+  ShieldCheck,
+  Cpu,
+  Code2,
+  MessageSquare,
+  Send,
+  AtSign,
+  Maximize2,
+} from "lucide-react";
 import dynamic from "next/dynamic";
 
 const TerminalView = dynamic(() => import("./TerminalView"), {
   ssr: false,
   loading: () => (
-    <div className="h-[220px] flex items-center justify-center font-mono text-[11px] text-slate-500 bg-[#050811]">
+    <div className="h-[230px] flex items-center justify-center font-mono text-[11px] text-slate-500 bg-[#050811]">
       Iniciando Bash / PTY...
     </div>
   ),
@@ -26,7 +35,14 @@ export interface AgentNodeData extends Record<string, unknown> {
 
 export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
   const nodeData = data;
-  const [useInteractiveBash, setUseInteractiveBash] = useState(true);
+  const [activeFace, setActiveFace] = useState<"terminal" | "chat">("terminal");
+  const [chatInput, setChatInput] = useState("");
+  const [messages, setMessages] = useState<Array<{ sender: "user" | "agent"; text: string }>>([
+    {
+      sender: "agent",
+      text: `Olá! Sou o ${nodeData.title}. Aguardando comandos ou instruções via terminal/chat.`,
+    },
+  ]);
 
   const getStatusColor = () => {
     switch (nodeData.status) {
@@ -51,8 +67,25 @@ export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
     return <Code2 className="h-4 w-4 text-indigo-400" />;
   };
 
+  const handleSendMessage = () => {
+    if (!chatInput.trim()) return;
+    const userMsg = chatInput;
+    setMessages((prev) => [...prev, { sender: "user", text: userMsg }]);
+    setChatInput("");
+
+    setTimeout(() => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "agent",
+          text: `[Recebido]: Processando instrução no worktree '${nodeData.branch}'. Executando modificações...`,
+        },
+      ]);
+    }, 600);
+  };
+
   return (
-    <div className="w-[440px] rounded-xl border border-slate-700 bg-slate-900/95 shadow-2xl backdrop-blur-md overflow-hidden text-slate-100 font-sans transition hover:border-indigo-500">
+    <div className="w-[450px] rounded-xl border border-slate-700 bg-slate-900/95 shadow-2xl backdrop-blur-md overflow-hidden text-slate-100 font-sans transition hover:border-indigo-500">
       {/* Entrada de conexões superior */}
       <Handle
         type="target"
@@ -77,21 +110,91 @@ export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
           </div>
         </div>
 
+        {/* Toggle Face: Terminal <-> Chat */}
         <div className="flex items-center gap-2">
+          <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg p-0.5 text-[11px]">
+            <button
+              onClick={() => setActiveFace("terminal")}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded transition ${
+                activeFace === "terminal"
+                  ? "bg-indigo-600 text-white font-medium"
+                  : "text-slate-400 hover:text-white"
+              }`}
+              title="Ver Terminal PTY"
+            >
+              <Terminal className="h-3 w-3" />
+              Terminal
+            </button>
+            <button
+              onClick={() => setActiveFace("chat")}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded transition ${
+                activeFace === "chat"
+                  ? "bg-indigo-600 text-white font-medium"
+                  : "text-slate-400 hover:text-white"
+              }`}
+              title="Ver Face de Chat"
+            >
+              <MessageSquare className="h-3 w-3" />
+              Chat
+            </button>
+          </div>
+
           <span className={`h-2 w-2 rounded-full ${getStatusColor()}`}></span>
-          <span className="text-[10px] font-mono capitalize text-slate-300">
-            {nodeData.status}
-          </span>
         </div>
       </div>
 
-      {/* Terminal Interativo com suporte a agy / claude / opencode */}
-      <div className="h-[230px] w-full bg-[#050811] flex flex-col">
-        <TerminalView
-          cwd={nodeData.worktreePath}
-          initialCmd={nodeData.defaultCmd}
-        />
-      </div>
+      {/* Corpo do Nó: Terminal ou Face de Chat */}
+      {activeFace === "terminal" ? (
+        <div className="h-[240px] w-full bg-[#050811] flex flex-col">
+          <TerminalView
+            cwd={nodeData.worktreePath}
+            initialCmd={nodeData.defaultCmd}
+          />
+        </div>
+      ) : (
+        <div className="h-[240px] w-full bg-[#070b16] flex flex-col justify-between p-3">
+          {/* Mensagens formatadas */}
+          <div className="overflow-y-auto space-y-2 pr-1 flex-1 text-xs">
+            {messages.map((m, i) => (
+              <div
+                key={i}
+                className={`p-2.5 rounded-xl max-w-[85%] leading-relaxed ${
+                  m.sender === "user"
+                    ? "ml-auto bg-indigo-600 text-white"
+                    : "bg-slate-900 border border-slate-800 text-slate-200"
+                }`}
+              >
+                {m.text}
+              </div>
+            ))}
+          </div>
+
+          {/* Prompt Composer com @ mention */}
+          <div className="mt-2 pt-2 border-t border-slate-800 flex items-center gap-2">
+            <button
+              onClick={() => setChatInput((prev) => prev + "@nota ")}
+              className="p-1 rounded text-slate-400 hover:text-indigo-400 hover:bg-slate-800"
+              title="Mencionar Nota ou Terminal (@)"
+            >
+              <AtSign className="h-3.5 w-3.5" />
+            </button>
+            <input
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+              placeholder="Digite instrução ou @ para mencionar..."
+              className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs focus:outline-none focus:border-indigo-500"
+            />
+            <button
+              onClick={handleSendMessage}
+              className="p-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition"
+            >
+              <Send className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Footer bar */}
       <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 font-mono">
@@ -99,7 +202,9 @@ export default function AgentTerminalNode({ data }: { data: AgentNodeData }) {
           <Terminal className="h-3 w-3" />
           {nodeData.branch || "worktree isolado"}
         </span>
-        <span className="text-slate-500">Bash PTY Conectado</span>
+        <span className="text-slate-500">
+          {activeFace === "terminal" ? "Bash PTY Conectado" : "Face de Chat Ativa"}
+        </span>
       </div>
 
       {/* Saída de conexões inferior */}

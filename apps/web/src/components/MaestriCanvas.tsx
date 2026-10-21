@@ -17,26 +17,39 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
-import { Play, Plus, RefreshCw } from "lucide-react";
+import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
+import { Plus, RefreshCw, StickyNote } from "lucide-react";
 
-const initialNodes: Node<AgentNodeData>[] = [
+const initialNodes: Node<any>[] = [
   {
     id: "planner",
     type: "agentTerminal",
-    position: { x: 380, y: 30 },
+    position: { x: 420, y: 30 },
     data: {
       title: "Agente 01: Arquiteto (agy)",
       role: "Planejamento e Quebra de Tarefas",
       model: "Claude 3.5 Sonnet",
       status: "running",
       branch: "main/planning",
-      defaultCmd: "echo 'Arquiteto pronto. Digite agy ou comando bash:'",
+      defaultCmd: "echo 'Arquiteto pronto. Digite agy ou comandos bash:'",
+    },
+  },
+  {
+    id: "specs-note",
+    type: "stickyNote",
+    position: { x: 50, y: 60 },
+    data: {
+      title: "Notas de Arquitetura",
+      color: "amber",
+      author: "Agente 01 (Arquiteto)",
+      content:
+        "1. Autenticação via JWT + Cookies HTTP-Only\n2. Worktree isolado por dev\n3. Zero colisão de dependências\n4. Review obrigatório antes do merge",
     },
   },
   {
     id: "coder-backend",
     type: "agentTerminal",
-    position: { x: 40, y: 380 },
+    position: { x: 50, y: 400 },
     data: {
       title: "Agente 02: Backend Coder (claude)",
       role: "Implementação API & Banco",
@@ -49,7 +62,7 @@ const initialNodes: Node<AgentNodeData>[] = [
   {
     id: "coder-frontend",
     type: "agentTerminal",
-    position: { x: 720, y: 380 },
+    position: { x: 740, y: 400 },
     data: {
       title: "Agente 03: Frontend Coder (opencode)",
       role: "Telas e Componentes UI",
@@ -62,7 +75,7 @@ const initialNodes: Node<AgentNodeData>[] = [
   {
     id: "reviewer",
     type: "agentTerminal",
-    position: { x: 380, y: 740 },
+    position: { x: 420, y: 780 },
     data: {
       title: "Agente 04: QA & Code Reviewer",
       role: "Validação Cruzada de Diffs",
@@ -75,6 +88,16 @@ const initialNodes: Node<AgentNodeData>[] = [
 ];
 
 const initialEdges: Edge[] = [
+  {
+    id: "e-note-planner",
+    source: "specs-note",
+    target: "planner",
+    animated: true,
+    label: "Diretrizes",
+    style: { stroke: "#f59e0b", strokeWidth: 1.5, strokeDasharray: "4" },
+    labelStyle: { fill: "#fde68a", fontSize: 10, fontWeight: 500 },
+    labelBgStyle: { fill: "#0f172a", fillOpacity: 0.9 },
+  },
   {
     id: "e-planner-backend",
     source: "planner",
@@ -122,9 +145,15 @@ const initialEdges: Edge[] = [
 ];
 
 export default function MaestriCanvas() {
-  const nodeTypes = useMemo(() => ({ agentTerminal: AgentTerminalNode as any }), []);
+  const nodeTypes = useMemo(
+    () => ({
+      agentTerminal: AgentTerminalNode as any,
+      stickyNote: StickyNoteNode as any,
+    }),
+    []
+  );
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node<AgentNodeData>>(initialNodes);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node<any>>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
   const onConnect = useCallback(
@@ -148,7 +177,7 @@ export default function MaestriCanvas() {
     const newNode: Node<AgentNodeData> = {
       id: newId,
       type: "agentTerminal",
-      position: { x: 450 + Math.random() * 50, y: 350 + Math.random() * 50 },
+      position: { x: 450 + Math.random() * 50, y: 400 + Math.random() * 50 },
       data: {
         title: `Agente Especialista ${nodes.length + 1}`,
         role: "DevOps / Worker CLI",
@@ -156,6 +185,22 @@ export default function MaestriCanvas() {
         status: "idle",
         branch: `agent/${newId}`,
         defaultCmd: "echo 'Novo agente inicializado em worktree isolado.'",
+      },
+    };
+    setNodes((nds) => [...nds, newNode]);
+  };
+
+  const addStickyNote = () => {
+    const newId = `note-${Date.now().toString().slice(-4)}`;
+    const newNode: Node<StickyNoteData> = {
+      id: newId,
+      type: "stickyNote",
+      position: { x: 300 + Math.random() * 60, y: 200 + Math.random() * 60 },
+      data: {
+        title: "Nova Nota Adesiva",
+        color: "amber",
+        author: "Dev / Equipe",
+        content: "Clique no ícone de lápis para escrever notas de progresso, prompts ou decisões.",
       },
     };
     setNodes((nds) => [...nds, newNode]);
@@ -171,6 +216,14 @@ export default function MaestriCanvas() {
         >
           <Plus className="h-3.5 w-3.5" />
           Adicionar Agente
+        </button>
+
+        <button
+          onClick={addStickyNote}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium transition"
+        >
+          <StickyNote className="h-3.5 w-3.5" />
+          Nova Nota
         </button>
 
         <div className="h-4 w-[1px] bg-slate-700 mx-1"></div>
@@ -189,7 +242,7 @@ export default function MaestriCanvas() {
 
       {/* Dica de interação */}
       <div className="absolute bottom-4 left-4 z-10 bg-slate-900/80 border border-slate-800/80 rounded-lg px-3 py-1.5 text-[11px] text-slate-400 backdrop-blur-sm pointer-events-none">
-        💡 Terminais interativos reais: clique e digite comandos bash ou use os botões rápidos [agy], [claude], [opencode]
+        💡 Alterne entre [Terminal] e [Chat] no topo de cada nó • Conecte Notas Adesivas aos Agentes
       </div>
 
       {/* O Canvas Principal com React Flow */}
@@ -211,7 +264,7 @@ export default function MaestriCanvas() {
         />
         <Controls className="!bg-slate-900 !border-slate-800 !fill-slate-300 !text-slate-300 rounded-lg shadow-xl" />
         <MiniMap
-          nodeColor={() => "#6366f1"}
+          nodeColor={(n) => (n.type === "stickyNote" ? "#f59e0b" : "#6366f1")}
           className="!bg-slate-950/80 !border !border-slate-800 !rounded-xl overflow-hidden"
           maskColor="rgba(15, 23, 42, 0.7)"
         />
