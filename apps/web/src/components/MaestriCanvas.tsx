@@ -19,9 +19,13 @@ import "@xyflow/react/dist/style.css";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
 import PortalNode, { PortalNodeData } from "./PortalNode";
-import { Plus, RefreshCw, StickyNote, Globe, Bookmark, Download, FolderOpen } from "lucide-react";
+import { Plus, RefreshCw, StickyNote, Globe, Bookmark, FolderOpen, Save } from "lucide-react";
 
-// Partitura Padrão 1: Fullstack Team + Portal + Notas
+interface MaestriCanvasProps {
+  projectId: string;
+  projectName: string;
+}
+
 const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
   nodes: [
     {
@@ -167,7 +171,7 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
   ],
 };
 
-export default function MaestriCanvas() {
+export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasProps) {
   const nodeTypes = useMemo(
     () => ({
       agentTerminal: AgentTerminalNode as any,
@@ -177,9 +181,48 @@ export default function MaestriCanvas() {
     []
   );
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node<any>>(defaultPartituraFullstack.nodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(defaultPartituraFullstack.edges);
-  const [currentPartituraName, setCurrentPartituraName] = useState("Fullstack Swarm + Portal");
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node<any>>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [saveStatus, setSaveStatus] = useState<string>("");
+
+  // Carrega o canvas específico deste projeto
+  useEffect(() => {
+    async function loadProjectCanvas() {
+      try {
+        const res = await fetch(`http://localhost:4000/api/projects/${projectId}/canvas`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.nodes && data.nodes.length > 0) {
+            setNodes(data.nodes);
+            setEdges(data.edges || []);
+            return;
+          }
+        }
+      } catch {}
+
+      // Fallback para Partitura padrão
+      setNodes(defaultPartituraFullstack.nodes);
+      setEdges(defaultPartituraFullstack.edges);
+    }
+
+    loadProjectCanvas();
+  }, [projectId, setNodes, setEdges]);
+
+  // Salva o canvas deste projeto no backend
+  const saveProjectCanvas = async () => {
+    setSaveStatus("Salvando...");
+    try {
+      await fetch(`http://localhost:4000/api/projects/${projectId}/canvas`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodes, edges }),
+      });
+      setSaveStatus("Salvo!");
+      setTimeout(() => setSaveStatus(""), 2000);
+    } catch {
+      setSaveStatus("Erro ao salvar");
+    }
+  };
 
   const onConnect = useCallback(
     (params: Connection) =>
@@ -209,7 +252,7 @@ export default function MaestriCanvas() {
         model: "Claude 3.5 Sonnet",
         status: "idle",
         branch: `agent/${newId}`,
-        defaultCmd: "echo 'Novo agente inicializado em worktree isolado.'",
+        defaultCmd: `echo 'Agente inicializado para o projeto: ${projectName}'`,
       },
     };
     setNodes((nds) => [...nds, newNode]);
@@ -222,10 +265,10 @@ export default function MaestriCanvas() {
       type: "stickyNote",
       position: { x: 300 + Math.random() * 60, y: 200 + Math.random() * 60 },
       data: {
-        title: "Nova Nota Adesiva",
+        title: `Nota: ${projectName}`,
         color: "amber",
         author: "Dev / Equipe",
-        content: "Clique no ícone de lápis para escrever notas de progresso, prompts ou decisões.",
+        content: "Clique no ícone de lápis para escrever notas deste projeto.",
       },
     };
     setNodes((nds) => [...nds, newNode]);
@@ -238,27 +281,16 @@ export default function MaestriCanvas() {
       type: "portal",
       position: { x: 800 + Math.random() * 60, y: 250 + Math.random() * 60 },
       data: {
-        title: "Portal Web Adicional",
+        title: `Portal: ${projectName}`,
         url: "http://localhost:3000",
       },
     };
     setNodes((nds) => [...nds, newNode]);
   };
 
-  // Salvar Partitura atual no LocalStorage
-  const savePartitura = () => {
-    const partituraName = prompt("Nome da Partitura:", currentPartituraName) || currentPartituraName;
-    const data = { nodes, edges, name: partituraName };
-    localStorage.setItem(`maestri_partitura_${partituraName}`, JSON.stringify(data));
-    setCurrentPartituraName(partituraName);
-    alert(`Partitura "${partituraName}" salva com sucesso!`);
-  };
-
-  // Carregar Partitura
-  const loadDefaultPartitura = () => {
+  const resetToDefault = () => {
     setNodes(defaultPartituraFullstack.nodes);
     setEdges(defaultPartituraFullstack.edges);
-    setCurrentPartituraName("Fullstack Swarm + Portal");
   };
 
   return (
@@ -291,43 +323,33 @@ export default function MaestriCanvas() {
 
         <div className="h-4 w-[1px] bg-slate-700 mx-1"></div>
 
-        {/* Partitura Controls */}
         <button
-          onClick={savePartitura}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition"
-          title="Salvar arranjo atual como Partitura"
+          onClick={saveProjectCanvas}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition"
+          title="Salvar canvas deste projeto"
         >
-          <Bookmark className="h-3.5 w-3.5 text-indigo-400" />
-          Salvar Partitura
+          <Save className="h-3.5 w-3.5" />
+          {saveStatus || "Salvar no Projeto"}
         </button>
 
         <button
-          onClick={loadDefaultPartitura}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition"
-          title="Restaurar Partitura Padrão"
-        >
-          <FolderOpen className="h-3.5 w-3.5 text-cyan-400" />
-          Partitura Padrão
-        </button>
-
-        <button
-          onClick={loadDefaultPartitura}
+          onClick={resetToDefault}
           className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
-          title="Resetar Posições"
+          title="Restaurar Arranjo Padrão"
         >
           <RefreshCw className="h-4 w-4" />
         </button>
       </div>
 
-      {/* Badge da Partitura Ativa */}
+      {/* Badge do Projeto Ativo no Canvas */}
       <div className="absolute top-4 right-4 z-10 bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 font-mono flex items-center gap-2 backdrop-blur-md">
-        <span className="h-2 w-2 rounded-full bg-indigo-500"></span>
-        <span>Partitura: <strong className="text-white font-semibold">{currentPartituraName}</strong></span>
+        <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+        <span>Espaço Isolado: <strong className="text-white font-semibold">{projectName}</strong></span>
       </div>
 
       {/* Dica de interação */}
       <div className="absolute bottom-4 left-4 z-10 bg-slate-900/80 border border-slate-800/80 rounded-lg px-3 py-1.5 text-[11px] text-slate-400 backdrop-blur-sm pointer-events-none">
-        💡 O Portal Web renderiza a página em tempo real para os agentes depurarem • Salve seu arranjo em [Salvar Partitura]
+        💡 Cada projeto tem seus próprios agentes, terminais PTY, notas e portais web salvos de forma independente
       </div>
 
       {/* O Canvas Principal com React Flow */}

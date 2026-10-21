@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { WorktreeManager, WorktreeSession } from "./worktree.js";
 
 const fastify = Fastify({ logger: true });
@@ -10,59 +11,129 @@ const fastify = Fastify({ logger: true });
 await fastify.register(cors, { origin: true });
 await fastify.register(websocket);
 
-// Determina se o Git Bash existe no Windows
 const gitBashPath = "C:\\Program Files\\Git\\bin\\bash.exe";
 const defaultShell = fs.existsSync(gitBashPath) ? gitBashPath : "powershell.exe";
 
-const targetRepo = process.env.REPO_PATH || process.cwd();
-const worktreeManager = new WorktreeManager(targetRepo);
-const activeSessions = new Map<string, WorktreeSession>();
+// Diretório base dos projetos e persistência
+const defaultRepo = process.env.REPO_PATH || path.resolve("C:/Users/ti/.gemini/antigravity/scratch/maestri-web");
+const dataDir = path.resolve(defaultRepo, ".maestri_data");
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
 
-fastify.post<{ Body: { devId: string; taskId: string } }>("/api/sessions", async (req, reply) => {
-  const { devId, taskId } = req.body;
-  if (!devId || !taskId) {
-    return reply.status(400).send({ error: "devId e taskId são obrigatórios." });
-  }
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  repoPath: string;
+  createdAt: string;
+}
 
+const projectsFile = path.join(dataDir, "projects.json");
+let projects: Project[] = [];
+
+if (fs.existsSync(projectsFile)) {
   try {
-    const session = await worktreeManager.createSession(devId, taskId);
-    activeSessions.set(session.id, session);
-    return { ok: true, session };
-  } catch (err: any) {
-    return reply.status(500).send({ error: err.message });
+    projects = JSON.parse(fs.readFileSync(projectsFile, "utf-8"));
+  } catch {
+    projects = [];
   }
-});
+}
 
-fastify.get("/api/sessions", async () => {
-  return Array.from(activeSessions.values());
-});
+if (projects.length === 0) {
+  projects = [
+    {
+      id: "proj-maestri-web",
+      name: "Maestri Web (Principal)",
+      description: "Orquestrador web com Git Worktrees e agentes",
+      repoPath: defaultRepo,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: "proj-ecommerce-api",
+      name: "Microserviço E-commerce",
+      description: "Backend de pagamentos e catálogo com agentes dedicados",
+      repoPath: defaultRepo,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+  fs.writeFileSync(projectsFile, JSON.stringify(projects, null, 2));
+}
 
-fastify.get<{ Params: { id: string } }>("/api/sessions/:id/diff", async (req, reply) => {
-  const session = activeSessions.get(req.params.id);
-  if (!session) {
-    return reply.status(404).send({ error: "Sessão não encontrada." });
+function saveProjects() {
+  fs.writeFileSync(projectsFile, JSON.stringify(projects, null, 2));
+}
+
+// Map de WorktreeManagers por repositório
+const worktreeManagers = new Map<string, WorktreeManager>();
+function getWorktreeManager(repoPath: string): WorktreeManager {
+  if (!worktreeManagers.has(repoPath)) {
+    const mgr = new WorktreeManager(repoPath);
+    mgr.init().catch(console.error);
+    worktreeManagers.set(repoPath, mgr);
   }
-  const diff = await worktreeManager.getDiff(session.worktreePath);
-  return { id: session.id, diff };
+  return worktreeManagers.get(repoPath)!;
+}
+
+// Endpoints de Projetos
+fastify.get("/api/projects", async () => {
+  return projects;
 });
 
-fastify.delete<{ Params: { id: string } }>("/api/sessions/:id", async (req, reply) => {
-  const session = activeSessions.get(req.params.id);
-  if (!session) {
-    return reply.status(404).send({ error: "Sessão não encontrada." });
+fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }>("/api/projects", async (req, reply) => {
+  const { name, description = "", repoPath = defaultRepo } = req.body;
+  if (!name) {
+    return reply.status(400).send({ error: "Nome do projeto é obrigatório." });
   }
-  await worktreeManager.removeSession(session);
-  activeSessions.delete(session.id);
-  return { ok: true, message: `Sessão ${session.id} encerrada e worktree removido.` };
+
+  const id = `proj-${Date.now().toString().slice(-6)}`;
+  const newProject: Project = {
+    id,
+    name,
+    description,
+    repoPath: path.resolve(repoPath),
+    createdAt: new Date().toISOString(),
+  };
+
+  projects.push(newProject);
+  saveProjects();
+  return { ok: true, project: newProject };
 });
 
-// WebSocket Terminal para invocar bash e agentes CLI (agy, claude, opencode, etc.)
+fastify.delete<{ Params: { id: string } }>("/api/projects/:id", async (req, reply) => {
+  const idx = projects.findIndex((p) => p.id === req.params.id);
+  if (idx === -1) {
+    return reply.status(404).send({ error: "Projeto não encontrado." });
+  }
+  projects.splice(idx, 1);
+  saveProjects();
+  return { ok: true };
+});
+
+// Estado do Canvas por Projeto
+fastify.get<{ Params: { id: string } }>("/api/projects/:id/canvas", async (req, reply) => {
+  const canvasFile = path.join(dataDir, `canvas_${req.params.id}.json`);
+  if (fs.existsSync(canvasFile)) {
+    try {
+      const state = JSON.parse(fs.readFileSync(canvasFile, "utf-8"));
+      return state;
+    } catch {}
+  }
+  return { nodes: null, edges: null };
+});
+
+fastify.post<{ Params: { id: string }; Body: { nodes: any[]; edges: any[] } }>("/api/projects/:id/canvas", async (req, reply) => {
+  const canvasFile = path.join(dataDir, `canvas_${req.params.id}.json`);
+  fs.writeFileSync(canvasFile, JSON.stringify(req.body, null, 2));
+  return { ok: true };
+});
+
+// WebSocket Terminal para invocar bash em qualquer projeto/worktree
 fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
   const url = new URL(req.url, "http://localhost:4000");
-  const cwd = url.searchParams.get("cwd") || targetRepo;
+  const cwd = url.searchParams.get("cwd") || defaultRepo;
   const initialCommand = url.searchParams.get("cmd") || "";
 
-  // Inicia bash interativo com terminal colorido
   const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : ["-NoLogo"];
   const proc = spawn(defaultShell, shellArgs, {
     cwd,
@@ -76,10 +147,9 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
 
   socket.send(`\r\n\x1b[32m[Maestri Web]\x1b[0m Terminal ativo em: ${cwd}\r\n`);
   if (defaultShell.includes("bash")) {
-    socket.send(`\x1b[34m[Shell]\x1b[0m Bash iniciado (Git Bash). Digite agy, claude, opencode ou comandos bash.\r\n\r\n`);
+    socket.send(`\x1b[34m[Shell]\x1b[0m Git Bash pronto. Digite agy, claude, opencode ou comandos bash.\r\n\r\n`);
   }
 
-  // Se passou um comando inicial (ex: claude ou opencode ou agy)
   if (initialCommand) {
     setTimeout(() => {
       proc.stdin.write(`${initialCommand}\n`);
@@ -96,8 +166,7 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
 
   socket.on("message", (message: Buffer | string) => {
     try {
-      const text = message.toString();
-      proc.stdin.write(text);
+      proc.stdin.write(message.toString());
     } catch (e) {
       console.error("Erro ao enviar para stdin:", e);
     }
@@ -117,9 +186,8 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
 
 const start = async () => {
   try {
-    await worktreeManager.init();
     await fastify.listen({ port: 4000, host: "0.0.0.0" });
-    console.log("Maestri Server com Terminal rodando em http://localhost:4000");
+    console.log("Maestri Server com Suporte a Multi-Projetos rodando em http://localhost:4000");
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);
