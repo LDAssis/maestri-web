@@ -5,7 +5,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { makeRoutine, ROUTINE_FLAGS, ROUTINE_HELP } from "./maestri-routine.mjs";
 
 const HELP = {
   _: `maestri — CLI dos terminais do canvas do Maestri Web
@@ -21,7 +20,6 @@ Comandos:
   recruit "Nome" [--preset P] [--role-id ID] [--cmd C] [--role R]   (Maestro) cria e inicia um novo agente
   dismiss "Nome"                     (Maestro) remove um agente conectado
   notify "texto"                     Avisa todos os navegadores do projeto
-  routine list|add|rm|run            Rotinas agendadas do SEU agente (veja "maestri routine --help")
   chat reply "texto markdown"        Responde na face de chat do SEU nó
   chat history [--last N]            Últimas mensagens do chat do seu nó (20)
 
@@ -37,7 +35,6 @@ e o alvo precisa estar conectado a você por uma aresta.`,
   recruit: `maestri recruit "Nome" [--preset claude|codex|opencode|agy|shell] [--role-id UUID] [--cmd "claude"] [--role "texto do papel"]\nApenas o Maestro. Cria um agente conectado a você e inicia o terminal dele.\n--preset escolhe o comando (shell = terminal puro); --cmd tem precedência sobre o preset.\n--role-id usa um role do projeto (.maestri/roles); --role grava um texto livre. O papel vai para .maestri-roles/<id>.md; com claude/codex o arquivo é passado como prompt.`,
   dismiss: `maestri dismiss "Nome"\nApenas o Maestro. Remove o nó conectado e encerra o terminal dele.`,
   chat: `maestri chat reply "texto markdown"   Responde ao usuário na face de chat do seu nó (aceita Markdown)\nmaestri chat history [--last N]     Imprime as últimas N mensagens (padrão 20) do chat do seu nó`,
-  routine: ROUTINE_HELP,
   notify: `maestri notify "texto"\nMostra um aviso (toast) para todos os navegadores no projeto, com o título do seu nó.`,
 };
 
@@ -48,7 +45,7 @@ class CliError extends Error {
   }
 }
 
-const FLAGS = ["--lines", "--timeout", "--cmd", "--role", "--last", "--preset", "--role-id", ...ROUTINE_FLAGS];
+const FLAGS = ["--lines", "--timeout", "--cmd", "--role", "--last", "--preset", "--role-id"];
 // Flags sem valor (viram flags[nome] = true); módulos de extensão acrescentam as suas
 const BOOL_FLAGS = [];
 
@@ -194,7 +191,6 @@ const COMMANDS = {
   },
 };
 COMMANDS.list = COMMANDS.context;
-COMMANDS.routine = makeRoutine({ call, need, CliError });
 
 // Módulos de extensão: bin/maestri-*.mjs que exportam register({ call, need, CliError }) e devolvem
 // { commands, help?, flags?, boolFlags? }. Cada área do CLI vive no próprio arquivo.

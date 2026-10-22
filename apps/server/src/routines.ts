@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { exec } from "node:child_process";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import type { Session, SessionManager } from "./sessions.js";
@@ -8,20 +9,45 @@ import { resolveInside } from "./projectDirs.js";
 
 type Obj = Record<string, any>;
 
-export type Schedule = { type: "interval"; minutes: number } | { type: "daily"; time: string };
+// Dias da semana na ordem de Date#getDay (0 = domingo)
+export const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+export type Day = (typeof DAYS)[number];
+const WEEK_ORDER: Day[] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
+export type Schedule =
+  | { type: "interval"; seconds: number }
+  | { type: "daily"; time: string }
+  | { type: "weekly"; days: Day[]; time: string }
+  | { type: "once"; at: string }; // "yyyy-MM-dd HH:mm", hora local do servidor
+
+export interface RoutineRun {
+  at: string;
+  status: "ok" | "skipped" | "error";
+  reason?: string; // motivo do pulo ou do erro
+  output?: string;
+}
+
+// Rotinas são do projeto (workspace). nodeId = terminal-alvo (null no lembrete).
 export interface Routine {
   id: string;
-  nodeId: string;
+  nodeId: string | null;
+  reminder: boolean;
   name: string;
   kind: "command" | "prompt";
   text: string;
   schedule: Schedule;
   enabled: boolean;
+  count?: number; // para depois de N disparos
+  until?: string; // "yyyy-MM-dd": último dia (inclusive) em que ainda dispara
+  preRun?: string;
+  skipIfBusy: boolean;
+  notify: boolean;
+  fired: number; // disparos contados (ok ou erro; pulados não contam)
+  completed?: boolean; // count/until/once esgotados
   createdAt: string;
   lastRunAt?: string;
-  nextRunAt: number;
-  history: { at: string; ok: boolean; error?: string; output?: string }[];
+  nextRunAt: number | null;
+  history: RoutineRun[];
 }
 
 export type TypeAndWait = (
@@ -37,8 +63,9 @@ interface Deps {
   sessions: SessionManager;
   canvas: CanvasStore;
   projectRepo: (projectId: string) => string | null;
+  projectName?: (projectId: string) => string | undefined;
   dataDir: string;
-  // de nodeApi.ts (hoje não exportado)
+  // de nodeApi.ts
   typeAndWait: TypeAndWait;
   // true se o chat do nó (F6) está capturando saída
   isChatBusy: (projectId: string, nodeId: string) => boolean;
@@ -53,27 +80,119 @@ class ApiError extends Error {
 
 const HISTORY_MAX = 20;
 const OUTPUT_MAX = 4000;
-const BUSY_DEFER_MS = 60_000;
+const PRE_RUN_OUTPUT_MAX = 100_000;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ONCE_RE = /^(\d{4})-(\d{2})-(\d{2}) ([01]\d|2[0-3]):([0-5]\d)$/;
+const MIN_INTERVAL_S = 5;
+const MAX_INTERVAL_S = 7 * 86_400;
 
-// Próxima execução estritamente depois de `from`. daily usa a hora local do servidor.
-export function nextRun(s: Schedule, from: number): number {
-  if (s.type === "interval") return from + s.minutes * 60_000;
-  const [h, m] = s.time.split(":").map(Number);
-  const d = new Date(from);
-  d.setHours(h, m, 0, 0);
-  if (d.getTime() <= from) {
-    d.setDate(d.getDate() + 1);
-    d.setHours(h, m, 0, 0);
+// "Ocupado" = captura do chat em andamento OU saída do terminal nos últimos N ms (padrão 5s).
+// Lidos a cada uso para os testes poderem ajustar.
+const busyMs = () => Number(process.env.MAESTRI_ROUTINE_BUSY_MS) || 5000;
+const preRunTimeoutMs = () => Number(process.env.MAESTRI_ROUTINE_PRERUN_MS) || 30_000;
+
+// --- Agendamento ---
+
+// "45s", "30m", "2h", "1h30m"; número puro = minutos. Devolve segundos.
+export function parseDuration(v: unknown): number {
+  const s = String(v ?? "").trim().toLowerCase();
+  let sec: number | null = null;
+  if (/^\d+$/.test(s)) sec = Number(s) * 60;
+  else {
+    const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(s);
+    if (m && s) sec = Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0);
   }
-  return d.getTime();
+  if (sec === null || sec < MIN_INTERVAL_S || sec > MAX_INTERVAL_S) {
+    throw new ApiError(400, `Intervalo inválido "${v}" (ex.: 45s, 30m, 2h, 1h30m; de ${MIN_INTERVAL_S}s a 7 dias; número puro = minutos).`);
+  }
+  return sec;
 }
 
-function parseSchedule(v: any): Schedule {
-  if (v?.type === "interval" && Number.isInteger(v.minutes) && v.minutes >= 1 && v.minutes <= 10080) return { type: "interval", minutes: v.minutes };
-  if (v?.type === "daily" && typeof v.time === "string" && TIME_RE.test(v.time)) return { type: "daily", time: v.time };
-  throw new ApiError(400, "Agendamento inválido: { type: 'interval', minutes: 1..10080 } ou { type: 'daily', time: 'HH:MM' }.");
+export function formatDuration(sec: number): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return `${h ? `${h}h` : ""}${m ? `${m}m` : ""}${s ? `${s}s` : ""}` || "0s";
 }
+
+function parseOnce(v: unknown): number {
+  const m = ONCE_RE.exec(String(v ?? "").trim());
+  if (!m) throw new ApiError(400, 'once deve ser "yyyy-MM-dd HH:mm" (hora local do servidor).');
+  const [y, mo, d, h, mi] = m.slice(1).map(Number);
+  const t = new Date(y, mo - 1, d, h, mi, 0, 0);
+  if (t.getMonth() !== mo - 1 || t.getDate() !== d) throw new ApiError(400, `Data inexistente: "${v}".`);
+  return t.getTime();
+}
+
+// Fim (inclusive) do dia `until`; null se a data for inválida
+function untilEnd(until: string): number | null {
+  const m = DATE_RE.exec(until);
+  if (!m) return null;
+  const [y, mo, d] = m.slice(1).map(Number);
+  const t = new Date(y, mo - 1, d, 23, 59, 59, 999);
+  return t.getMonth() === mo - 1 && t.getDate() === d ? t.getTime() : null;
+}
+
+// Próxima execução estritamente depois de `from` (hora local do servidor); null se não houver mais (once passado)
+export function nextRun(s: Schedule, from: number): number | null {
+  if (s.type === "interval") return from + s.seconds * 1000;
+  if (s.type === "once") {
+    const t = parseOnce(s.at);
+    return t > from ? t : null;
+  }
+  const [h, m] = s.time.split(":").map(Number);
+  const days: readonly Day[] = s.type === "weekly" ? s.days : DAYS;
+  for (let i = 0; i <= 7; i++) {
+    const d = new Date(from);
+    d.setDate(d.getDate() + i);
+    d.setHours(h, m, 0, 0);
+    if (d.getTime() > from && days.includes(DAYS[d.getDay()])) return d.getTime();
+  }
+  return null;
+}
+
+export function scheduleLabel(s: Schedule): string {
+  if (s.type === "interval") return `a cada ${formatDuration(s.seconds)}`;
+  if (s.type === "daily") return `todo dia às ${s.time}`;
+  if (s.type === "weekly") return `${s.days.join(",")} às ${s.time}`;
+  return `uma vez em ${s.at}`;
+}
+
+function parseDays(v: unknown): Day[] {
+  const list = (Array.isArray(v) ? v : String(v ?? "").split(",")).map((d) => String(d).trim().toLowerCase()).filter(Boolean);
+  if (!list.length || list.some((d) => !(DAYS as readonly string[]).includes(d))) {
+    throw new ApiError(400, "Dias inválidos (use mon, tue, wed, thu, fri, sat, sun separados por vírgula).");
+  }
+  return WEEK_ORDER.filter((d) => list.includes(d));
+}
+
+// Aceita o formato canônico e atalhos do CLI/legado: interval { seconds | minutes | every }, weekly { days | spec "mon,wed@09:00" }
+export function parseSchedule(v: any): Schedule {
+  const time = (t: unknown) => {
+    if (typeof t !== "string" || !TIME_RE.test(t)) throw new ApiError(400, "Horário inválido (HH:MM, 24h).");
+    return t;
+  };
+  if (v?.type === "interval") {
+    const given = v.every ?? (v.seconds !== undefined ? `${v.seconds}s` : v.minutes !== undefined ? `${v.minutes}m` : undefined);
+    return { type: "interval", seconds: parseDuration(given) };
+  }
+  if (v?.type === "daily") return { type: "daily", time: time(v.time) };
+  if (v?.type === "weekly") {
+    if (typeof v.spec === "string") {
+      const [days, t] = v.spec.split("@");
+      return { type: "weekly", days: parseDays(days), time: time(t) };
+    }
+    return { type: "weekly", days: parseDays(v.days), time: time(v.time) };
+  }
+  if (v?.type === "once") {
+    parseOnce(v.at);
+    return { type: "once", at: String(v.at).trim() };
+  }
+  throw new ApiError(400, "Agendamento inválido: type interval | daily | weekly | once.");
+}
+
+// --- Validação dos campos ---
 
 const parseName = (v: unknown) => {
   if (typeof v !== "string" || !v.trim() || v.trim().length > 60) throw new ApiError(400, "Nome da rotina: 1 a 60 caracteres.");
@@ -87,6 +206,26 @@ const parseKind = (v: unknown): Routine["kind"] => {
   if (v !== "command" && v !== "prompt") throw new ApiError(400, "kind deve ser 'command' ou 'prompt'.");
   return v;
 };
+const parseBool = (v: unknown, what: string) => {
+  if (typeof v !== "boolean") throw new ApiError(400, `${what} deve ser booleano.`);
+  return v;
+};
+// null/0/"" limpam o campo (valem só na edição)
+const parseCount = (v: unknown) => {
+  if (v === null || v === 0 || v === "") return undefined;
+  if (!Number.isInteger(v) || (v as number) < 1 || (v as number) > 100_000) throw new ApiError(400, "count deve ser um inteiro de 1 a 100000.");
+  return v as number;
+};
+const parseUntil = (v: unknown) => {
+  if (v === null || v === "") return undefined;
+  if (typeof v !== "string" || untilEnd(v) === null) throw new ApiError(400, 'until deve ser "yyyy-MM-dd".');
+  return v;
+};
+const parsePreRun = (v: unknown) => {
+  if (v === null || v === "") return undefined;
+  if (typeof v !== "string" || v.length > 10_000) throw new ApiError(400, "pre-run: texto de até 10000 caracteres.");
+  return v;
+};
 
 function writeJsonAtomic(file: string, data: unknown) {
   const tmp = `${file}.${process.pid}.tmp`;
@@ -95,8 +234,31 @@ function writeJsonAtomic(file: string, data: unknown) {
 }
 
 const lc = (v: unknown) => String(v ?? "").trim().toLowerCase();
+// Id curto: os 6 primeiros hex depois de "rt-"
+const shortId = (r: Routine) => r.id.slice(3, 9);
 
-export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, dataDir, typeAndWait, isChatBusy, now = Date.now }: Deps) {
+// Rotinas gravadas antes da F17: intervalo em minutos, sem alvo/opções; viram o modelo novo sem mudar o comportamento
+// (notify fica desligado: antes não havia toast por disparo).
+function migrate(raw: Obj): Routine | null {
+  if (!raw || typeof raw.id !== "string" || !raw.schedule) return null;
+  const s = raw.schedule;
+  const schedule: Schedule = s.type === "interval" && s.seconds === undefined ? { type: "interval", seconds: Number(s.minutes) * 60 } : s;
+  return {
+    reminder: false,
+    kind: "command",
+    skipIfBusy: true,
+    notify: false,
+    fired: 0,
+    ...raw,
+    nodeId: raw.reminder ? null : raw.nodeId ?? null,
+    schedule,
+    history: (raw.history ?? []).map((h: Obj) =>
+      h.status ? h : { at: h.at, status: h.ok ? "ok" : "error", ...(h.error && { reason: h.error }), ...(h.output && { output: h.output }) },
+    ),
+  } as Routine;
+}
+
+export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, projectName, dataDir, typeAndWait, isChatBusy, now = Date.now }: Deps) {
   const store = new Map<string, Routine[]>();
   const running = new Set<string>();
   let stopped = false;
@@ -114,7 +276,10 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, da
     if (!list) store.set(projectId, (list = []));
     return list;
   };
-  const notifyChange = (projectId: string) => canvas.notify(projectId, { type: "routines" });
+  const save = (projectId: string) => {
+    persist(projectId);
+    canvas.notify(projectId, { type: "routines" });
+  };
 
   // Carrega ao subir
   try {
@@ -123,10 +288,13 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, da
       if (!m) continue;
       try {
         const data = JSON.parse(fs.readFileSync(path.join(dataDir, f), "utf8"));
-        if (Array.isArray(data.routines)) store.set(m[1], data.routines);
+        if (Array.isArray(data.routines)) store.set(m[1], data.routines.map(migrate).filter(Boolean) as Routine[]);
       } catch {}
     }
   } catch {}
+
+  const nodeOf = (projectId: string, nodeId: string | null) =>
+    nodeId ? canvas.state(projectId).nodes?.find((n) => n.id === nodeId) : undefined;
 
   async function settle(session: Session) {
     // Sessão recém-criada: espera o shell terminar de iniciar (1s sem saída, no máximo 5s)
@@ -141,39 +309,111 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, da
     }
   }
 
-  // Roda a rotina agora. Devolve false se já estava rodando.
-  async function execute(projectId: string, r: Routine): Promise<boolean> {
+  // Roda o pre-run no cwd do alvo; sucesso só com saída 0 dentro do timeout
+  function runPreRun(script: string, cwd: string, env: Record<string, string>) {
+    return new Promise<{ ok: boolean; stdout: string; reason?: string }>((resolve) => {
+      exec(script, { cwd, env: { ...process.env, ...env }, timeout: preRunTimeoutMs(), maxBuffer: PRE_RUN_OUTPUT_MAX }, (err, stdout, stderr) => {
+        if (!err) return resolve({ ok: true, stdout: String(stdout) });
+        const e = err as any;
+        const detail = String(stderr || "").trim().slice(-300);
+        const why = e.killed ? `pre-run excedeu ${preRunTimeoutMs() / 1000}s` : `pre-run saiu com código ${e.code ?? "?"}`;
+        resolve({ ok: false, stdout: String(stdout), reason: detail ? `${why}: ${detail}` : why });
+      });
+    });
+  }
+
+  const complete = (r: Routine) => {
+    r.enabled = false;
+    r.completed = true;
+    r.nextRunAt = null;
+  };
+
+  // Registra um disparo. O agendado avança contadores e a próxima execução; o manual só entra no histórico.
+  function finish(projectId: string, r: Routine, entry: RoutineRun, manual: boolean) {
+    r.history = [...r.history, entry].slice(-HISTORY_MAX);
+    if (entry.status !== "skipped") r.lastRunAt = entry.at;
+    if (!manual) {
+      if (entry.status !== "skipped") r.fired += 1;
+      const next = nextRun(r.schedule, now());
+      const limit = r.until ? untilEnd(r.until) : null;
+      if (r.schedule.type === "once" || (r.count && r.fired >= r.count) || next === null || (limit !== null && next > limit)) complete(r);
+      else r.nextRunAt = next;
+    }
+    save(projectId);
+  }
+
+  function skip(projectId: string, r: Routine, reason: string, manual: boolean) {
+    finish(projectId, r, { at: new Date(now()).toISOString(), status: "skipped", reason }, manual);
+    return { status: "skipped" as const, reason };
+  }
+
+  // Dispara a rotina. A decisão de pular é síncrona (devolve o resultado); a execução segue em segundo plano.
+  // manual: não mexe em contadores/próxima execução e NÃO sobe um terminal parado (o agendado sobe).
+  function fire(projectId: string, r: Routine, manual: boolean): { status: "started" | "skipped"; reason?: string } {
     const key = `${projectId}:${r.id}`;
-    if (running.has(key)) return false;
-    running.add(key);
-    const entry: Routine["history"][number] = { at: new Date(now()).toISOString(), ok: true };
-    try {
-      const node = canvas.state(projectId).nodes?.find((n) => n.id === r.nodeId);
+    if (running.has(key)) throw new ApiError(409, "A rotina já está em execução.");
+    let node: Obj | undefined;
+    if (!r.reminder) {
+      node = nodeOf(projectId, r.nodeId);
       if (!node) {
-        Object.assign(entry, { ok: false, error: "nó removido" });
         r.enabled = false;
-      } else {
-        try {
-          const existing = sessions.get(projectId, node.id);
-          const session = sessions.ensure(projectId, node.id, { cwd: resolveInside(projectRepo(projectId)!, node.data?.worktreePath), cmd: node.data?.defaultCmd || "" });
-          if (!existing) await settle(session);
-          const input = r.text.includes("\n") ? `\x1b[200~${r.text}\x1b[201~\r` : `${r.text}\r`;
-          const res = await typeAndWait(sessions, session, input, 600, () => stopped);
-          entry.output = res.output.slice(-OUTPUT_MAX);
-          if (res.timedOut) Object.assign(entry, { ok: false, error: "tempo esgotado (600s) esperando o terminal ficar quieto" });
-        } catch (e: any) {
-          Object.assign(entry, { ok: false, error: String(e?.message || e) });
-        }
+        finish(projectId, r, { at: new Date(now()).toISOString(), status: "error", reason: "nó removido" }, true);
+        return { status: "skipped", reason: "nó removido" };
       }
+      const session = sessions.get(projectId, node.id);
+      if (!session && manual) return skip(projectId, r, "terminal não está rodando", manual);
+      if (r.skipIfBusy) {
+        if (isChatBusy(projectId, node.id)) return skip(projectId, r, "terminal ocupado (chat em andamento)", manual);
+        if (session && Date.now() - session.lastOutputAt < busyMs()) return skip(projectId, r, "terminal ocupado (saída recente)", manual);
+      }
+    }
+    running.add(key);
+    void execute(projectId, r, node, manual, key);
+    return { status: "started" };
+  }
+
+  async function execute(projectId: string, r: Routine, node: Obj | undefined, manual: boolean, key: string) {
+    const entry: RoutineRun = { at: new Date(now()).toISOString(), status: "ok" };
+    try {
+      const repo = projectRepo(projectId)!;
+      const cwd = node ? resolveInside(repo, node.data?.worktreePath) : repo;
+      let text = r.text;
+      if (r.preRun) {
+        const res = await runPreRun(r.preRun, cwd, {
+          MAESTRI_WORKSPACE_NAME: projectName?.(projectId) ?? projectId,
+          MAESTRI_WORKSPACE_DIR: repo,
+          MAESTRI_ROUTINE_NAME: r.name,
+          MAESTRI_TERMINAL_NAME: node ? String(node.data?.title ?? node.id) : "",
+        });
+        if (!res.ok) {
+          Object.assign(entry, { status: "skipped", reason: res.reason });
+          return;
+        }
+        text = text.split("{{output}}").join(res.stdout.replace(/\n+$/, ""));
+      }
+      if (r.reminder) {
+        canvas.notify(projectId, { type: "notify", from: { nodeId: "", title: r.name }, text });
+        entry.output = text.slice(-OUTPUT_MAX);
+        return;
+      }
+      const existing = sessions.get(projectId, node!.id);
+      const session = sessions.ensure(projectId, node!.id, { cwd, cmd: node!.data?.defaultCmd || "" });
+      if (!existing) await settle(session);
+      const input = text.includes("\n") ? `\x1b[200~${text}\x1b[201~\r` : `${text}\r`;
+      const res = await typeAndWait(sessions, session, input, 600, () => stopped);
+      entry.output = res.output.slice(-OUTPUT_MAX);
+      if (res.timedOut) Object.assign(entry, { status: "error", reason: "tempo esgotado (600s) esperando o terminal ficar quieto" });
+    } catch (e: any) {
+      Object.assign(entry, { status: "error", reason: String(e?.message || e) });
     } finally {
       running.delete(key);
+      finish(projectId, r, entry, manual);
+      // toast a cada disparo (o lembrete já é o próprio toast)
+      if (r.notify && !r.reminder && entry.status !== "skipped") {
+        const text = entry.status === "ok" ? `Rotina "${r.name}" executada` : `Rotina "${r.name}" falhou: ${entry.reason}`;
+        canvas.notify(projectId, { type: "notify", from: { nodeId: r.nodeId, title: String(node?.data?.title ?? r.nodeId) }, text });
+      }
     }
-    r.lastRunAt = entry.at;
-    r.nextRunAt = nextRun(r.schedule, now());
-    r.history = [...r.history, entry].slice(-HISTORY_MAX);
-    persist(projectId);
-    notifyChange(projectId);
-    return true;
   }
 
   function tick() {
@@ -181,14 +421,18 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, da
     const t = now();
     for (const [projectId, list] of store) {
       for (const r of list) {
-        if (!r.enabled || r.nextRunAt > t || running.has(`${projectId}:${r.id}`)) continue;
-        if (isChatBusy(projectId, r.nodeId)) {
-          r.nextRunAt = t + BUSY_DEFER_MS;
-          persist(projectId);
-          notifyChange(projectId);
+        if (!r.enabled || r.nextRunAt === null || r.nextRunAt > t || running.has(`${projectId}:${r.id}`)) continue;
+        const limit = r.until ? untilEnd(r.until) : null;
+        if (limit !== null && t > limit) {
+          complete(r);
+          save(projectId);
           continue;
         }
-        void execute(projectId, r);
+        try {
+          fire(projectId, r, false);
+        } catch (e) {
+          console.error("Erro ao disparar rotina:", e);
+        }
       }
     }
   }
@@ -198,6 +442,8 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, da
     stopped = true;
     clearInterval(timer);
   });
+
+  // --- Helpers de API ---
 
   const projectOr404 = (projectId: unknown) => {
     if (typeof projectId !== "string" || !/^[\w-]+$/.test(projectId)) throw new ApiError(400, "Ids inválidos.");
@@ -209,6 +455,26 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, da
     if (!n || n.type !== "agentTerminal") throw new ApiError(404, "Nó de agente não encontrado.");
     return n;
   };
+  // Alvo por título (terminal) ou id (nodeId); qualquer agentTerminal do projeto
+  const targetId = (projectId: string, body: Obj): string | undefined => {
+    if (body.terminal !== undefined) {
+      const hits = (canvas.state(projectId).nodes ?? []).filter((n) => n.type === "agentTerminal" && lc(n.data?.title) === lc(body.terminal));
+      if (!hits.length) throw new ApiError(404, `Terminal "${body.terminal}" não encontrado no projeto.`);
+      if (hits.length > 1) throw new ApiError(400, `Nome ambíguo: ${hits.length} terminais chamados "${body.terminal}".`);
+      return hits[0].id;
+    }
+    if (body.nodeId !== undefined && body.nodeId !== null) return agentNode(projectId, body.nodeId).id;
+    return undefined;
+  };
+
+  const pub = (projectId: string, r: Routine) => ({
+    ...r,
+    nodeTitle: r.reminder ? null : String(nodeOf(projectId, r.nodeId)?.data?.title ?? r.nodeId),
+    shortId: shortId(r),
+    label: scheduleLabel(r.schedule),
+    status: r.completed ? "completed" : r.enabled ? "active" : "disabled",
+  });
+
   const wrap = (fn: (projectId: string, req: any, reply: FastifyReply) => any) =>
     async (req: any, reply: FastifyReply) => {
       try {
@@ -225,104 +491,141 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, da
     return r;
   };
 
-  function create(projectId: string, body: Obj): Routine {
-    agentNode(projectId, body.nodeId);
-    const schedule = parseSchedule(body.schedule);
-    if (body.enabled !== undefined && typeof body.enabled !== "boolean") throw new ApiError(400, "enabled deve ser booleano.");
+  // Valida o corpo (criação: tudo; edição: só o que veio) e devolve só os campos presentes, normalizados.
+  // count/until/preRun com valor de "limpar" vêm como chave presente com undefined.
+  function parseBody(projectId: string, b: Obj): Obj {
+    const out: Obj = {};
+    if (b.name !== undefined) out.name = parseName(b.name);
+    if (b.kind !== undefined) out.kind = parseKind(b.kind);
+    if (b.text !== undefined) out.text = parseText(b.text);
+    if (b.schedule !== undefined) out.schedule = parseSchedule(b.schedule);
+    if (b.enabled !== undefined) out.enabled = parseBool(b.enabled, "enabled");
+    if (b.skipIfBusy !== undefined) out.skipIfBusy = parseBool(b.skipIfBusy, "skipIfBusy");
+    if (b.notify !== undefined) out.notify = parseBool(b.notify, "notify");
+    if (b.count !== undefined) out.count = parseCount(b.count);
+    if (b.until !== undefined) out.until = parseUntil(b.until);
+    if (b.preRun !== undefined) out.preRun = parsePreRun(b.preRun);
+    const reminder = b.reminder !== undefined ? parseBool(b.reminder, "reminder") : undefined;
+    const target = targetId(projectId, b);
+    if (reminder && target) throw new ApiError(400, "Use lembrete OU terminal-alvo, não os dois.");
+    if (reminder) Object.assign(out, { reminder: true, nodeId: null });
+    else if (target) Object.assign(out, { reminder: false, nodeId: target });
+    else if (reminder === false) out.reminder = false; // a edição exige um alvo (validado em edit)
+    return out;
+  }
+
+  function create(projectId: string, body: Obj, defaultNodeId?: string): Routine {
+    const f = parseBody(projectId, body);
+    for (const k of ["name", "text", "schedule"]) if (f[k] === undefined) throw new ApiError(400, `Campo obrigatório: ${k}.`);
+    if (f.reminder !== true) {
+      const id = f.nodeId ?? defaultNodeId;
+      if (!id) throw new ApiError(400, "Informe o terminal-alvo (nodeId/terminal) ou reminder: true.");
+      Object.assign(f, { nodeId: agentNode(projectId, id).id, reminder: false });
+    }
     const t = now();
-    const r: Routine = {
+    const next = nextRun(f.schedule, t);
+    if (next === null) throw new ApiError(400, "O horário de once já passou.");
+    if (f.until && untilEnd(f.until)! < t) throw new ApiError(400, "until já passou.");
+    const r = {
+      kind: "command",
+      skipIfBusy: true,
+      notify: true,
+      enabled: true,
+      ...f,
       id: `rt-${crypto.randomUUID().slice(0, 8)}`,
-      nodeId: body.nodeId,
-      name: parseName(body.name),
-      kind: parseKind(body.kind),
-      text: parseText(body.text),
-      schedule,
-      enabled: body.enabled ?? true,
+      fired: 0,
       createdAt: new Date(t).toISOString(),
-      nextRunAt: nextRun(schedule, t),
+      nextRunAt: next,
       history: [],
-    };
+    } as unknown as Routine;
     routinesOf(projectId).push(r);
-    persist(projectId);
-    notifyChange(projectId);
+    save(projectId);
+    return r;
+  }
+
+  function edit(projectId: string, r: Routine, body: Obj) {
+    const f = parseBody(projectId, body);
+    const t = now();
+    if (f.reminder === false && !f.nodeId && r.reminder) throw new ApiError(400, "Informe o terminal-alvo para deixar de ser lembrete.");
+    if (f.until && untilEnd(f.until)! < t) throw new ApiError(400, "until já passou.");
+    const schedule: Schedule = f.schedule ?? r.schedule;
+    // Mudar o agendamento zera os contadores; religar uma rotina concluída também recomeça
+    const scheduleChanged = f.schedule !== undefined && JSON.stringify(f.schedule) !== JSON.stringify(r.schedule);
+    const enabling = f.enabled === true && !r.enabled;
+    const restart = scheduleChanged || (enabling && !!r.completed);
+    if ((scheduleChanged || enabling) && nextRun(schedule, t) === null) throw new ApiError(400, "O horário de once já passou.");
+    for (const [k, v] of Object.entries(f)) {
+      if (v === undefined) delete (r as Obj)[k];
+      else (r as Obj)[k] = v;
+    }
+    if (restart) {
+      r.fired = 0;
+      if (r.completed && f.enabled === undefined) r.enabled = true;
+      r.completed = false;
+    }
+    if (scheduleChanged || enabling) r.nextRunAt = nextRun(r.schedule, t);
+    save(projectId);
     return r;
   }
 
   function remove(projectId: string, r: Routine) {
     store.set(projectId, routinesOf(projectId).filter((x) => x !== r));
-    persist(projectId);
-    notifyChange(projectId);
+    save(projectId);
   }
 
-  function startNow(projectId: string, r: Routine) {
-    if (running.has(`${projectId}:${r.id}`)) throw new ApiError(409, "A rotina já está em execução.");
-    if (isChatBusy(projectId, r.nodeId)) throw new ApiError(409, "Agente ocupado (chat); tente em instantes.");
-    void execute(projectId, r);
-  }
+  const runNow = (projectId: string, r: Routine, reply: FastifyReply) => reply.status(202).send({ ok: true, ...fire(projectId, r, true) });
 
-  const pub = (r: Routine) => r;
+  // --- Rotas do projeto (painel da web) ---
 
-  fastify.get("/api/projects/:p/routines", wrap((p) => ({ routines: routinesOf(p).map(pub) })));
-
-  fastify.post("/api/projects/:p/routines", wrap((p, req, reply) => reply.status(201).send({ routine: pub(create(p, req.body ?? {})) })));
-
-  fastify.put("/api/projects/:p/routines/:rid", wrap((p, req) => {
-    const r = find(p, req.params.rid);
-    const b = req.body ?? {};
-    // valida tudo antes de mudar qualquer coisa
-    const patch: Partial<Routine> = {};
-    if (b.name !== undefined) patch.name = parseName(b.name);
-    if (b.kind !== undefined) patch.kind = parseKind(b.kind);
-    if (b.text !== undefined) patch.text = parseText(b.text);
-    if (b.schedule !== undefined) patch.schedule = parseSchedule(b.schedule);
-    if (b.enabled !== undefined) {
-      if (typeof b.enabled !== "boolean") throw new ApiError(400, "enabled deve ser booleano.");
-      patch.enabled = b.enabled;
-    }
-    const reschedule = patch.schedule !== undefined || (patch.enabled === true && !r.enabled);
-    Object.assign(r, patch);
-    if (reschedule) r.nextRunAt = nextRun(r.schedule, now());
-    persist(p);
-    notifyChange(p);
-    return { routine: pub(r) };
-  }));
-
+  fastify.get("/api/projects/:p/routines", wrap((p) => ({ routines: routinesOf(p).map((r) => pub(p, r)) })));
+  fastify.post("/api/projects/:p/routines", wrap((p, req, reply) => reply.status(201).send({ routine: pub(p, create(p, req.body ?? {})) })));
+  fastify.put("/api/projects/:p/routines/:rid", wrap((p, req) => ({ routine: pub(p, edit(p, find(p, req.params.rid), req.body ?? {})) })));
   fastify.delete("/api/projects/:p/routines/:rid", wrap((p, req) => {
     remove(p, find(p, req.params.rid));
     return { ok: true };
   }));
+  fastify.post("/api/projects/:p/routines/:rid/run", wrap((p, req, reply) => runNow(p, find(p, req.params.rid), reply)));
 
-  fastify.post("/api/projects/:p/routines/:rid/run", wrap((p, req, reply) => {
-    startNow(p, find(p, req.params.rid));
-    return reply.status(202).send({ ok: true });
-  }));
+  // --- Rotas do CLI (`maestri routine`): todas as rotinas do projeto, só para o Maestro ---
 
-  // --- Escopo do nó (CLI `maestri routine`): sempre as rotinas do PRÓPRIO nó ---
   const nodeBase = "/api/projects/:p/nodes/:n/routines";
-  const mine = (p: string, nodeId: string) => {
-    agentNode(p, nodeId);
-    return routinesOf(p).filter((r) => r.nodeId === nodeId);
-  };
-  const byName = (list: Routine[], name: unknown) => {
-    const hit = list.filter((r) => lc(r.name) === lc(name));
-    if (!hit.length) throw new ApiError(404, `Rotina "${name}" não encontrada neste agente.`);
-    if (hit.length > 1) throw new ApiError(400, `Nome ambíguo: ${hit.length} rotinas chamadas "${name}".`);
-    return hit[0];
-  };
+  // Por nome (sem diferenciar maiúsculas) e/ou prefixo de id; duplicatas listam as opções
+  function resolve(p: string, body: Obj): Routine {
+    if (body.name === undefined && body.id === undefined) throw new ApiError(400, "Informe o nome da rotina (ou --id).");
+    let hits = routinesOf(p);
+    if (body.id !== undefined) {
+      const prefix = lc(body.id).replace(/^rt-/, "");
+      hits = hits.filter((r) => prefix && r.id.slice(3).startsWith(prefix));
+    }
+    if (body.name !== undefined) hits = hits.filter((r) => lc(r.name) === lc(body.name));
+    if (!hits.length) throw new ApiError(404, `Rotina ${body.name !== undefined ? `"${body.name}"` : `com id "${body.id}"`} não encontrada.`);
+    if (hits.length > 1) {
+      const lines = hits.map((r) => `  ${shortId(r)}  "${r.name}"  ${scheduleLabel(r.schedule)}`).join("\n");
+      throw new ApiError(400, `Várias rotinas correspondem; repita com --id <prefixo>:\n${lines}`);
+    }
+    return hits[0];
+  }
+  // Só o Maestro mexe em rotinas pelo CLI
+  const cli = (fn: (p: string, req: any, reply: FastifyReply) => any) =>
+    wrap((p, req, reply) => {
+      if (agentNode(p, req.params.n).data?.isMaestro !== true) throw new ApiError(403, "Apenas o Maestro pode gerenciar rotinas.");
+      return fn(p, req, reply);
+    });
 
-  fastify.get(nodeBase, wrap((p, req) => ({ routines: mine(p, req.params.n).map(pub) })));
-  fastify.post(nodeBase, wrap((p, req, reply) => {
-    mine(p, req.params.n);
-    return reply.status(201).send({ routine: pub(create(p, { ...(req.body ?? {}), nodeId: req.params.n })) });
-  }));
-  fastify.post(`${nodeBase}/remove`, wrap((p, req) => {
-    remove(p, byName(mine(p, req.params.n), req.body?.name));
-    return { ok: true };
-  }));
-  fastify.post(`${nodeBase}/run`, wrap((p, req, reply) => {
-    startNow(p, byName(mine(p, req.params.n), req.body?.name));
-    return reply.status(202).send({ ok: true });
-  }));
+  fastify.get(nodeBase, cli((p) => ({ routines: routinesOf(p).map((r) => pub(p, r)) })));
+  fastify.post(nodeBase, cli((p, req, reply) => reply.status(201).send({ routine: pub(p, create(p, req.body ?? {}, req.params.n)) })));
+  fastify.post(`${nodeBase}/show`, cli((p, req) => ({ routine: pub(p, resolve(p, req.body ?? {})) })));
+  fastify.post(`${nodeBase}/edit`, cli((p, req) => ({ routine: pub(p, edit(p, resolve(p, req.body ?? {}), req.body?.patch ?? {})) })));
+  fastify.post(`${nodeBase}/enable`, cli((p, req) => ({ routine: pub(p, edit(p, resolve(p, req.body ?? {}), { enabled: true })) })));
+  fastify.post(`${nodeBase}/disable`, cli((p, req) => ({ routine: pub(p, edit(p, resolve(p, req.body ?? {}), { enabled: false })) })));
+  fastify.post(`${nodeBase}/run`, cli((p, req, reply) => runNow(p, resolve(p, req.body ?? {}), reply)));
+  // "remove" é o alias obsoleto de delete (rm)
+  for (const verb of ["delete", "remove"]) {
+    fastify.post(`${nodeBase}/${verb}`, cli((p, req) => {
+      remove(p, resolve(p, req.body ?? {}));
+      return { ok: true };
+    }));
+  }
 
   return {
     // Chame ao apagar um projeto (apaga o arquivo de rotinas)
