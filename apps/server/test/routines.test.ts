@@ -617,12 +617,15 @@ test("CLI: create com todos os agendamentos/alvos/opções, list e show", async 
   const out = (await rt("list")).stdout;
   assert.match(out, /Audit  \[todo dia às 02:00\]  → Agente  ativa/);
   assert.match(out, /Self  \[a cada 1h30m\]  → Maestro  desligada/);
-  assert.match(out, /Standup  \[mon,wed,fri às 09:00\]  → lembrete/);
+  assert.match(out, /Standup  \[seg,qua,sex às 09:00\]  → lembrete/);
+  // rotina desligada não mostra "próxima"
+  assert.match(out, /Self  .*desligada  próxima: —  última/);
   assert.match(out, /Unica  \[uma vez em 2026-06-20 15:00\]/);
   const sh = (await rt("show", "self")).stdout;
   assert.match(sh, /status: desligada · disparos: 0\/3 · até 2026-07-01/);
   assert.match(sh, /pular se ocupado: não · notificar: não/);
   assert.match(sh, /pre-run: git log -1/);
+  assert.match(sh, /próxima: —/);
 
   // erros
   assert.match((await rt("create", "X", "--every", "5m")).stderr, /--command/);

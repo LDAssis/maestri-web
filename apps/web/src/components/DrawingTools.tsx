@@ -96,7 +96,9 @@ export function DrawingLayer({
       erased.current.clear();
       return eraseAt(e);
     }
-    if (tool === "text") return setTextAt({ local: local(e), client: { x: e.clientX, y: e.clientY } });
+    // Texto: a caixa abre no pointerup. Abrir no pointerdown fazia o foco padrão do mousedown tirar o foco
+    // do textarea (autoFocus) na hora, o onBlur confirmava vazio e a caixa sumia.
+    if (tool === "text") return;
     setDraft([local(e)]);
   };
   const move = (e: React.PointerEvent) => {
@@ -113,6 +115,7 @@ export function DrawingLayer({
     });
   };
   const up = (e: React.PointerEvent) => {
+    if (tool === "text") return e.button === 0 ? setTextAt({ local: local(e), client: { x: e.clientX, y: e.clientY } }) : undefined;
     if (!draft) return;
     const r = ref.current!.getBoundingClientRect();
     const pts = draft.map((p) => screenToFlowPosition({ x: p.x + r.left, y: p.y + r.top }));

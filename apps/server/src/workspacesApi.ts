@@ -298,11 +298,19 @@ export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects,
   fastify.post(`${base}/workspaces/move`, wrap((c, req) => {
     requireMaestro(c, "mover workspaces");
     const p = findProject(req.body?.name);
-    const dest = destination(req.body ?? {});
-    p.group = dest.group;
-    p.folder = dest.folder;
+    const b = req.body ?? {};
+    if (b.pin && b.unpin) throw new ApiError(400, "--pin não combina com --unpin.");
+    const pinOnly = (b.pin || b.unpin) && b.group === undefined && b.folder === undefined && !b.root;
+    // Só fixar/desafixar não move o workspace
+    if (!pinOnly) {
+      const dest = destination(b);
+      p.group = dest.group;
+      p.folder = dest.folder;
+    }
+    if (b.pin) p.pinned = true;
+    if (b.unpin) p.pinned = false;
     saveProjects();
     saveSidebar();
-    return { ok: true, group: dest.group, folder: dest.folder };
+    return { ok: true, group: p.group ?? null, folder: p.folder ?? null, pinned: p.pinned === true };
   }));
 }
