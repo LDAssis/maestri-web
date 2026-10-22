@@ -133,6 +133,26 @@ test("preset: list traz embutidos + configurados; create/set/show/delete; só o 
   assert.ok(!globalSettings().cliPresets.some((p: any) => p.id === "claude-opus"));
 });
 
+test("preset: aparência (cor + ícone) sorteada/explícita e aplicada ao recruta; --color/--icon do recruit vencem", async () => {
+  const c = await ok(M("preset", "create", "Look A", "--command", "claude --x", "--color", "rose", "--icon", "bug"));
+  assert.match(c.stdout, /aparência: cor rose · ícone bug/);
+  // sem look explícito: cor sorteada e ícone do CLI conhecido
+  const d = await ok(M("preset", "create", "Look B", "--command", "claude"));
+  assert.match(d.stdout, /aparência: cor \w+ · ícone sparkles/);
+  assert.match((await M("preset", "create", "Look C", "--color", "magenta")).stderr, /Cor inválida/);
+  assert.match((await M("preset", "create", "Look C", "--icon", "nao")).stderr, /Ícone inválido/);
+  await ok(M("preset", "set", "Look B", "--color", "sky", "--icon", "rocket"));
+  assert.match((await ok(M("preset", "show", "Look B"))).stdout, /cor sky · ícone rocket/);
+  await ok(M("recruit", "ComLook", "--preset", "Look A"));
+  const n = await byTitle("ComLook");
+  assert.deepEqual([n.data.color, n.data.icon], ["rose", "bug"]);
+  await ok(M("recruit", "ComLook2", "--preset", "Look A", "--color", "emerald"));
+  const n2 = await byTitle("ComLook2");
+  assert.deepEqual([n2.data.color, n2.data.icon], ["emerald", "bug"]);
+  for (const t of ["ComLook", "ComLook2"]) await ok(M("dismiss", t));
+  for (const l of ["Look A", "Look B"]) await ok(M("preset", "delete", l));
+});
+
 test("preset do projeto: um preset que vive nas configurações do projeto é alterado lá", async () => {
   fs.writeFileSync(path.join(repo, ".maestri_data", `settings_${P}.json`), JSON.stringify({ defaultCmd: "x", cliPresets: [{ id: "proj-only", label: "Só do Projeto", cmd: "echo proj" }] }));
   assert.match((await ok(M("preset", "show", "só do projeto"))).stdout, /project/);

@@ -24,8 +24,8 @@ a você ou a eles). Agente↔agente pode cruzar andares; notas, fichários e por
 liga a agente; nota não liga a portal. Uma corda para uma banda alcança todos os membros.`,
   preset: `maestri preset list
 maestri preset show "Nome"
-maestri preset create "Nome" [--command "claude --model opus"] [--account "Work"] [--maestro on|off] [--chat on|off] [--quick-start on|off]
-maestri preset set "Nome" [--name Novo] [--command C] [--account "Work"|""] [--maestro on|off] [--chat on|off] [--quick-start on|off]
+maestri preset create "Nome" [--command "claude --model opus"] [--account "Work"] [--color C] [--icon I] [--maestro on|off] [--chat on|off] [--quick-start on|off]
+maestri preset set "Nome" [--name Novo] [--command C] [--account "Work"|""] [--color C] [--icon I] [--maestro on|off] [--chat on|off] [--quick-start on|off]
 maestri preset delete "Nome"
 Presets = embutidos (claude, codex, opencode, agy, shell) + cliPresets das configurações. Novos presets e overrides de
 embutidos são gravados nas configurações GLOBAIS; um preset que já vive nas configurações do projeto é alterado lá.
@@ -133,10 +133,11 @@ export function register({ call, need, CliError }) {
       `${p.label}  (id ${p.id}${p.builtin ? ", embutido" : ""}; ${p.source})`,
       `  comando: ${p.cmd || "(shell puro)"}`,
       `  maestro: ${onOff(p.maestro)} · chat: ${onOff(p.chat)} · quick-start: ${onOff(p.quickStart)}`,
+      ...(p.color || p.icon ? [`  aparência: cor ${p.color ?? "(padrão)"} · ícone ${p.icon ?? "(padrão)"}`] : []),
       ...(p.account ? [`  conta: ${p.account}${p.accounts ? ` (disponíveis: ${p.accounts.map((a) => `"${a}"`).join(", ")})` : ""}`] : []),
     ].join("\n"));
   const presetBody = (flags) => ({
-    command: flags.command, maestro: flags.maestro, chat: flags.chat, quickStart: flags["quick-start"], account: flags.account,
+    command: flags.command, maestro: flags.maestro, chat: flags.chat, quickStart: flags["quick-start"], account: flags.account, color: flags.color, icon: flags.icon,
   });
 
   async function preset({ pos, flags }) {
@@ -148,7 +149,7 @@ export function register({ call, need, CliError }) {
       need(pos, 2, 'preset show "Nome"');
       showPreset((await call("POST", "/presets/show", { name })).preset);
     } else if (sub === "create") {
-      need(pos, 2, 'preset create "Nome" [--command C] [--maestro on|off] [--chat on|off] [--quick-start on|off]');
+      need(pos, 2, 'preset create "Nome" [--command C] [--color C] [--icon I] [--maestro on|off] [--chat on|off] [--quick-start on|off]');
       showPreset((await call("POST", "/presets/create", { name, ...presetBody(flags) })).preset);
     } else if (sub === "set") {
       need(pos, 2, 'preset set "Nome" [--name Novo] [--command C] [--maestro on|off] ...');
