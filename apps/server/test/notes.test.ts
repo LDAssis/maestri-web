@@ -224,3 +224,17 @@ test("arrange: mostra, renomeia a si, nota e (Maestro) colega; restrições", as
   await ok("worker", ["arrange", "Worker", "--color", "violet"]);
   assert.equal((await byId("worker")).data.color, "violet");
 });
+
+test("notas e fichários criados por um agente de um andar nascem nesse andar", async () => {
+  await put(
+    [node("maestro", "agentTerminal", 0, { title: "Maestro", isMaestro: true, floor: "Alto" })],
+    [],
+  );
+  await ok("maestro", ["note", "create", "Nota do alto", "--stack", "Pilha"]);
+  const st = await canvasState();
+  assert.equal(st.nodes.find((n: any) => n.data?.title === "Nota do alto").data.floor, "Alto");
+  assert.equal(st.nodes.find((n: any) => n.type === "noteStack").data.floor, "Alto");
+  await put(baseNodes(), baseEdges());
+  await ok("maestro", ["note", "create", "No térreo"]);
+  assert.equal((await byTitle("No térreo")).data.floor, undefined);
+});

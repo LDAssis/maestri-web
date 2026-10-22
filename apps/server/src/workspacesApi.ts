@@ -112,6 +112,104 @@ export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects,
 
   fastify.get("/api/sidebar", async () => sidebar);
 
+  // --- Gerência da barra lateral pela UI (grupos, pastas, mover e fixar) ---
+  const guard = (fn: (req: any) => any) => async (req: any, reply: any) => {
+    try {
+      return await fn(req);
+    } catch (e: any) {
+      if (e instanceof ApiError) return reply.status(e.status).send({ error: e.message });
+      req.log.error(e);
+      return reply.status(500).send({ error: e?.message || "Erro interno." });
+    }
+  };
+  const groupOf = (name: unknown) => {
+    const g = sidebar.groups.find((x) => lc(x) === lc(name));
+    if (!g) throw new ApiError(404, `Grupo "${name}" não encontrado.`);
+    return g;
+  };
+  // group "" / ausente = raiz
+  const scope = (v: unknown) => (v === undefined || v === null || v === "" ? null : groupOf(v));
+  const folderOf = (name: unknown, group: string | null) => {
+    const f = sidebar.folders.find((x) => lc(x.name) === lc(name) && x.group === group);
+    if (!f) throw new ApiError(404, `Pasta "${name}" não encontrada${group ? ` no grupo "${group}"` : " na raiz"}.`);
+    return f;
+  };
+  const ok = () => {
+    saveProjects();
+    saveSidebar();
+    return { ok: true, sidebar };
+  };
+
+  fastify.post("/api/sidebar/groups", guard((req) => {
+    const name = cleanName(req.body?.name, "o nome do grupo");
+    if (sidebar.groups.some((g) => lc(g) === lc(name))) throw new ApiError(409, `Já existe um grupo "${name}".`);
+    sidebar.groups.push(name);
+    return ok();
+  }));
+
+  fastify.patch("/api/sidebar/groups/:name", guard((req) => {
+    const g = groupOf(req.params.name);
+    const to = cleanName(req.body?.name, "o novo nome");
+    if (sidebar.groups.some((x) => x !== g && lc(x) === lc(to))) throw new ApiError(409, `Já existe um grupo "${to}".`);
+    sidebar.groups = sidebar.groups.map((x) => (x === g ? to : x));
+    sidebar.folders.forEach((f) => f.group === g && (f.group = to));
+    projects.forEach((p) => p.group === g && (p.group = to));
+    return ok();
+  }));
+
+  // Apagar um grupo leva os workspaces (e os dos folders dele) para a raiz; as pastas dele somem
+  fastify.delete("/api/sidebar/groups/:name", guard((req) => {
+    const g = groupOf(req.params.name);
+    sidebar.groups = sidebar.groups.filter((x) => x !== g);
+    sidebar.folders = sidebar.folders.filter((f) => f.group !== g);
+    projects.forEach((p) => p.group === g && ((p.group = null), (p.folder = null)));
+    return ok();
+  }));
+
+  fastify.post("/api/sidebar/folders", guard((req) => {
+    const name = cleanName(req.body?.name, "o nome da pasta");
+    const group = scope(req.body?.group);
+    if (sidebar.folders.some((f) => f.group === group && lc(f.name) === lc(name))) throw new ApiError(409, `Já existe uma pasta "${name}" ${group ? `no grupo "${group}"` : "na raiz"}.`);
+    sidebar.folders.push({ name, group });
+    return ok();
+  }));
+
+  fastify.patch("/api/sidebar/folders/:name", guard((req) => {
+    const group = scope(req.query?.group);
+    const f = folderOf(req.params.name, group);
+    const to = cleanName(req.body?.name, "o novo nome");
+    if (sidebar.folders.some((x) => x !== f && x.group === group && lc(x.name) === lc(to))) throw new ApiError(409, `Já existe uma pasta "${to}" ${group ? `no grupo "${group}"` : "na raiz"}.`);
+    projects.forEach((p) => (p.group ?? null) === group && p.folder === f.name && (p.folder = to));
+    f.name = to;
+    return ok();
+  }));
+
+  // Apagar uma pasta leva os workspaces dela para o grupo (ou a raiz) onde ela estava
+  fastify.delete("/api/sidebar/folders/:name", guard((req) => {
+    const group = scope(req.query?.group);
+    const f = folderOf(req.params.name, group);
+    sidebar.folders = sidebar.folders.filter((x) => x !== f);
+    projects.forEach((p) => (p.group ?? null) === group && p.folder === f.name && (p.folder = null));
+    return ok();
+  }));
+
+  // Move e/ou fixa um workspace. group/folder explícitos (null = raiz); a pasta precisa existir naquele escopo.
+  fastify.patch("/api/projects/:id/sidebar", guard((req) => {
+    const p = projects.find((x) => x.id === req.params.id);
+    if (!p) throw new ApiError(404, "Projeto não encontrado.");
+    const b = req.body ?? {};
+    if (b.pinned !== undefined && typeof b.pinned !== "boolean") throw new ApiError(400, "pinned deve ser booleano.");
+    if (b.group !== undefined || b.folder !== undefined) {
+      const group = scope(b.group);
+      const folder = b.folder ? folderOf(b.folder, group).name : null;
+      p.group = group;
+      p.folder = folder;
+    }
+    if (b.pinned !== undefined) p.pinned = b.pinned;
+    ok();
+    return { ok: true, project: p };
+  }));
+
   fastify.get(`${base}/workspaces`, wrap((c) => {
     requireMaestro(c, "listar workspaces");
     return tree(c.projectId);

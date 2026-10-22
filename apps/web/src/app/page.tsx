@@ -20,6 +20,7 @@ import { apiFetch } from "@/lib/api";
 import { Peer, PresenceProvider } from "@/lib/presence";
 import RoutinesPanel from "@/components/RoutinesPanel";
 import WorktreesPanel from "@/components/WorktreesPanel";
+import SidebarManager from "@/components/SidebarManager";
 import { PresenceStack, PresenceToasts } from "@/components/PresenceUI";
 
 interface Project {
@@ -81,6 +82,7 @@ function App({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isOrganizeOpen, setIsOrganizeOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDesc, setNewProjectDesc] = useState("");
 
@@ -297,6 +299,16 @@ function App({
                       <Plus className="h-3.5 w-3.5" />
                       Criar Novo Projeto
                     </button>
+                    <button
+                      onClick={() => {
+                        setIsDropdownOpen(false);
+                        setIsOrganizeOpen(true);
+                      }}
+                      className="w-full flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-slate-300 hover:bg-slate-900 transition font-medium"
+                    >
+                      <FolderPlus className="h-3.5 w-3.5" />
+                      Organizar grupos e pastas
+                    </button>
                   </div>
                 </div>
               )}
@@ -402,6 +414,8 @@ function App({
           )}
         </div>
       </div>
+
+      {isOrganizeOpen && <SidebarManager projects={projects} onClose={() => setIsOrganizeOpen(false)} onChanged={fetchProjects} />}
 
       {/* Modal Criar Novo Projeto */}
       {isNewProjectModalOpen && (
