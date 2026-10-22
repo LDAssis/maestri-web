@@ -5,3 +5,4 @@ dist
 .env
 .DS_Store
 *.tsbuildinfo
+.maestri_data/canvas_*.json

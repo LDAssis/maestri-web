@@ -5,6 +5,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { apiFetch, wsUrl } from "@/lib/api";
+import { usePresenceStore } from "@/lib/presence";
 
 export type TerminalStatus = "conectando" | "online" | "offline" | "encerrada";
 
@@ -17,6 +18,7 @@ interface TerminalViewProps {
 }
 
 export default function TerminalView({ projectId, nodeId, cwd, initialCmd, onStatusChange }: TerminalViewProps) {
+  const presence = usePresenceStore();
   const [status, setStatus] = useState<TerminalStatus>("conectando");
   const onStatusRef = useRef(onStatusChange);
   onStatusRef.current = onStatusChange;
@@ -108,6 +110,7 @@ export default function TerminalView({ projectId, nodeId, cwd, initialCmd, onSta
     connect();
 
     term.onData((data) => {
+      presence.typing(nodeId);
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(data);
       }
@@ -162,7 +165,7 @@ export default function TerminalView({ projectId, nodeId, cwd, initialCmd, onSta
       ws?.close();
       term.dispose();
     };
-  }, [projectId, nodeId, cwd, initialCmd, updateStatus]);
+  }, [projectId, nodeId, cwd, initialCmd, updateStatus, presence]);
 
   const restartSession = async () => {
     try {
@@ -178,7 +181,11 @@ export default function TerminalView({ projectId, nodeId, cwd, initialCmd, onSta
   };
 
   return (
-    <div className="flex flex-col h-full w-full bg-[#050811] overflow-hidden min-h-0">
+    <div
+      className="flex flex-col h-full w-full bg-[#050811] overflow-hidden min-h-0"
+      onFocusCapture={() => presence.setActive(nodeId, "viewing")}
+      onBlurCapture={() => presence.setActive(null, "viewing")}
+    >
       {/* Quick Launchers for CLI Agents */}
       <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-950 border-b border-slate-800 text-[10px] font-mono shrink-0">
         <span className="text-slate-500 mr-1">CLI Rápido:</span>

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { WorktreeManager, WorktreeSession } from "./worktree.js";
 import { SessionManager } from "./sessions.js";
 import { CanvasStore } from "./canvas.js";
+import { PresenceHub } from "./presence.js";
 
 // Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
 process.on("uncaughtException", (err) => {
@@ -125,11 +126,13 @@ function canvasFileFor(id: string) {
 }
 
 const sessions = new SessionManager();
+const presence = new PresenceHub();
 const canvas = new CanvasStore(canvasFileFor, writeJsonAtomic, (projectId, ids) => sessions.killNodes(projectId, ids));
 
 fastify.addHook("onClose", async () => {
   canvas.flushAll();
   sessions.killAll();
+  presence.close();
 });
 
 const idPattern = /^[\w-]+$/;
@@ -280,6 +283,13 @@ fastify.get<{ Params: { id: string } }>("/ws/project/:id", { websocket: true }, 
     return;
   }
   canvas.attach(socket, req.params.id, url.searchParams.get("clientId") || "");
+});
+
+// WebSocket de presença global (quem está online, cursores, atividade)
+fastify.get("/ws/presence", { websocket: true }, (socket, req) => {
+  const url = new URL(req.url, "http://localhost");
+  if (!wsAuthorized(socket, req, url)) return;
+  presence.attach(socket);
 });
 
 const port = Number(process.env.PORT) || 4000;

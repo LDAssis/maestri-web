@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import { Globe, RefreshCw, ExternalLink, ShieldCheck } from "lucide-react";
 import DeleteNodeButton from "./DeleteNodeButton";
+import { usePresenceStore } from "@/lib/presence";
 
 export interface PortalNodeData extends Record<string, unknown> {
   title: string;
@@ -44,6 +45,7 @@ export default function PortalNode({
     setInvalid(false);
   }, [data.url]);
   const { updateNodeData } = useReactFlow();
+  const presence = usePresenceStore();
 
   const handleReload = () => {
     setKey((prev) => prev + 1);
@@ -122,6 +124,8 @@ export default function PortalNode({
           type="text"
           value={inputUrl}
           onChange={(e) => setInputUrl(e.target.value)}
+          onFocus={() => presence.setActive(id, "editing")}
+          onBlur={() => presence.setActive(null, "viewing")}
           className="flex-1 bg-slate-950 border border-slate-800 rounded px-2 py-0.5 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-500"
           placeholder="Digite a URL…"
         />

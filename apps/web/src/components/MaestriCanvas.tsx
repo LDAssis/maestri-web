@@ -22,6 +22,8 @@ import {
 import "@xyflow/react/dist/style.css";
 import { wsUrl } from "@/lib/api";
 import { ProjectIdContext } from "@/lib/projectContext";
+import { usePresenceStore } from "@/lib/presence";
+import { PresenceLayer } from "./PresenceUI";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
 import PortalNode, { PortalNodeData } from "./PortalNode";
@@ -31,6 +33,7 @@ interface MaestriCanvasProps {
   projectId: string;
   projectName: string;
   clientId: string;
+  focus?: { x?: number; y?: number; nodeId?: string | null; nonce: number };
 }
 
 const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
@@ -208,7 +211,8 @@ const readViewport = (projectId: string): Viewport | undefined => {
   }
 };
 
-export default function MaestriCanvas({ projectId, projectName, clientId }: MaestriCanvasProps) {
+export default function MaestriCanvas({ projectId, projectName, clientId, focus }: MaestriCanvasProps) {
+  const presence = usePresenceStore();
   const nodeTypes = useMemo(
     () => ({
       agentTerminal: AgentTerminalNode as any,
@@ -230,6 +234,34 @@ export default function MaestriCanvas({ projectId, projectName, clientId }: Maes
   const edgesRef = useRef<Edge[]>([]);
   nodesRef.current = nodes;
   edgesRef.current = edges;
+
+  // Títulos dos nós para o painel de presença ("digitando no Agente 01")
+  useEffect(() => {
+    presence.setNodeTitles(Object.fromEntries(nodes.map((n) => [n.id, String(n.data?.title ?? n.id)])));
+  }, [nodes, presence]);
+
+  useEffect(() => () => presence.sendCursor(null), [presence]);
+
+  // "Ir até": centraliza no cursor (ou no nó ativo) da pessoa, uma vez por pedido
+  const focusedRef = useRef(0);
+  useEffect(() => {
+    if (!focus || loadState !== "ready" || focusedRef.current === focus.nonce) return;
+    focusedRef.current = focus.nonce;
+    const t = setTimeout(() => {
+      const flow = flowRef.current;
+      if (!flow) return;
+      let target = focus.x !== undefined && focus.y !== undefined ? { x: focus.x, y: focus.y } : null;
+      const node = focus.nodeId ? nodesRef.current.find((n) => n.id === focus.nodeId) : undefined;
+      if (!target && node) {
+        target = {
+          x: node.position.x + Number(node.measured?.width ?? node.width ?? node.style?.width ?? 300) / 2,
+          y: node.position.y + Number(node.measured?.height ?? node.height ?? node.style?.height ?? 200) / 2,
+        };
+      }
+      if (target) flow.setCenter(target.x, target.y, { zoom: flow.getZoom(), duration: 400 });
+    }, 350);
+    return () => clearTimeout(t);
+  }, [focus, loadState]);
 
   const sendOp = useCallback((op: CanvasOp) => {
     const ws = wsRef.current;
@@ -602,6 +634,13 @@ export default function MaestriCanvas({ projectId, projectName, clientId }: Maes
         onInit={(instance) => (flowRef.current = instance)}
         nodeTypes={nodeTypes}
         deleteKeyCode={["Backspace", "Delete"]}
+        onMouseMove={(e) => {
+          const pos = flowRef.current?.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+          if (pos) presence.sendCursor(pos);
+        }}
+        onMouseLeave={() => presence.sendCursor(null)}
+        onNodeDragStart={(_, node) => presence.setActive(node.id, "dragging")}
+        onNodeDragStop={() => presence.setActive(null, "viewing")}
         defaultViewport={initialViewport}
         fitView={!initialViewport}
         onMoveEnd={(event, v) => {
@@ -618,6 +657,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId }: Maes
           size={1.5}
           color="#334155"
         />
+        <PresenceLayer nodes={nodes} projectId={projectId} />
         <Controls className="!bg-slate-900 !border-slate-800 !fill-slate-300 !text-slate-300 rounded-lg shadow-xl" />
         <MiniMap
           nodeColor={(n) =>
