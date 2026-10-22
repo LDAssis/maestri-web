@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { RotateCcw, Trash2, UserCog } from "lucide-react";
+import { Bell, RotateCcw, Trash2, UserCog } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 
 interface Account {
@@ -13,6 +13,8 @@ interface Account {
 // Retomada de sessão (por projeto) e contas de CLI (globais) nas configurações
 export default function SessionAccountsSettings({ projectId }: { projectId: string }) {
   const [resume, setResume] = useState(true);
+  const [desktop, setDesktop] = useState(true);
+  const [desktopForced, setDesktopForced] = useState(false); // MAESTRI_DESKTOP_NOTIFY no servidor manda mais que a preferência
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [program, setProgram] = useState<"claude" | "codex">("claude");
   const [name, setName] = useState("");
@@ -23,7 +25,12 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
   const load = useCallback(async () => {
     try {
       const [p, a] = await Promise.all([apiFetch(`/api/projects/${projectId}/prefs`), apiFetch("/api/accounts")]);
-      if (p.ok) setResume((await p.json()).resumeSession !== false);
+      if (p.ok) {
+        const prefs = await p.json();
+        setResume(prefs.resumeSession !== false);
+        setDesktop(prefs.desktopNotify === true);
+        setDesktopForced(prefs.desktopNotifyForced === true);
+      }
       if (a.ok) setAccounts((await a.json()).accounts);
     } catch {
       setError("Servidor indisponível");
@@ -46,6 +53,22 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
       if (!res.ok) throw new Error();
     } catch {
       setResume(!value);
+      setError("Não foi possível salvar a preferência");
+    }
+  };
+
+  const toggleDesktop = async (value: boolean) => {
+    setDesktop(value);
+    setError("");
+    try {
+      const res = await apiFetch(`/api/projects/${projectId}/prefs`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ desktopNotify: value }),
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setDesktop(!value);
       setError("Não foi possível salvar a preferência");
     }
   };
@@ -88,6 +111,19 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
           </span>
           <span className="block text-[11px] text-slate-400">
             Ao reabrir um terminal cuja sessão morreu (ou depois de reiniciar o servidor), claude, codex e opencode voltam em modo de retomada (<code>--continue</code>, <code>resume --last</code>). Trocar o agente ou o role começa do zero.
+          </span>
+        </span>
+      </label>
+
+      <label className="flex cursor-pointer items-start gap-2.5">
+        <input type="checkbox" checked={desktop} disabled={desktopForced} onChange={(e) => toggleDesktop(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-950" />
+        <span>
+          <span className="flex items-center gap-1.5 font-semibold text-slate-200">
+            <Bell className="h-3.5 w-3.5 text-indigo-400" /> Notificações do sistema (no computador do servidor)
+          </span>
+          <span className="block text-[11px] text-slate-400">
+            <code>maestri notify</code>, lembretes de rotina, andares em blocked/review/done e andares que passam a seguir um PR também aparecem como notificação do SO (Linux: <code>notify-send</code>; macOS: <code>osascript</code>), além do aviso no canvas. Por padrão fica ligada só quando o servidor escuta em loopback.
+            {desktopForced && " A variável MAESTRI_DESKTOP_NOTIFY no servidor está definindo isso (a preferência é ignorada)."}
           </span>
         </span>
       </label>

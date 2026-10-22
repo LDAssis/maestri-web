@@ -244,10 +244,15 @@ test("wait: elemento, texto, URL e tempo; estourar o tempo é erro", { skip }, a
   assert.equal(await ok(["portal", "wait", "Form", "400"]), "ok");
   assert.ok(Date.now() - t1 >= 350);
   // timeout: erro no formato do Maestri, saída != 0
-  for (const args of [["#nunca"], ["--text", "texto que nunca aparece"], ["--url", "/jamais"]]) {
+  const expected: [string[], RegExp][] = [
+    [["#nunca"], /^maestri: error: tempo esgotado esperando #nunca \(1s\)$/],
+    [["--text", "texto que nunca aparece"], /^maestri: error: tempo esgotado esperando o texto "texto que nunca aparece" \(1s\)$/],
+    [["--url", "/jamais"], /^maestri: error: tempo esgotado esperando a URL "\/jamais" \(1s\)$/],
+  ];
+  for (const [args, msg] of expected) {
     const r = await maestri(["portal", "wait", "Form", ...args, "--timeout", "1"]);
     assert.equal(r.code, 1, args.join(" "));
-    assert.match(r.stderr, /^maestri: error: /, args.join(" "));
+    assert.match(r.stderr, msg, args.join(" "));
   }
   assert.match((await maestri(["portal", "wait", "Form"])).stderr, /^maestri: error: Uso: maestri portal wait/);
 });

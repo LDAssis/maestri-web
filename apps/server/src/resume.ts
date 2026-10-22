@@ -66,6 +66,14 @@ export function programOf(cmd: string | undefined | null): Program | null {
   return cmd ? locate(cmd).program : null;
 }
 
+// claude/codex rodando DIRETAMENTE (não dentro de `sh -c`) e num comando simples, sem metacaracteres de shell: é seguro
+// acrescentar um argumento no fim (usado para passar o prompt do role). Caminho absoluto e variáveis na frente valem.
+export function directProgramOf(cmd: string | undefined | null): "claude" | "codex" | null {
+  if (!cmd || /[;&|<>`\n]|\$\(/.test(cmd)) return null;
+  const loc = locate(cmd);
+  return !loc.shell && (loc.program === "claude" || loc.program === "codex") ? loc.program : null;
+}
+
 const has = (toks: Tok[], flags: string[]) => toks.some((t) => flags.includes(t.value));
 
 // Insere os argumentos de retomada logo depois do programa; nada muda se o comando já retoma/usa subcomando

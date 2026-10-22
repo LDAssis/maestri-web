@@ -31,7 +31,7 @@ Inspirado no [Maestri](https://www.themaestri.app) (app nativo). O Maestri Web r
 - **Multi-projetos (workspaces):** cada projeto tem o próprio diretório, canvas, configurações, sessões e agentes — nada vaza de um projeto para outro. Barra lateral com fixados, grupos e pastas.
 - **Partituras:** exporte/importe uma seleção do canvas como arquivo.
 - **Desenhos por andar:** caneta, retângulo, elipse, seta, texto, cor, espessura, borracha e desfazer, em tempo real e persistidos.
-- **Avisos:** toasts no canvas (`maestri notify`, lembretes de rotinas, status de andar) e, opcionalmente, notificações do sistema.
+- **Avisos:** toasts no canvas (`maestri notify`, lembretes de rotinas, status de andar, andar que passa a seguir um PR) e notificações do sistema operacional pelo servidor (liga/desliga nas Configurações).
 
 ### Agentes e terminais
 - **Terminais reais** (`node-pty` + `xterm.js`) por nó de agente, com sessões **compartilhadas**: vários clientes no mesmo PTY, reconexão com histórico (scrollback) e sessões que sobrevivem à desconexão do navegador.
@@ -94,7 +94,7 @@ apps/web (Next.js :3000)  ──HTTP/WS──►  apps/server (Fastify :4000)
 | **Git** | para andares com isolamento (worktrees/clones) |
 | **Toolchain de compilação** | o `node-pty` é um módulo nativo (compilador C++/Python quando não há binário pré-compilado) |
 | **Chromium do Playwright** (para os portais) | o servidor usa `playwright-core`, que **não baixa** navegador sozinho: instale uma vez com `cd apps/server && npx playwright-core install chromium` (fica em cache, p.ex. `~/.cache/ms-playwright` no Linux). Sem ele o servidor sobe normalmente e só os portais falham (503 com a causa) |
-| **`gh` (GitHub CLI)** — opcional | só para os recursos de pull request dos andares (abrir andar a partir de um PR, ver review/checks, mesclar); precisa estar autenticado (`gh auth login`) |
+| **`gh` (GitHub CLI)** — opcional | só para os recursos de pull request dos andares (abrir andar a partir de um PR, detectar o PR de um andar, ver review/checks, mesclar); precisa estar autenticado (`gh auth login`) |
 | **CLIs de agentes** — opcionais | `claude`, `codex`, `opencode`, `agy`… instalados à parte e disponíveis no `PATH` do servidor |
 
 **Sistemas:** desenvolvido e testado principalmente em **Linux**. O terminal usa `$SHELL` (ou `/bin/bash`); há tratamento para Windows (Git Bash, se instalado, senão PowerShell, via ConPTY do `node-pty`) e macOS, mas ele recebe menos testes.
@@ -162,6 +162,8 @@ Com `MAESTRI_TOKEN` definido, `GET /api/health` continua público; as demais rot
 | `MAESTRI_PORTAL_FRAME_MS` | `700` | Intervalo dos frames ao vivo dos portais |
 | `MAESTRI_ASK_QUIET_MS` | `5000` | Silêncio do terminal que encerra um `ask` |
 | `MAESTRI_WAKE_STARTUP_MS` | `6000` | Janela em que um agente recém-acordado ainda “está iniciando” |
+| `MAESTRI_DESKTOP_NOTIFY` | — | `1`/`0` força ligar/desligar as notificações do sistema (`notify-send` no Linux, `osascript` no macOS) para `maestri notify`, lembretes de rotina, andares em blocked/review/done e andares que passam a seguir um PR. Sem a variável vale a preferência do projeto; o padrão é ligado só quando o servidor escuta em loopback |
+| `MAESTRI_PR_POLL_MS` | `120000` | Intervalo da detecção de PRs em segundo plano nos andares git (também roda quando um agente do andar fica ocioso depois de produzir saída, `MAESTRI_IDLE_MS`, padrão 8000) |
 | `MAESTRI_ROUTINE_TICK_MS` | `15000` | Granularidade do agendador de rotinas |
 | `MAESTRI_ROUTINE_BUSY_MS` | `5000` | Saída recente que conta como “terminal ocupado” numa rotina |
 | `MAESTRI_ROUTINE_PRERUN_MS` | `30000` | Timeout do `--pre-run` de uma rotina |

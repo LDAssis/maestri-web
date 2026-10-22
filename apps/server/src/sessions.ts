@@ -44,6 +44,7 @@ export interface Session {
   lastOutputAt: number;
   // Cauda da saída (sem tratamento) para achar a linha de retomada que o agente imprime ao sair
   tail: string;
+  idleTimer?: NodeJS.Timeout; // dispara onIdle depois de um tempo sem saída
 }
 
 function spawnPty(cwd: string, cols: number, rows: number, extraEnv: Record<string, string>) {
@@ -94,6 +95,8 @@ export class SessionManager {
       history?: SessionHistory; // terminais já iniciados / linha de retomada capturada
       resume?: (projectId: string) => boolean; // retomar sessão ao relançar (padrão: ligado)
       env?: (projectId: string, nodeId: string) => Record<string, string>; // ex.: conta de CLI do nó
+      // Terminal ficou ocioso depois de produzir saída (fim de um "turno" do agente); usado p/ detectar PRs dos andares
+      onIdle?: (projectId: string, nodeId: string) => void;
     },
   ) {}
 
@@ -125,6 +128,14 @@ export class SessionManager {
   private push(s: Session, data: string) {
     s.scrollback += data;
     s.lastOutputAt = Date.now();
+    if (this.cli.onIdle) {
+      clearTimeout(s.idleTimer);
+      s.idleTimer = setTimeout(() => {
+        s.idleTimer = undefined;
+        if (!s.dead) this.cli.onIdle!(s.projectId, s.nodeId);
+      }, Number(process.env.MAESTRI_IDLE_MS) || 8000);
+      s.idleTimer.unref();
+    }
     if (this.cli.history) {
       s.tail = (s.tail + data).slice(-1500);
       const found = captureResume(s.tail);
@@ -157,6 +168,7 @@ export class SessionManager {
   private end(s: Session, exitCode: string) {
     if (s.dead) return;
     s.dead = true;
+    clearTimeout(s.idleTimer);
     const k = this.key(s.projectId, s.nodeId);
     if (this.sessions.get(k) === s) this.sessions.delete(k);
     this.broadcast(s, `\r\n\x1b[33m[PTY finalizado (exitCode: ${exitCode})]\x1b[0m\r\n`);

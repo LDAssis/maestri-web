@@ -10,7 +10,7 @@ maestri routine enable|disable|run|delete "Nome"
 Rotinas do projeto (workspace); exige o modo Maestro neste terminal.
 Agendamento (exatamente um): --every 30m (45s, 30m, 2h, 1h30m; número puro = minutos) | --daily 09:00 |
   --weekly mon,wed,fri@09:00 | --once "2026-06-20 15:00" (hora local do servidor).
-Alvo: (padrão) o seu terminal | --terminal "Nome" | --reminder (sem terminal; dispara um aviso com o texto).
+Alvo: (padrão) o seu terminal | --terminal "Nome" [--floor "Andar" se houver terminais de mesmo nome em andares diferentes] | --reminder (sem terminal; dispara um aviso com o texto).
 Opções: --count N (para após N disparos) | --until "2026-07-01" (último dia) |
   --pre-run "script" (roda no cwd do alvo; precisa sair com 0 ou o disparo é pulado; {{output}} no comando vira o stdout;
   variáveis MAESTRI_WORKSPACE_NAME, MAESTRI_WORKSPACE_DIR, MAESTRI_ROUTINE_NAME, MAESTRI_TERMINAL_NAME) |
@@ -57,6 +57,7 @@ export function register({ call, need, CliError }) {
     if (flags.reminder && flags.terminal !== undefined) throw new CliError("Use --reminder OU --terminal, não os dois.");
     if (flags.reminder) body.reminder = true;
     else if (flags.terminal !== undefined) body.terminal = flags.terminal;
+    if (flags.floor !== undefined && flags.terminal !== undefined) body.floor = flags.floor; // desambigua --terminal de mesmo nome
 
     if (flags.command !== undefined) body.text = unescape(flags.command);
     if (flags["pre-run"] !== undefined) body.preRun = flags["pre-run"];

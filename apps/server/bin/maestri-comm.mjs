@@ -16,7 +16,8 @@ Envia o texto e espera o terminal do alvo ficar 5s quieto; imprime só a saída 
 {name, output} ou {name, error}. --timeout vale para cada ask (padrão 600s).
 Timeout: imprime o que houver e sai com código 2 (no batch, o item ganha "timedOut": true).
 Se o terminal do alvo estava descarregado (sem sessão), o ask o inicia (cwd e comando do nó) e responde "ainda iniciando;
-pergunte de novo" com código 3, sem digitar. send e check também iniciam o terminal. Alvos de outros workspaces: "Nome @ Workspace".`,
+pergunte de novo" com código 3, sem digitar. "Ainda iniciando" vale durante MAESTRI_WAKE_STARTUP_MS (6s por padrão) depois de acordar o terminal; passado esse tempo o ask
+funciona normalmente. send e check também iniciam o terminal. Alvos de outros workspaces: "Nome @ Workspace".`,
   send: `maestri send "Nome" "texto"
 maestri send "Nome" --raw "\\e[A"
 Escreve o texto e Enter no terminal do agente conectado, sem esperar resposta.
