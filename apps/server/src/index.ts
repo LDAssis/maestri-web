@@ -13,6 +13,7 @@ import { CanvasStore } from "./canvas.js";
 import { PresenceHub } from "./presence.js";
 import { registerNodeApi, typeAndWait, chatBusy } from "./nodeApi.js";
 import { registerCommApi } from "./commApi.js";
+import { registerTeamApi } from "./teamApi.js";
 import { registerNotesApi } from "./notesApi.js";
 import { registerRoutinesApi } from "./routines.js";
 import { registerFilesApi } from "./files.js";
@@ -161,6 +162,15 @@ const idPattern = /^[\w-]+$/;
 
 const nodeApi = registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
 registerCommApi({ fastify, sessions, canvas, nodeApi });
+registerTeamApi({
+  fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, dataDir, nodeApi,
+  settings: {
+    readGlobal: () => readGlobalSettings(),
+    writeGlobal: (s) => writeJsonAtomic(globalSettingsFile, s),
+    readProject: (id) => readProjectSettings(id),
+    writeProject: (id, s) => writeJsonAtomic(projectSettingsFile(id), s),
+  },
+});
 registerNotesApi({ fastify, canvas, nodeApi });
 const projectRepo = (id: string) => projects.find((p) => p.id === id)?.repoPath ?? null;
 export const portals = registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAuthorized });

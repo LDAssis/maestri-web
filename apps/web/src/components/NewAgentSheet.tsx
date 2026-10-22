@@ -5,13 +5,19 @@ import { AlertTriangle, X } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useRoles } from "@/lib/useRoles";
 
-const PRESETS = [
-  { id: "claude", label: "Claude" },
-  { id: "codex", label: "Codex" },
-  { id: "opencode", label: "OpenCode" },
-  { id: "agy", label: "Antigravity" },
-  { id: "shell", label: "Shell" },
-] as const;
+// Presets do servidor (embutidos + cliPresets das configurações); o mesmo que `maestri preset list`
+interface PresetItem {
+  id: string;
+  label: string;
+  cmd: string;
+  maestro: boolean;
+  chat: boolean;
+  quickStart: boolean;
+  builtin: boolean;
+}
+const FALLBACK: PresetItem[] = [
+  ["claude", "Claude"], ["codex", "Codex"], ["opencode", "OpenCode"], ["agy", "Antigravity"], ["shell", "Shell"],
+].map(([id, label]) => ({ id, label, cmd: id === "shell" ? "" : id, maestro: false, chat: false, quickStart: true, builtin: true }));
 
 export default function NewAgentSheet({
   projectId,
@@ -26,13 +32,27 @@ export default function NewAgentSheet({
 }) {
   const { roles } = useRoles(projectId);
   const [title, setTitle] = useState("");
-  const [preset, setPreset] = useState<(typeof PRESETS)[number]["id"]>("claude");
+  const [presets, setPresets] = useState<PresetItem[]>(FALLBACK);
+  const [preset, setPreset] = useState("claude");
   const [cmd, setCmd] = useState("");
   const [roleId, setRoleId] = useState("");
   const [worktree, setWorktree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    apiFetch(`/api/projects/${projectId}/presets`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => {
+        const list: PresetItem[] = (b?.presets ?? []).filter((p: PresetItem) => p.quickStart);
+        if (list.length) {
+          setPresets(list);
+          setPreset((cur) => (list.some((p) => p.id === cur) ? cur : list[0].id));
+        }
+      })
+      .catch(() => {});
+  }, [projectId]);
 
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
@@ -62,6 +82,7 @@ export default function NewAgentSheet({
     e.preventDefault();
     const t = title.trim();
     if (!t || t.length > 64) return setError("Título: 1 a 64 caracteres.");
+    const chosen = presets.find((p) => p.id === preset) ?? FALLBACK[0];
     setBusy(true);
     setError("");
     try {
@@ -70,8 +91,12 @@ export default function NewAgentSheet({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: t,
-          preset,
-          ...(preset === "shell" && cmd.trim() && { cmd: cmd.trim() }),
+          // presets personalizados rodam como shell com o comando do preset
+          preset: chosen.builtin ? chosen.id : "shell",
+          ...((chosen.id === "shell" ? cmd.trim() : chosen.cmd) && { cmd: chosen.id === "shell" ? cmd.trim() : chosen.cmd }),
+          ...(!chosen.builtin && { presetName: chosen.label }),
+          ...(chosen.maestro && { isMaestro: true }),
+          ...(chosen.chat && { chatFirst: true }),
           ...(roleId && { roleId }),
           ...(position && { position }),
           ...(worktree && { worktree: true }),
@@ -112,8 +137,8 @@ export default function NewAgentSheet({
           </label>
           <fieldset>
             <legend className="mb-1 text-[11px] text-slate-300">Preset</legend>
-            <div role="radiogroup" className="grid grid-cols-5 gap-1.5">
-              {PRESETS.map((p) => (
+            <div role="radiogroup" className="grid grid-cols-3 gap-1.5 sm:grid-cols-5">
+              {presets.map((p) => (
                 <button
                   key={p.id}
                   type="button"

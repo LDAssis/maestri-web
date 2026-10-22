@@ -110,3 +110,16 @@ maestri routine show|edit|enable|disable|run|delete "Nome"                      
 maestri routine edit "Auditoria" --id a1b2c3 --daily 03:00                        # --id (prefixo) quando há nomes iguais
 ```
 Horários na hora local do servidor. O `--pre-run` roda no diretório do alvo e precisa sair com 0 (senão o disparo é pulado); `{{output}}` no comando vira o stdout. Por padrão o disparo é pulado se o terminal estiver ocupado (chat em andamento ou saída nos últimos 5s; `--no-skip-if-busy` desliga). `delete` é destrutivo: só a pedido do usuário.
+
+## Equipe (só o Maestro)
+```
+maestri list                                          # você, colegas (com as conexões de cada um aninhadas), bandas, notas, portais
+maestri recruit "Hawk" --role "Code Reviewer"          # sem --preset = cópia sua (mesmo comando); nome repetido vira "Hawk (2)"
+maestri recruit "Lynx" --preset "Codex" --dir sub/pkg --color rose --icon bot
+maestri recruit "Codex" --preset "Codex" --replace "Claude"   # troca o processo NO MESMO nó (cordas, posição e rotinas ficam)
+maestri connect "Reviewer" "Tester"                    # agente↔agente; nota/portal só no mesmo andar; portal só com agente
+maestri preset list | show "X" | create "X" --command "claude --model opus" --maestro on | set "X" --chat on | delete "X"
+maestri role list | show "X" | create "X" "prompt" [--scope global] | edit "X" "antigo" "novo" | write "X" "prompt" | assign "Hawk" "X"
+maestri band create "Squad" [--without-me]  |  band add|remove|dissolve "Squad" ["Agente"]
+```
+Antes de recrutar rode `maestri list`: se já há alguém com o role certo, delegue com `ask`. Bandas só quando o usuário pedir. Presets novos ficam nas configurações globais; roles `--scope global` ficam no diretório de dados do servidor. `--floor` aguarda os andares.

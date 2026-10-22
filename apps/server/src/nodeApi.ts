@@ -7,6 +7,7 @@ import { ApiError, PRESETS, PRESET_LABELS, SIZES, freePosition, validCmd, withRo
 import { readRole } from "./roles.js";
 import { THREADS, DEFAULT_THREAD, isThread, chatHeader, wantsChatHeader, currentThread } from "./chatThreads.js";
 import { reachNotes } from "./noteGraph.js";
+import { bandReach, isBand, memberIds, myBands, neighbors, sweepBands, teamTree } from "./team.js";
 
 type Obj = Record<string, any>;
 
@@ -95,6 +96,38 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
     const reach = reachNotes(nodes, st.edges ?? [], me.id);
     const extra = [...reach.notes.map((r) => r.node), ...reach.stacks].filter((x) => !direct.some((d) => d.id === x.id));
     const connected = [...direct, ...extra];
+    // Bandas: o membro alcança os outros membros e o que está ligado à banda
+    for (const n of bandReach(nodes, st.edges ?? [], me.id)) if (!connected.some((x) => x.id === n.id)) connected.push(n);
+    // ...inclusive as notas/fichários (e cadeias) da banda
+    for (const band of myBands(nodes, st.edges ?? [], me.id)) {
+      const r = reachNotes(nodes, st.edges ?? [], band.id);
+      for (const item of r.notes) {
+        if (reach.notes.some((x) => x.node.id === item.node.id)) continue;
+        reach.notes.push(item);
+        if (!connected.some((x) => x.id === item.node.id)) connected.push(item.node);
+      }
+      for (const stk of r.stacks) {
+        if (!reach.stacks.some((x) => x.id === stk.id)) reach.stacks.push(stk);
+        if (!connected.some((x) => x.id === stk.id)) connected.push(stk);
+      }
+    }
+    // Maestro: também alcança, pelo nome, as notas/portais/fichários dos recrutas diretos (árvore de equipe)
+    if (me.data?.isMaestro === true) {
+      const tree = teamTree(nodes, st.edges ?? [], me);
+      for (const n of tree.others) if (!connected.some((x) => x.id === n.id)) connected.push(n);
+      for (const a of tree.direct) {
+        const r = reachNotes(nodes, st.edges ?? [], a.id);
+        for (const item of r.notes) {
+          if (reach.notes.some((x) => x.node.id === item.node.id)) continue;
+          reach.notes.push({ ...item, parent: item.parent ?? a });
+          if (!connected.some((x) => x.id === item.node.id)) connected.push(item.node);
+        }
+        for (const st2 of r.stacks) {
+          if (!reach.stacks.some((x) => x.id === st2.id)) reach.stacks.push(st2);
+          if (!connected.some((x) => x.id === st2.id)) connected.push(st2);
+        }
+      }
+    }
     return { projectId: params.p, nodes, edges: st.edges ?? [], reach, me, connected, title: (n: Obj) => String(n.data?.title ?? n.id) };
   }
   type Ctx = ReturnType<typeof context>;
@@ -148,6 +181,19 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
       })),
       stacks: c.reach.stacks.map((s) => ({ nodeId: s.id, title: c.title(s) })),
       portals: pick("portal").map((n) => ({ nodeId: n.id, title: c.title(n), url: n.data?.url ?? "" })),
+      bands: myBands(c.nodes, c.edges, c.me.id).map((b) => ({
+        nodeId: b.id, title: c.title(b), mine: memberIds(b).includes(c.me.id),
+        members: memberIds(b).map((id) => c.nodes.find((x) => x.id === id)).filter((x): x is Obj => !!x).map((x) => c.title(x)),
+      })),
+      // Maestro: as conexões de cada colega direto, aninhadas
+      ...(c.me.data?.isMaestro === true && {
+        links: Object.fromEntries(
+          pick("agentTerminal").map((a) => [
+            a.id,
+            neighbors(c.nodes, c.edges, a.id).filter((n) => n.id !== c.me.id && !(n.type === "stickyNote" && n.data?.stackId)).map((n) => ({ type: n.type, title: c.title(n), ...(isBand(n) && { members: memberIds(n).length }) })),
+          ]),
+        ),
+      }),
     };
   }));
 
@@ -208,51 +254,14 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
 
   // portal-navigate (e os demais verbos de portal) vivem em portalApi.ts
 
-  fastify.post(`${base}/recruit`, wrap((c, req) => {
-    requireMaestro(c, "recrutar");
-    const { name, cmd, role, preset, roleId } = req.body ?? {};
-    if (!isText(name, 64) || !name.trim()) throw new ApiError(400, "Informe o nome do agente.");
-    if (cmd !== undefined && !validCmd(cmd)) throw new ApiError(400, "Comando inválido.");
-    if (role !== undefined && !isText(role)) throw new ApiError(400, "Papel inválido.");
-    if (preset !== undefined && (typeof preset !== "string" || !Object.hasOwn(PRESETS, preset))) throw new ApiError(400, `preset inválido (${Object.keys(PRESETS).join(", ")}).`);
-    if (c.connected.some((n) => lc(n.data?.title) === lc(name))) throw new ApiError(409, `Já existe um nó conectado chamado "${name}".`);
-    const cwd = projectRepo(c.projectId)!;
-    const id = `agent-${crypto.randomUUID().slice(0, 8)}`;
-
-    let savedRole: Obj | null = null;
-    if (roleId !== undefined) {
-      savedRole = typeof roleId === "string" ? readRole(cwd, roleId) : null;
-      if (!savedRole) throw new ApiError(404, "Role não encontrado (use o id do role do projeto).");
-    }
-    let defaultCmd = (cmd ?? (preset ? PRESETS[preset] : "")).trim();
-    const prompt = savedRole ? savedRole.prompt : role?.trim() ? role : "";
-    if (prompt) defaultCmd = withRolePrompt(cwd, id, defaultCmd, prompt);
-
-    const node = {
-      id, type: "agentTerminal", position: freePosition(c.nodes, c.me, SIZES.agentTerminal), style: { width: 460, height: 330 },
-      data: {
-        title: name.trim(),
-        ...(preset && { preset }),
-        ...(savedRole && { roleId: savedRole.id }),
-        role: savedRole ? savedRole.name : role && role.trim().length <= 60 ? role.trim() : preset ? PRESET_LABELS[preset] : "Agente",
-        status: "idle",
-        defaultCmd,
-      },
-    };
-    canvas.applyAndBroadcast(c.projectId, { kind: "upsertNodes", nodes: [node] }, `cli:${c.me.id}`);
-    canvas.applyAndBroadcast(c.projectId, { kind: "upsertEdges", edges: [{ id: `e-${c.me.id}-${id}`, source: c.me.id, target: id }] }, `cli:${c.me.id}`);
-    try {
-      sessions.ensure(c.projectId, id, { cwd, cmd: defaultCmd });
-    } catch (e: any) {
-      throw new ApiError(500, `Nó criado, mas a sessão falhou: ${e.message}`);
-    }
-    return { ok: true, nodeId: id };
-  }));
+  // recruit/preset/role/band/connect vivem em teamApi.ts
 
   fastify.post(`${base}/dismiss`, wrap((c, req) => {
     requireMaestro(c, "dispensar agentes");
     const t = resolveTarget(c, req.body?.target);
+    if (isBand(t)) throw new ApiError(400, 'Use "maestri band dissolve" para desfazer uma banda.');
     canvas.applyAndBroadcast(c.projectId, { kind: "removeNodes", ids: [t.id] }, `cli:${c.me.id}`);
+    sweepBands(canvas, c.projectId, `cli:${c.me.id}`); // banda com 1 membro se dissolve sozinha
     return { ok: true };
   }));
 

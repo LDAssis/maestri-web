@@ -66,7 +66,7 @@ export default function AgentTerminalNode({
   selected?: boolean;
 }) {
   const nodeData = data;
-  const [activeFace, setActiveFace] = useState<"terminal" | "chat">("terminal");
+  const [activeFace, setActiveFace] = useState<"terminal" | "chat">(nodeData.chatFirst ? "chat" : "terminal");
   const { setNodes } = useReactFlow();
 
   const handleUpdateConfig = (newDefaultCmd: string, newPresets: CliPreset[]) => {
