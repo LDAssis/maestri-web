@@ -2,6 +2,7 @@
 
 import React, { useContext, useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
+import type { CliPreset } from "./CliConfigModal";
 import {
   Terminal,
   ShieldCheck,
@@ -39,6 +40,7 @@ export interface AgentNodeData extends Record<string, unknown> {
   branch?: string;
   worktreePath?: string;
   defaultCmd?: string;
+  cliPresets?: CliPreset[];
   isMaestro?: boolean;
 }
 
@@ -53,6 +55,24 @@ export default function AgentTerminalNode({
 }) {
   const nodeData = data;
   const [activeFace, setActiveFace] = useState<"terminal" | "chat">("terminal");
+  const { setNodes } = useReactFlow();
+
+  const handleUpdateConfig = (newDefaultCmd: string, newPresets: CliPreset[]) => {
+    setNodes((nds) =>
+      nds.map((n) =>
+        n.id === id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                defaultCmd: newDefaultCmd,
+                cliPresets: newPresets,
+              },
+            }
+          : n
+      )
+    );
+  };
   const { updateNodeData } = useReactFlow();
   const projectId = useContext(ProjectIdContext);
   const typingLabel = usePresenceValue((s) => {
