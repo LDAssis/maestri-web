@@ -12,6 +12,9 @@ import { registerRolesApi } from "./roles.js";
 import { CanvasStore } from "./canvas.js";
 import { PresenceHub } from "./presence.js";
 import { registerNodeApi, typeAndWait, chatBusy } from "./nodeApi.js";
+import { registerWorkspacesApi } from "./workspacesApi.js";
+import { registerFloorsApi } from "./floorsApi.js";
+import { FloorStore } from "./floors.js";
 import { registerRoutinesApi } from "./routines.js";
 import { registerFilesApi } from "./files.js";
 import { createProjectDir, findConflict, isInside, migrateProjects, overlaps, resolveInside } from "./projectDirs.js";
@@ -74,6 +77,10 @@ export interface Project {
   description: string;
   repoPath: string;
   createdAt: string;
+  // Barra lateral (F16): grupo/pasta/fixado
+  group?: string | null;
+  folder?: string | null;
+  pinned?: boolean;
 }
 
 const projectsFile = path.join(dataDir, "projects.json");
@@ -154,11 +161,14 @@ fastify.addHook("onClose", async () => {
 const idPattern = /^[\w-]+$/;
 
 const nodeApi = registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
+const floors = new FloorStore(dataDir, (id) => projects.find((p) => p.id === id)?.repoPath ?? null, writeJsonAtomic);
+registerFloorsApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, floors, nodeApi });
 const projectRepo = (id: string) => projects.find((p) => p.id === id)?.repoPath ?? null;
 const { createFloorFor } = registerWorktreeApi({ fastify, sessions, canvas, projectRepo });
 registerRolesApi({ fastify, canvas, projectRepo, createFloorFor });
 const routines = registerRoutinesApi({ fastify, sessions, canvas, projectRepo, dataDir, typeAndWait, isChatBusy: (p, n) => chatBusy.has(`${p}:${n}`) });
 registerFilesApi({ fastify, projectRepo });
+registerWorkspacesApi({ fastify, canvas, projects, saveProjects, dataDir, writeJson: writeJsonAtomic, floors, nodeApi });
 
 // Endpoints de Projetos
 
@@ -273,6 +283,7 @@ fastify.delete<{ Params: { id: string } }>("/api/projects/:id", async (req, repl
   canvas.drop(req.params.id);
   if (canvasFile) fs.rmSync(canvasFile, { force: true });
   routines.removeProject(req.params.id);
+  floors.drop(req.params.id);
   return { ok: true };
 });
 
@@ -357,7 +368,9 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
   }
 
   // O cwd só vale dentro do repoPath do PRÓPRIO projeto (andares ficam em <repo>/.worktrees); senão cai no repoPath
-  const cwd = resolveInside(projects.find((p) => p.id === projectId)!.repoPath, url.searchParams.get("cwd"));
+  // Sem cwd explícito, um nó de andar com isolamento git começa no checkout do andar
+  const floorCwd = url.searchParams.get("cwd") ? null : floors.cwdForNode(projectId, nodeId, canvas.state(projectId).nodes ?? []);
+  const cwd = resolveInside(projects.find((p) => p.id === projectId)!.repoPath, url.searchParams.get("cwd") || floorCwd);
 
   let cmd = url.searchParams.get("cmd") || "";
   if (!cmd) {

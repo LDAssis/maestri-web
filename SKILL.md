@@ -51,3 +51,19 @@ Os usuários também conversam com você pela **face de chat** do seu nó: a men
 maestri chat reply "Pronto! Veja o resumo:\n\n- item 1\n- item 2"   # aceita Markdown (tabelas, listas, código)
 maestri chat history --last 10                                         # releia o que o usuário pediu
 ```
+
+## Andares e workspaces
+Andares são níveis do canvas do projeto ("Ground" = térreo; cada nó tem `data.floor`). Com git, um andar é uma worktree na
+própria branch em `<repo>/.worktrees/<slug>` (terminais dele começam nesse checkout).
+```
+maestri floor list
+maestri floor status "Testes verdes" --progress 3/5          # qualquer agente, para o PRÓPRIO andar
+maestri floor status "Preciso de decisão" --state blocked    # blocked/review/done também avisam o usuário (toast)
+maestri floor create "Nome" [--branch B] [--existing-branch] [--no-git] [--copy-ground]   # só Maestro
+maestri floor land "Nome" [--into BRANCH] [--delete-branch] [--keep-floor]                # só Maestro, do térreo; só se o usuário pedir
+maestri floor delete "Nome" [--keep-branch] [--force]                                      # só Maestro, do térreo; só se o usuário pedir
+maestri floor unload "Nome"                                                                # só Maestro; não o seu andar
+maestri workspace list | create "Nome" --dir PATH [--from "Origem"] [--group G] [--folder F] | rename "A" "B" | move "Nome" --group G | --folder F | --root   # só Maestro
+```
+`floor land` recusa (sem alterar nada) se houver trabalho não commitado no andar ou no térreo, ou conflito de merge; peça ao
+agente do andar para commitar antes. Workspaces não têm delete pela CLI.

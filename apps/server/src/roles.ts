@@ -133,7 +133,7 @@ export function registerRolesApi({ fastify, canvas, projectRepo, createFloorFor 
 
   // Cria o nó de agente; a sessão nasce quando o navegador anexa (initialCmd = defaultCmd)
   fastify.post("/api/projects/:p/agents", wrap(async ({ projectId, repo }, req, reply) => {
-    const { title, preset, cmd, roleId, position, worktree } = req.body ?? {};
+    const { title, preset, cmd, roleId, position, worktree, floor } = req.body ?? {};
     if (typeof title !== "string" || !title.trim() || title.trim().length > 64) throw new ApiError(400, "Título: 1 a 64 caracteres.");
     if (typeof preset !== "string" || !Object.hasOwn(PRESETS, preset)) throw new ApiError(400, `preset inválido (${Object.keys(PRESETS).join(", ")}).`);
     if (cmd !== undefined && !validCmd(cmd)) throw new ApiError(400, "Comando inválido.");
@@ -151,7 +151,7 @@ export function registerRolesApi({ fastify, canvas, projectRepo, createFloorFor 
       type: "agentTerminal",
       position: position ? { x: position.x, y: position.y } : freePosition(nodes, ref, SIZES.agentTerminal),
       style: { width: 460, height: 330 },
-      data: { title: title.trim(), preset, ...(role && { roleId: role.id }), role: role?.name ?? PRESET_LABELS[preset], status: "idle", defaultCmd },
+      data: { title: title.trim(), preset, ...(role && { roleId: role.id }), role: role?.name ?? PRESET_LABELS[preset], status: "idle", defaultCmd, ...(typeof floor === "string" && floor.trim() && floor.trim().length <= 60 && floor.trim().toLowerCase() !== "ground" && { floor: floor.trim() }) },
     };
     canvas.applyAndBroadcast(projectId, { kind: "upsertNodes", nodes: [node] }, "agents");
 

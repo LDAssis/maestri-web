@@ -28,6 +28,25 @@ interface Project {
   description: string;
   repoPath: string;
   createdAt: string;
+  // Barra lateral: workspaces agrupados em grupos/pastas (maestri workspace move)
+  group?: string | null;
+  folder?: string | null;
+  pinned?: boolean;
+}
+
+// Seções do seletor de projetos: fixados, raiz, pastas da raiz e grupos (com as pastas deles)
+function projectSections(projects: Project[]) {
+  const out: { label: string | null; items: Project[] }[] = [];
+  const add = (label: string | null, items: Project[]) => items.length && out.push({ label, items });
+  add("Fixados", projects.filter((p) => p.pinned));
+  add(null, projects.filter((p) => !p.group && !p.folder));
+  const uniq = (xs: (string | null | undefined)[]) => Array.from(new Set(xs.filter((x): x is string => !!x)));
+  for (const f of uniq(projects.filter((p) => !p.group).map((p) => p.folder))) add(`📁 ${f}`, projects.filter((p) => !p.group && p.folder === f));
+  for (const g of uniq(projects.map((p) => p.group))) {
+    add(g, projects.filter((p) => p.group === g && !p.folder));
+    for (const f of uniq(projects.filter((p) => p.group === g).map((p) => p.folder))) add(`${g} / 📁 ${f}`, projects.filter((p) => p.group === g && p.folder === f));
+  }
+  return out;
 }
 
 const MaestriCanvas = dynamic(() => import("@/components/MaestriCanvas"), {
@@ -240,24 +259,31 @@ function App({
                     Selecione o Projeto / Ambiente
                   </div>
                   <div className="max-h-60 overflow-y-auto">
-                    {projects.map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => {
-                          setActiveProject(p);
-                          setIsDropdownOpen(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 text-xs flex flex-col transition hover:bg-indigo-950/40 ${
-                          activeProject?.id === p.id
-                            ? "bg-indigo-900/30 text-indigo-300 font-medium"
-                            : "text-slate-300"
-                        }`}
-                      >
-                        <div className="font-medium text-slate-100">{p.name}</div>
-                        <div className="text-[11px] text-slate-500 truncate">
-                          {p.description || "Ambiente isolado"}
-                        </div>
-                      </button>
+                    {projectSections(projects).map((sec, i) => (
+                      <div key={`${sec.label ?? "raiz"}-${i}`} role="group" aria-label={sec.label ?? "Projetos"}>
+                        {sec.label && (
+                          <div className="px-3 pt-2 pb-0.5 text-[10px] font-mono uppercase text-slate-500">{sec.label}</div>
+                        )}
+                        {sec.items.map((p) => (
+                          <button
+                            key={p.id}
+                            onClick={() => {
+                              setActiveProject(p);
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 text-xs flex flex-col transition hover:bg-indigo-950/40 ${
+                              activeProject?.id === p.id
+                                ? "bg-indigo-900/30 text-indigo-300 font-medium"
+                                : "text-slate-300"
+                            }`}
+                          >
+                            <div className="font-medium text-slate-100">{p.name}</div>
+                            <div className="text-[11px] text-slate-500 truncate">
+                              {p.description || "Ambiente isolado"}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
                     ))}
                   </div>
                   <div className="border-t border-slate-800/80 p-1">
