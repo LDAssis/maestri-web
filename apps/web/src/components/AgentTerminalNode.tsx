@@ -26,6 +26,7 @@ import { useActiveRoutineCount } from "@/lib/useRoutines";
 import { usePresenceValue } from "@/lib/presence";
 import type { TerminalStatus } from "./TerminalView";
 import { COLOR_HEX, ICON_MAP } from "./palette";
+import CrossFloorBadge from "./CrossFloorBadge";
 
 const TerminalView = dynamic(() => import("./TerminalView"), {
   ssr: false,
@@ -277,6 +278,7 @@ export default function AgentTerminalNode({
             </button>
           </div>
 
+          <CrossFloorBadge id={id} floor={(nodeData as any).floor} />
           {routineCount > 0 && (
             <button
               onClick={() => window.dispatchEvent(new CustomEvent("maestri:open-routines"))}

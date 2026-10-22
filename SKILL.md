@@ -122,4 +122,20 @@ maestri preset list | show "X" | create "X" --command "claude --model opus" --ma
 maestri role list | show "X" | create "X" "prompt" [--scope global] | edit "X" "antigo" "novo" | write "X" "prompt" | assign "Hawk" "X"
 maestri band create "Squad" [--without-me]  |  band add|remove|dissolve "Squad" ["Agente"]
 ```
-Antes de recrutar rode `maestri list`: se já há alguém com o role certo, delegue com `ask`. Bandas só quando o usuário pedir. Presets novos ficam nas configurações globais; roles `--scope global` ficam no diretório de dados do servidor. `--floor` aguarda os andares.
+Antes de recrutar rode `maestri list`: se já há alguém com o role certo, delegue com `ask`. Bandas só quando o usuário pedir. Presets novos ficam nas configurações globais; roles `--scope global` ficam no diretório de dados do servidor. `--floor "Andar"` põe o recruta/banda no andar (cwd = checkout do andar); recrutas, bandas e portais nascem no andar de quem os criou.
+
+## Andares e workspaces
+Andares são níveis do canvas do projeto ("Ground" = térreo; cada nó tem `data.floor`). Com git, um andar é uma worktree na
+própria branch em `<repo>/.worktrees/<slug>` (terminais dele começam nesse checkout).
+```
+maestri floor list
+maestri floor status "Testes verdes" --progress 3/5          # qualquer agente, para o PRÓPRIO andar
+maestri floor status "Preciso de decisão" --state blocked    # blocked/review/done também avisam o usuário (toast)
+maestri floor create "Nome" [--branch B] [--existing-branch] [--no-git] [--copy-ground]   # só Maestro
+maestri floor land "Nome" [--into BRANCH] [--delete-branch] [--keep-floor]                # só Maestro, do térreo; só se o usuário pedir
+maestri floor delete "Nome" [--keep-branch] [--force]                                      # só Maestro, do térreo; só se o usuário pedir
+maestri floor unload "Nome"                                                                # só Maestro; não o seu andar
+maestri workspace list | create "Nome" --dir PATH [--from "Origem"] [--group G] [--folder F] | rename "A" "B" | move "Nome" --group G | --folder F | --root   # só Maestro
+```
+`floor land` recusa (sem alterar nada) se houver trabalho não commitado no andar ou no térreo, ou conflito de merge; peça ao
+agente do andar para commitar antes. Workspaces não têm delete pela CLI.

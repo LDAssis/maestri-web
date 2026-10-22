@@ -69,7 +69,7 @@ before(async () => {
         node("fora", "stickyNote", 2000, { title: "Nota Solta", content: "x" }),
         node("peer", "agentTerminal", 2400, { title: "Peer" }),
         node("portal2", "portal", 2800, { title: "Outro Portal", url: "http://localhost:3001" }),
-        node("nota-floor", "stickyNote", 3200, { title: "Nota de Outro Andar", content: "x", floorId: "f2" }),
+        node("nota-floor", "stickyNote", 3200, { title: "Nota de Outro Andar", content: "x", floor: "Experiment" }),
       ],
       edges: [
         { id: "e1", source: "maestro", target: "worker" },
@@ -77,6 +77,7 @@ before(async () => {
         { id: "e3", source: "nota-w", target: "worker" },
         { id: "e4", source: "worker", target: "portal-w" },
         { id: "e5", source: "maestro", target: "peer" },
+        { id: "e6", source: "nota-floor", target: "peer" },
       ],
     },
   });
@@ -211,7 +212,7 @@ test("recruit --role: por nome (current e global), id, texto livre antigo; claud
   assert.match((await M("recruit", "R5", "--role-id", "11111111-2222-3333-4444-555555555555")).stderr, /Role não encontrado/);
 });
 
-test("recruit --dir: precisa estar dentro do projeto; --floor aguarda o F16", async () => {
+test("recruit --dir: precisa estar dentro do projeto", async () => {
   fs.mkdirSync(path.join(repo, "sub", "pkg"), { recursive: true });
   await ok(M("recruit", "Dir", "--preset", "shell", "--dir", path.join(repo, "sub", "pkg")));
   const n = await byTitle("Dir");
@@ -224,11 +225,7 @@ test("recruit --dir: precisa estar dentro do projeto; --floor aguarda o F16", as
   assert.equal(outside.code, 1);
   assert.match(outside.stderr, /dentro do projeto/);
   assert.match((await M("recruit", "Fuga", "--dir", "nao-existe")).stderr, /Diretório não encontrado/);
-  const floor = await M("recruit", "Andar", "--preset", "shell", "--floor", "Experiment");
-  assert.equal(floor.code, 1);
-  assert.match(floor.stderr, /F16/);
   assert.equal(await byTitle("Fuga"), undefined);
-  assert.equal(await byTitle("Andar"), undefined);
 });
 
 test("recruit --replace: troca o processo no mesmo nó, preservando arestas, posição e rotinas", async () => {
@@ -464,7 +461,6 @@ test("recruit estando numa banda entra nela em vez de ganhar corda; --band escol
   assert.ok(!(await edgeBetween("maestro", x.id)));
   assert.match((await M("recruit", "Y", "--preset", "shell", "--band", "Fantasma")).stderr, /Banda "Fantasma" não encontrada/);
   assert.equal(await byTitle("Y"), undefined);
-  assert.match((await M("band", "create", "F", "--floor", "Z")).stderr, /F16/);
   await ok(M("band", "dissolve", "Fora"));
 });
 
@@ -481,4 +477,80 @@ test("Maestro resolve pelo nome as notas e os portais dos recrutas diretos", asy
   assert.match(w.stderr, /não está conectado|não encontrad/);
   // o list do Maestro mostra os portais dos colegas aninhados
   assert.match((await ok(M("list"))).stdout, /↳ Portal do Worker \(portal\)/);
+});
+
+// ---------- andares (F16) ----------
+
+const git = (...args: string[]) => new Promise<void>((resolve, reject) => execFile("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", ...args], (e) => (e ? reject(e) : resolve())));
+
+test("andares: recruit --floor usa o checkout do andar; recruta herda o andar de quem o criou", async () => {
+  fs.writeFileSync(path.join(repo, "README.md"), "x");
+  await git("init", "-q");
+  await git("add", "-A");
+  await git("commit", "-q", "-m", "init");
+  await ok(M("floor", "create", "Experiment", "--no-git"));
+  await ok(M("floor", "create", "Iso", "--branch", "feat/iso"));
+
+  const plain = await ok(M("recruit", "Plain", "--preset", "shell", "--floor", "experiment"));
+  assert.match(plain.stdout, /recrutado/);
+  assert.equal((await byTitle("Plain")).data.floor, "Experiment");
+  assert.ok(await edgeBetween("maestro", (await byTitle("Plain")).id), "a corda cruza andares");
+
+  await ok(M("recruit", "Iso", "--preset", "shell", "--floor", "Iso"));
+  const iso = await byTitle("Iso");
+  assert.equal(iso.data.floor, "Iso");
+  const where = await ok(M("ask", "Iso", "pwd"));
+  assert.match(where.stdout, /\.worktrees\//, "cwd = checkout do andar");
+
+  await ok(M("recruit", "Terra", "--preset", "shell", "--floor", "Ground"));
+  assert.equal((await byTitle("Terra")).data.floor, undefined);
+  const bad = await M("recruit", "Nada", "--preset", "shell", "--floor", "Fantasma");
+  assert.equal(bad.code, 1);
+  assert.match(bad.stderr, /Andar "Fantasma" não encontrado. Existentes: Ground, .*Experiment/);
+  assert.equal(await byTitle("Nada"), undefined);
+
+  // um Maestro no andar Experiment: o que ele recruta nasce no andar dele
+  await ok(M("preset", "create", "SubChefe", "--command", "echo SUB", "--maestro", "on"));
+  await ok(M("recruit", "SubM", "--preset", "SubChefe", "--floor", "Experiment"));
+  const sub = await byTitle("SubM");
+  await ok(maestri(sub.id, ["recruit", "Filho", "--preset", "shell"]));
+  const filho = await byTitle("Filho");
+  assert.equal(filho.data.floor, "Experiment");
+  assert.ok(await edgeBetween(sub.id, filho.id));
+  await M("preset", "delete", "SubChefe");
+});
+
+test("andares: notas/portais só ligam no mesmo andar; agente↔agente cruza", async () => {
+  // "Nota de Outro Andar" (Experiment) está ligada ao Peer (Ground): não liga a um agente do térreo...
+  const cross = await M("connect", "Nota de Outro Andar", "Chefe");
+  assert.equal(cross.code, 1);
+  assert.match(cross.stderr, /só se ligam no mesmo andar/);
+  // ...mas liga a um agente do andar dela
+  await ok(M("connect", "Nota de Outro Andar", "Plain"));
+  assert.ok(await edgeBetween("nota-floor", (await byTitle("Plain")).id));
+  // agente do térreo ↔ agente de outro andar: ok
+  await ok(M("connect", "Peer", "Plain"));
+});
+
+test("andares: band create --floor reúne quem alcanço no andar (de fora) e a banda nasce lá", async () => {
+  await ok(M("band", "create", "ExpBand", "--floor", "Experiment"));
+  const band = await bandNode("ExpBand");
+  assert.equal(band.data.floor, "Experiment");
+  const titles = (await canvas()).nodes.filter((n: any) => band.data.members.includes(n.id)).map((n: any) => n.data.title).sort();
+  assert.deepEqual(titles, ["Filho", "Plain", "SubM"].filter((t) => titles.includes(t)));
+  assert.ok(titles.includes("Plain") && titles.includes("SubM"));
+  assert.ok(!band.data.members.includes("maestro"), "fora do meu andar eu coordeno de fora");
+  assert.ok(await edgeBetween(band.id, "maestro"));
+
+  // recruta no andar da banda entra nela (--band); em outro andar é recusado
+  await ok(M("recruit", "Entra", "--preset", "shell", "--floor", "Experiment", "--band", "ExpBand"));
+  assert.ok((await bandNode("ExpBand")).data.members.includes((await byTitle("Entra")).id));
+  const wrong = await M("recruit", "Errado", "--preset", "shell", "--band", "ExpBand");
+  assert.equal(wrong.code, 1);
+  assert.match(wrong.stderr, /está no andar "Experiment", não em "Ground"/);
+  assert.equal(await byTitle("Errado"), undefined);
+  // add de agente de outro andar é recusado
+  assert.match((await M("band", "add", "ExpBand", "Peer")).stderr, /andar da banda/);
+  assert.match((await M("band", "create", "NoFloor", "--floor", "Fantasma")).stderr, /Andar "Fantasma" não encontrado/);
+  await ok(M("band", "dissolve", "ExpBand"));
 });

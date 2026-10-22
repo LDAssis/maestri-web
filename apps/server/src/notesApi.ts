@@ -3,6 +3,7 @@ import type { CanvasStore } from "./canvas.js";
 import type { NodeApi } from "./nodeApi.js";
 import { isText, lc } from "./nodeApi.js";
 import { ApiError, SIZES, freePosition } from "./agents.js";
+import { newNodeData } from "./floors.js";
 
 type Obj = Record<string, any>;
 
@@ -80,7 +81,7 @@ export function registerNotesApi({ fastify, canvas, nodeApi }: Deps) {
       const id = `stack-${crypto.randomUUID().slice(0, 8)}`;
       stack = {
         id, type: "noteStack", position: note.position ?? freePosition(visible(c), c.me, SIZES.noteStack),
-        style: { width: 300, height: 220 }, data: { title: uniqueTitle(c.nodes, "noteStack", name) },
+        style: { width: 300, height: 220 }, data: { title: uniqueTitle(c.nodes, "noteStack", name), ...newNodeData(c.me) },
       };
       apply(c, { kind: "upsertNodes", nodes: [stack] });
       apply(c, { kind: "upsertEdges", edges: [{ id: `e-${id}-${c.me.id}`, source: id, target: c.me.id }] });
@@ -154,7 +155,7 @@ export function registerNotesApi({ fastify, canvas, nodeApi }: Deps) {
     const node = {
       id, type: "stickyNote", position: freePosition(visible(c), c.me, SIZES.stickyNote), style: { width: 280, height: 200 },
       data: {
-        title: finalTitle, color: color ?? "amber", author: `🤖 ${nt(c.me)}`, content,
+        title: finalTitle, color: color ?? "amber", author: `🤖 ${nt(c.me)}`, content, ...newNodeData(c.me),
         ...(pinned ? { pinnedName: true } : { autoTitle: true }),
       },
     };

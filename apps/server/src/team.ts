@@ -1,5 +1,6 @@
 // Árvore de equipe e bandas (F15): funções puras sobre nodes/edges + a varredura de bandas órfãs.
 import type { CanvasStore } from "./canvas.js";
+import { floorOf, sameFloor } from "./floors.js";
 
 type Obj = Record<string, any>;
 
@@ -8,13 +9,8 @@ export const BAND_SIZE: [number, number] = [260, 160];
 export const isBand = (n: Obj) => n.type === "band";
 export const memberIds = (band: Obj): string[] => (Array.isArray(band.data?.members) ? band.data.members.filter((x: unknown) => typeof x === "string") : []);
 
-// Andar do nó. Hoje só vale quando o nó traz data.floorId (o F16 passa a gravá-lo); sem andar = sem restrição.
-export const floorOf = (n: Obj): string | null => (typeof n.data?.floorId === "string" && n.data.floorId ? n.data.floorId : null);
-export const sameFloor = (a: Obj, b: Obj) => {
-  const fa = floorOf(a);
-  const fb = floorOf(b);
-  return fa === null || fb === null || fa === fb;
-};
+// Mesmo andar (data.floor; ausente = Ground), comparando nós
+export const sameFloorNodes = (a: Obj, b: Obj) => sameFloor(floorOf(a), floorOf(b));
 
 export function neighbors(nodes: Obj[], edges: Obj[], id: string): Obj[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));

@@ -143,23 +143,27 @@ export function register({ call, need, CliError }) {
 
   async function debug() {
     const e = process.env;
-    const vars = ["MAESTRI_API_URL", "MAESTRI_PROJECT_ID", "MAESTRI_NODE_ID", "MAESTRI_TOKEN"];
+    const vars = ["MAESTRI_API_URL", "MAESTRI_PROJECT_ID", "MAESTRI_NODE_ID"];
     let ok = true;
     const line = (good, label, extra = "") => {
       if (!good) ok = false;
       console.log(`${good ? "✓" : "✗"} ${label}${extra ? ` — ${extra}` : ""}`);
     };
     for (const v of vars) line(!!e[v], v, e[v] ? (v === "MAESTRI_TOKEN" ? "definido" : e[v]) : "ausente");
+    // O token só é obrigatório quando o servidor exige autenticação (authRequired no /health)
+    let authRequired = true;
     if (!e.MAESTRI_API_URL) {
       line(false, "API", "sem MAESTRI_API_URL");
     } else {
       try {
         const res = await fetch(`${e.MAESTRI_API_URL.replace(/\/$/, "")}/health`);
         line(res.ok, "API responde (/api/health)", `HTTP ${res.status}`);
+        authRequired = (await res.json().catch(() => ({}))).authRequired !== false;
       } catch (err) {
         line(false, "API responde (/api/health)", err.cause?.code || err.message);
       }
     }
+    line(!!e.MAESTRI_TOKEN || !authRequired, "MAESTRI_TOKEN", e.MAESTRI_TOKEN ? "definido" : authRequired ? "ausente" : "ausente (o servidor não exige token)");
     if (e.MAESTRI_API_URL && e.MAESTRI_PROJECT_ID && e.MAESTRI_NODE_ID) {
       try {
         const d = await call("GET", "/debug");

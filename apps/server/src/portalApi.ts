@@ -1,3 +1,4 @@
+import { newNodeData } from "./floors.js";
 import crypto from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
@@ -61,7 +62,7 @@ export function registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAut
     const ref = { type: "portal", position: { x: (c.me.position?.x ?? 0) + mw + 40, y: (c.me.position?.y ?? 0) - 41 }, style: { width: 1, height: 1 } };
     const node = {
       id, type: "portal", position: freePosition(c.nodes, ref, [dim.width, dim.height]), style: dim,
-      data: { title, url: href, live: true, viewport: vp },
+      data: { title, url: href, live: true, viewport: vp, ...newNodeData(c.me) },
     };
     const from = `cli:${c.me.id}`;
     canvas.applyAndBroadcast(c.projectId, { kind: "upsertNodes", nodes: [node] }, from);

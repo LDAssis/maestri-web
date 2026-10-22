@@ -10,7 +10,8 @@ import { isText, lc, chatBusy, type NodeApi } from "./nodeApi.js";
 import { listRoles, readRole, rolesDir, writeRole } from "./roles.js";
 import { COLORS, ICONS } from "./notesApi.js";
 import { isInside, resolveInside } from "./projectDirs.js";
-import { BAND_SIZE, bandOf, dissolve, floorOf, isBand, materialize, memberIds, myBands, neighbors, sameFloor, sweepBands, teamTree } from "./team.js";
+import { BAND_SIZE, bandOf, dissolve, isBand, materialize, memberIds, myBands, neighbors, sameFloorNodes, sweepBands, teamTree } from "./team.js";
+import { FloorStore, GROUND, floorOf } from "./floors.js";
 
 type Obj = Record<string, any>;
 
@@ -30,6 +31,7 @@ interface Deps {
   dataDir: string;
   nodeApi: NodeApi;
   settings: SettingsAccess;
+  floors: FloorStore;
 }
 
 export interface Preset {
@@ -60,10 +62,6 @@ const checkLook = (color: unknown, icon: unknown) => {
   if (icon !== undefined && !(ICONS as readonly string[]).includes(String(icon))) throw new ApiError(400, `Ícone inválido. Opções: ${ICONS.join(", ")}.`);
 };
 
-// O andar vive no F16; enquanto não entra, qualquer --floor é recusado aqui (único ponto a trocar)
-function resolveFloor(floor: unknown): void {
-  if (floor !== undefined) throw new ApiError(501, "--floor depende dos andares (F16), ainda não integrados.");
-}
 
 // Comando-base do agente: o defaultCmd sem o invólucro que injeta o prompt do role
 export const baseCmdOf = (n: Obj): string => {
@@ -78,7 +76,7 @@ const presetIdForCmd = (cmd: string) => {
   return Object.hasOwn(PRESETS, prog) ? prog : "shell";
 };
 
-export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDir, nodeApi, settings }: Deps) {
+export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDir, nodeApi, settings, floors }: Deps) {
   const { base, context, resolveTarget, requireMaestro, wrap } = nodeApi;
   type Ctx = ReturnType<typeof context>;
   const by = (c: Ctx) => `cli:${c.me.id}`;
@@ -302,7 +300,17 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
   }));
 
   // ---------- Processo do agente ----------
-  const cwdOf = (repo: string, n: Obj) => resolveInside(repo, n.data?.worktreePath);
+  // cwd do nó: --dir explícito (worktreePath) ou o checkout do andar dele
+  const cwdOf = (projectId: string, repo: string, n: Obj) => (n.data?.worktreePath ? resolveInside(repo, n.data.worktreePath) : floors.floorCwd(projectId, floorOf(n)));
+  // --floor "Nome": nome canônico do andar (Ground ou um andar existente)
+  function floorNamed(projectId: string, name: unknown): string {
+    if (!isText(name, 200) || !name.trim()) throw new ApiError(400, "Informe o nome do andar.");
+    if (lc(name) === lc(GROUND)) return GROUND;
+    const f = floors.find(projectId, name);
+    if (!f) throw new ApiError(404, `Andar "${name}" não encontrado. Existentes: ${[GROUND, ...floors.read(projectId).floors.map((x) => x.name)].join(", ")}.`);
+    return f.name;
+  }
+  const floorData = (name: string): Obj => (name === GROUND ? {} : { floor: name });
 
   // Grava o comando (com o prompt do role) no nó e reinicia o PTY no mesmo lugar; o chat é descartado.
   // Sem sessão ativa só atualiza o nó (a sessão nasce quando alguém abrir o terminal).
@@ -317,7 +325,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     if (!had && !force) return;
     sessions.kill(projectId, node.id);
     try {
-      sessions.ensure(projectId, node.id, { cwd: cwdOf(repo, canvas.state(projectId).nodes?.find((x) => x.id === node.id) ?? node), cmd });
+      sessions.ensure(projectId, node.id, { cwd: cwdOf(projectId, repo, canvas.state(projectId).nodes?.find((x) => x.id === node.id) ?? node), cmd });
     } catch (e: any) {
       throw new ApiError(500, `Nó atualizado, mas a sessão falhou: ${e.message}`);
     }
@@ -377,7 +385,8 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     if (!isText(b.name, MAX_TITLE) || !b.name.trim()) throw new ApiError(400, "Informe o nome do agente.");
     const command = b.command ?? b.cmd;
     if (command !== undefined && !validCmd(command)) throw new ApiError(400, "Comando inválido.");
-    resolveFloor(b.floor);
+    const myFloor = floorOf(c.me);
+    const floor = b.floor === undefined ? myFloor : floorNamed(c.projectId, b.floor);
 
     const preset = b.preset === undefined ? null : findPreset(c.projectId, b.preset);
     // sem --preset nem --command: cópia de mim (mesmo comando)
@@ -390,15 +399,21 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     const prompt = saved ? saved.prompt : text.trim() ? text : null;
     const defaultCmd = prompt ? withRolePrompt(repo, id, baseCmd, prompt) : baseCmd;
 
-    // cwd: herda o meu; --dir manda
-    const myCwd = cwdOf(repo, c.me);
-    const real = b.dir !== undefined ? projectDir(repo, myCwd, b.dir) : null;
-    const worktreePath = real ? relDir(repo, real) : c.me.data?.worktreePath;
+    // cwd: --dir manda; --floor usa o checkout do andar; senão herda o meu
+    const baseCwd = b.floor !== undefined ? floors.floorCwd(c.projectId, floor) : cwdOf(c.projectId, repo, c.me);
+    const real = b.dir !== undefined ? projectDir(repo, baseCwd, b.dir) : null;
+    const worktreePath = real ? relDir(repo, real) : b.floor === undefined ? c.me.data?.worktreePath : undefined;
 
-    // banda: --band escolhe; senão, estando numa banda, o recruta entra nela em vez de ganhar uma corda
+    // banda: --band escolhe (no andar onde o recruta nasce); senão, estando numa banda no mesmo andar,
+    // o recruta entra nela em vez de ganhar uma corda
     let band: Obj | null = null;
-    if (b.band !== undefined) band = findBand(c, b.band);
-    else band = bandOf(c.nodes, c.me.id) ?? null;
+    if (b.band !== undefined) {
+      band = findBand(c, b.band);
+      if (floorOf(band) !== floor) throw new ApiError(400, `A banda "${nodeLabel(band)}" está no andar "${floorOf(band)}", não em "${floor}".`);
+    } else {
+      band = bandOf(c.nodes, c.me.id) ?? null;
+      if (band && floorOf(band) !== floor) band = null;
+    }
 
     const title = uniqueTitle(c.nodes, b.name.trim());
     const roleLabel = saved ? saved.name : text.trim() ? (text.trim().length <= 60 ? text.trim() : "Agente") : preset?.label ?? PRESET_LABELS[presetField] ?? "Agente";
@@ -414,6 +429,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
         baseCmd,
         defaultCmd,
         ...(worktreePath && { worktreePath }),
+        ...floorData(floor),
         ...(preset?.maestro && { isMaestro: true }),
         ...(preset?.chat && { chatFirst: true }),
         ...(b.color !== undefined && { color: b.color }),
@@ -424,7 +440,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     if (band) joinBand(c, band, id);
     else canvas.applyAndBroadcast(c.projectId, { kind: "upsertEdges", edges: [{ id: `e-${c.me.id}-${id}`, source: c.me.id, target: id }] }, by(c));
     try {
-      sessions.ensure(c.projectId, id, { cwd: real ?? myCwd, cmd: defaultCmd });
+      sessions.ensure(c.projectId, id, { cwd: real ?? baseCwd, cmd: defaultCmd });
     } catch (e: any) {
       throw new ApiError(500, `Nó criado, mas a sessão falhou: ${e.message}`);
     }
@@ -455,7 +471,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
         prompt = fs.readFileSync(path.join(repo, ".maestri-roles", `${t.id}.md`), "utf8") || null;
       } catch {}
     }
-    const real = b.dir !== undefined ? projectDir(repo, cwdOf(repo, t), b.dir) : null;
+    const real = b.dir !== undefined ? projectDir(repo, cwdOf(c.projectId, repo, t), b.dir) : null;
     const title = rename ? uniqueTitle(c.nodes, rename, t.id) : undefined;
     const presetField = preset ? (preset.builtin ? preset.id : presetIdForCmd(baseCmd)) : command !== undefined ? presetIdForCmd(baseCmd) : undefined;
     canvas.applyAndBroadcast(c.projectId, {
@@ -500,7 +516,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     if (has("portal") && !(has("agentTerminal") || has("band"))) throw new ApiError(400, "Um portal só se liga a um agente (ou banda).");
     if (a.type === "band" && b.type === "band") throw new ApiError(400, "Bandas não se ligam entre si.");
     // notas, fichários e portais vivem em um andar só: o par precisa dividi-lo (agente↔agente cruza andares)
-    if (types.some((t) => t === "stickyNote" || t === "noteStack" || t === "portal") && !sameFloor(a, b)) {
+    if (types.some((t) => t === "stickyNote" || t === "noteStack" || t === "portal") && !sameFloorNodes(a, b)) {
       throw new ApiError(400, `Notas, fichários e portais só se ligam no mesmo andar ("${nodeLabel(a)}" e "${nodeLabel(b)}" estão em andares diferentes).`);
     }
   }
@@ -544,36 +560,36 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     requireMaestro(c, "criar bandas");
     const b = req.body ?? {};
     checkLook(b.color, b.icon);
-    resolveFloor(b.floor);
     if (!isText(b.name, 60) || !b.name.trim()) throw new ApiError(400, "Informe o nome da banda (até 60 caracteres).");
     sweepBands(canvas, c.projectId, by(c));
     const nodes = canvas.state(c.projectId).nodes ?? [];
     const inBand = (n: Obj) => bandOf(nodes, n.id);
+    // --floor: junta os agentes que alcanço naquele andar; fora do meu andar eu coordeno de fora
+    const floor = b.floor === undefined ? floorOf(c.me) : floorNamed(c.projectId, b.floor);
+    const withoutMe = b.withoutMe === true || floor !== floorOf(c.me);
     let agents: Obj[];
     if (Array.isArray(b.agents) && b.agents.length) {
       agents = b.agents.map((n: unknown) => agentIn(c, n));
     } else {
-      agents = neighbors(nodes, c.edges, c.me.id).filter((n) => n.type === "agentTerminal" && sameFloor(n, c.me) && !inBand(n));
+      agents = neighbors(nodes, c.edges, c.me.id).filter((n) => n.type === "agentTerminal" && floorOf(n) === floor && !inBand(n));
     }
-    if (b.withoutMe !== true && !agents.some((n) => n.id === c.me.id)) agents.unshift(c.me);
-    if (b.withoutMe === true) agents = agents.filter((n) => n.id !== c.me.id);
+    if (!withoutMe && !agents.some((n) => n.id === c.me.id)) agents.unshift(c.me);
+    if (withoutMe) agents = agents.filter((n) => n.id !== c.me.id);
     agents = agents.filter((n, i, a) => a.findIndex((x) => x.id === n.id) === i);
     for (const n of agents) {
       const other = inBand(n);
       if (other) throw new ApiError(409, `"${nodeLabel(n)}" já está na banda "${nodeLabel(other)}" (um terminal fica em uma banda por vez).`);
     }
     if (agents.length < 2) throw new ApiError(400, "Uma banda precisa de pelo menos 2 agentes.");
-    const floors = new Set(agents.map(floorOf).filter(Boolean));
-    if (floors.size > 1) throw new ApiError(400, "Uma banda vive em um andar só: todos os agentes precisam estar no mesmo andar.");
+    if (agents.some((n) => floorOf(n) !== floor)) throw new ApiError(400, `Uma banda vive em um andar só: todos os agentes precisam estar em "${floor}".`);
 
     const taken = new Set(nodes.filter(isBand).map((x) => lc(x.data?.title)));
     let title = b.name.trim();
     for (let n = 2; taken.has(lc(title)); n++) title = `${b.name.trim().slice(0, 55)} (${n})`;
     const id = `band-${crypto.randomUUID().slice(0, 8)}`;
-    const floor = [...floors][0];
     const band = {
       id, type: "band", position: freePosition(nodes, c.me, BAND_SIZE), style: { width: BAND_SIZE[0], height: BAND_SIZE[1] },
-      data: { title, members: agents.map((n) => n.id), ...(floor && { floorId: floor }), ...(b.color !== undefined && { color: b.color }), ...(b.icon !== undefined && { icon: b.icon }) },
+      data: { title, members: agents.map((n) => n.id), ...floorData(floor), ...(b.color !== undefined && { color: b.color }), ...(b.icon !== undefined && { icon: b.icon }) },
     };
     canvas.applyAndBroadcast(c.projectId, { kind: "upsertNodes", nodes: [band] }, by(c));
     canvas.applyAndBroadcast(c.projectId, { kind: "upsertEdges", edges: agents.map((n) => ({ id: `e-${id}-${n.id}`, source: id, target: n.id })) }, by(c));
@@ -592,7 +608,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     if (memberIds(band).includes(agent.id)) throw new ApiError(409, `"${nodeLabel(agent)}" já está na banda.`);
     const other = bandOf(c.nodes, agent.id);
     if (other) throw new ApiError(409, `"${nodeLabel(agent)}" já está na banda "${nodeLabel(other)}".`);
-    if (!sameFloor(agent, band)) throw new ApiError(400, "O agente precisa estar no andar da banda.");
+    if (!sameFloorNodes(agent, band)) throw new ApiError(400, "O agente precisa estar no andar da banda.");
     joinBand(c, band, agent.id);
     return { ok: true };
   }));
