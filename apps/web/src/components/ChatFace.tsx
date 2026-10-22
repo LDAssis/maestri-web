@@ -7,6 +7,7 @@ import { splitFloorMarker, withFloorMarker } from "@/lib/floorMarker";
 import { apiFetch } from "@/lib/api";
 import { Avatar, readUser } from "./EntryGate";
 import Markdown from "./Markdown";
+import { useConfirm } from "./ConfirmProvider";
 import { Attachments, type ChatAttachment } from "./AttachmentView";
 
 export interface ChatMessage {
@@ -76,6 +77,7 @@ export default function ChatFace({
   busy: boolean;
 }) {
   const { getNodes, getEdges } = useReactFlow();
+  const confirm = useConfirm();
   const draftKey = `maestri.chatDraft.${projectId}.${nodeId}`;
   const [input, setInput] = useState(() => {
     try {
@@ -226,7 +228,7 @@ export default function ChatFace({
   };
 
   const clearHistory = async () => {
-    if (!window.confirm("Limpar o histórico do chat para todos os usuários?")) return;
+    if (!(await confirm({ title: "Limpar histórico", message: "Limpar o histórico do chat para todos os usuários?", confirmLabel: "Limpar", danger: true }))) return;
     try {
       const res = await apiFetch(`/api/projects/${projectId}/nodes/${nodeId}/chat`, { method: "DELETE" });
       if (!res.ok) setWarning("Não foi possível limpar o histórico");

@@ -48,6 +48,7 @@ import { useFloors, GROUND } from "@/lib/useFloors";
 import { FloorNavContext } from "@/lib/floorContext";
 import { systemNotify } from "@/lib/systemNotify";
 import SystemNotifyToggle from "./SystemNotifyToggle";
+import { useConfirm } from "./ConfirmProvider";
 import { hitStack, stackOps, uniqueStackTitle } from "@/lib/noteStack";
 import RolesPanel from "./RolesPanel";
 import { CommandPalette, ContextMenu, ShortcutsHelp, MenuState } from "./CanvasOverlays";
@@ -254,6 +255,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
   const [nodes, setNodes, onNodesChangeBase] = useNodesState<Node<any>>([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState<Edge>([]);
   // Andar (nível do canvas) em exibição; nós sem data.floor estão no Ground
+  const confirm = useConfirm();
   const [floor, setFloor] = useState(GROUND);
   // Desenho: ferramenta, cor/espessura e pilha local de desfazer
   const [drawOpen, setDrawOpen] = useState(false);
@@ -773,7 +775,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         return;
       }
       const editable = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
-      const blocked = () => editable || document.querySelector("[role=dialog][aria-modal=true], [role=menu]");
+      const blocked = () => editable || document.querySelector("[role=dialog][aria-modal=true], [role=alertdialog], [role=menu]");
       if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "z") {
         if (blocked() || !undoRef.current.length) return;
         e.preventDefault();
@@ -828,8 +830,8 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     sendOp({ kind: "upsertNodes", nodes: [newNode] });
   };
 
-  const resetToDefault = () => {
-    if (!window.confirm("Restaurar o arranjo padrão? Isso substitui o canvas para todos os usuários.")) return;
+  const resetToDefault = async () => {
+    if (!(await confirm({ title: "Restaurar arranjo padrão", message: "Restaurar o arranjo padrão? Isso substitui o canvas para todos os usuários.", confirmLabel: "Restaurar", danger: true }))) return;
     applyRemoteOp({ kind: "replace", ...defaultPartituraFullstack });
     sendOp({ kind: "replace", ...defaultPartituraFullstack });
   };

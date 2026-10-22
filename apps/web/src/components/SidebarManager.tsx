@@ -3,6 +3,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { X, FolderPlus, Pencil, Trash2, Pin, PinOff, Folder, Layers } from "lucide-react";
 import { apiFetch } from "@/lib/api";
+import { useConfirm } from "./ConfirmProvider";
+import { useProjectEvents } from "@/lib/useProjectEvents";
 
 interface ProjectLite { id: string; name: string; group?: string | null; folder?: string | null; pinned?: boolean }
 interface Sidebar { groups: string[]; folders: { name: string; group: string | null }[] }
@@ -11,7 +13,8 @@ const J = { "Content-Type": "application/json" };
 const dest = (group: string | null, folder: string | null) => JSON.stringify({ group, folder });
 
 // Gerência da barra lateral de workspaces: grupos, pastas, mover e fixar
-export default function SidebarManager({ projects, onClose, onChanged }: { projects: ProjectLite[]; onClose: () => void; onChanged: () => void }) {
+export default function SidebarManager({ projectId, projects, onClose, onChanged }: { projectId: string; projects: ProjectLite[]; onClose: () => void; onChanged: () => void }) {
+  const confirm = useConfirm();
   const [sb, setSb] = useState<Sidebar>({ groups: [], folders: [] });
   const [error, setError] = useState("");
   const [newGroup, setNewGroup] = useState("");
@@ -32,6 +35,8 @@ export default function SidebarManager({ projects, onClose, onChanged }: { proje
   useEffect(() => {
     load();
   }, [load]);
+  // Mudanças feitas pelo CLI (ou por outro usuário) aparecem ao vivo
+  useProjectEvents(projectId, (t) => (t === "sidebar" || t === "connected") && load());
   useEffect(() => {
     const h = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", h);
@@ -101,9 +106,9 @@ export default function SidebarManager({ projects, onClose, onChanged }: { proje
 
         <h4 className="text-[10px] font-mono uppercase text-slate-500 mb-1">Grupos e pastas</h4>
         <ul className="mb-2">
-          {sb.groups.map((g) => row(`g:${g}`, <><Layers className="h-3 w-3 text-indigo-400 shrink-0" />{g}</>, () => window.confirm(`Apagar o grupo "${g}"? Os workspaces dele vão para a raiz.`) && act(() => apiFetch(`/api/sidebar/groups/${encodeURIComponent(g)}`, { method: "DELETE" })), g))}
+          {sb.groups.map((g) => row(`g:${g}`, <><Layers className="h-3 w-3 text-indigo-400 shrink-0" />{g}</>, async () => (await confirm({ title: "Apagar grupo", message: `Apagar o grupo "${g}"? Os workspaces dele vão para a raiz.`, confirmLabel: "Apagar", danger: true })) && act(() => apiFetch(`/api/sidebar/groups/${encodeURIComponent(g)}`, { method: "DELETE" })), g))}
           {sb.folders.map((f) =>
-            row(`f:${f.group ?? ""}|${f.name}`, <><Folder className="h-3 w-3 text-amber-400 shrink-0" />{folderLabel(f)}</>, () => window.confirm(`Apagar a pasta "${f.name}"? Os workspaces dela ficam no ${f.group ? "grupo" : "nível raiz"}.`) && act(() => apiFetch(`/api/sidebar/folders/${encodeURIComponent(f.name)}${q(f.group)}`, { method: "DELETE" })), f.name),
+            row(`f:${f.group ?? ""}|${f.name}`, <><Folder className="h-3 w-3 text-amber-400 shrink-0" />{folderLabel(f)}</>, async () => (await confirm({ title: "Apagar pasta", message: `Apagar a pasta "${f.name}"? Os workspaces dela ficam no ${f.group ? "grupo" : "nível raiz"}.`, confirmLabel: "Apagar", danger: true })) && act(() => apiFetch(`/api/sidebar/folders/${encodeURIComponent(f.name)}${q(f.group)}`, { method: "DELETE" })), f.name),
           )}
           {!sb.groups.length && !sb.folders.length && <li className="text-xs text-slate-500">Nenhum grupo ou pasta ainda.</li>}
         </ul>
