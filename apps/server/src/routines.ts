@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import type { Session, SessionManager } from "./sessions.js";
@@ -83,6 +83,52 @@ class ApiError extends Error {
 const HISTORY_MAX = 20;
 const OUTPUT_MAX = 4000;
 const PRE_RUN_OUTPUT_MAX = 100_000;
+
+// Roda o pre-run (sh -c) no cwd do alvo; sucesso só com saída 0 dentro do timeout. Roda em grupo de processos próprio e,
+// no timeout (ou ao estourar a saída), mata o grupo inteiro: `exec` só matava o sh e deixava os filhos (sleep, git...) vivos.
+export function runPreRun(script: string, cwd: string, env: Record<string, string>) {
+  return new Promise<{ ok: boolean; stdout: string; reason?: string }>((resolve) => {
+    const child = spawn("sh", ["-c", script], { cwd, env: { ...process.env, ...env }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let why = "";
+    const killGroup = () => {
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+    };
+    const timer = setTimeout(() => {
+      why = `pre-run excedeu ${preRunTimeoutMs() / 1000}s`;
+      killGroup();
+    }, preRunTimeoutMs());
+    child.stdout.on("data", (d) => {
+      stdout += d;
+      if (stdout.length > PRE_RUN_OUTPUT_MAX) {
+        why = "pre-run produziu saída demais";
+        killGroup();
+      }
+    });
+    child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-2000)));
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      resolve({ ok: false, stdout: "", reason: `pre-run não iniciou: ${e.message}` });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (!why && code === 0) return resolve({ ok: true, stdout });
+      const detail = stderr.trim().slice(-300);
+      const reason = why || `pre-run saiu com código ${code ?? "?"}`;
+      resolve({ ok: false, stdout, reason: detail ? `${reason}: ${detail}` : reason });
+    });
+  });
+}
+
+// O texto de uma rotina vira teclas no terminal: ESC e outros controles (inclusive o fim do bracketed paste,
+// ESC[201~, que deixaria o resto virar comandos) viriam, por exemplo, de uma saída de pre-run com dados de terceiros.
+// Só \n e \t passam; \r vira \n.
+export const sanitizeTyped = (s: string) => s.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const ONCE_RE = /^(\d{4})-(\d{2})-(\d{2}) ([01]\d|2[0-3]):([0-5]\d)$/;
@@ -313,19 +359,6 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, pr
     }
   }
 
-  // Roda o pre-run no cwd do alvo; sucesso só com saída 0 dentro do timeout
-  function runPreRun(script: string, cwd: string, env: Record<string, string>) {
-    return new Promise<{ ok: boolean; stdout: string; reason?: string }>((resolve) => {
-      exec(script, { cwd, env: { ...process.env, ...env }, timeout: preRunTimeoutMs(), maxBuffer: PRE_RUN_OUTPUT_MAX }, (err, stdout, stderr) => {
-        if (!err) return resolve({ ok: true, stdout: String(stdout) });
-        const e = err as any;
-        const detail = String(stderr || "").trim().slice(-300);
-        const why = e.killed ? `pre-run excedeu ${preRunTimeoutMs() / 1000}s` : `pre-run saiu com código ${e.code ?? "?"}`;
-        resolve({ ok: false, stdout: String(stdout), reason: detail ? `${why}: ${detail}` : why });
-      });
-    });
-  }
-
   const complete = (r: Routine) => {
     r.enabled = false;
     r.completed = true;
@@ -403,7 +436,8 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, pr
       const existing = sessions.get(projectId, node!.id);
       const session = sessions.ensure(projectId, node!.id, { cwd, cmd: node!.data?.defaultCmd || "" });
       if (!existing) await settle(session);
-      const input = text.includes("\n") ? `\x1b[200~${text}\x1b[201~\r` : `${text}\r`;
+      const typed = sanitizeTyped(text);
+      const input = typed.includes("\n") ? `\x1b[200~${typed}\x1b[201~\r` : `${typed}\r`;
       const res = await typeAndWait(sessions, session, input, 600, () => stopped);
       entry.output = res.output.slice(-OUTPUT_MAX);
       if (res.timedOut) Object.assign(entry, { status: "error", reason: "tempo esgotado (600s) esperando o terminal ficar quieto" });

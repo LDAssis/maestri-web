@@ -55,7 +55,13 @@ export class AccountStore {
     const n = name.trim();
     if (lc(n) === lc(DEFAULT_ACCOUNT)) throw new ApiError(400, '"Default" é o login existente do CLI e não pode ser criada.');
     if (this.find(program, n)) throw new ApiError(409, `Já existe a conta "${n}" para ${program}.`);
-    fs.mkdirSync(this.dir(program, n), { recursive: true });
+    // Cada conta guarda o login do CLI: só o dono do servidor entra (0700), sem depender do umask
+    fs.mkdirSync(this.dir(program, n), { recursive: true, mode: 0o700 });
+    for (const d of [this.dir(program, n), this.root(program), path.join(this.dataDir, "accounts")]) {
+      try {
+        fs.chmodSync(d, 0o700);
+      } catch {}
+    }
     return n;
   }
 

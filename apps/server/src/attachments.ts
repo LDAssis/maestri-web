@@ -33,7 +33,7 @@ export function sniffImage(buf: Buffer): string | null {
 }
 
 const cleanName = (v: unknown) => {
-  const n = path.basename(String(v ?? "")).replace(/[\x00-\x1f\\/]/g, "_").trim().slice(0, 120);
+  const n = path.basename(String(v ?? "")).replace(/[\x00-\x1f\x7f-\x9f\\/]/g, "_").trim().slice(0, 120);
   return n && n !== "." && n !== ".." ? n : "arquivo";
 };
 
