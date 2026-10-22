@@ -25,6 +25,6 @@ Ordem de execução (cada item = 1 branch + PR). Status: ⬜ a fazer · 🔄 em 
 | F19 | Andares `--copy` (clone isolado) e `--pull-request` (via `gh`, merge e detecção de PR pelo seletor); marcador `<maestri-create-floor/>` (ação "Novo andar" no chat) | F16 | ✅ |
 | F20 | Ferramentas de desenho por andar: caneta, retângulo, elipse, seta, texto, cor, espessura, borracha, desfazer; tempo real e persistência | F16 | ✅ |
 | F21 | Chat com anexos (`say --file/--attach`, imagens embutidas, `recall attachment`), retomada de sessão (`claude --continue`, `codex resume`...) e contas por CLI (`--account`, `maestri account`) | F13, F15 | ✅ |
-| F22 | Lacunas da auditoria: workspaces cruzados (`Nome @ Workspace`, `recruit/band --workspace`), acordar agentes sem sessão, `portal wait`, flags desconhecidas falham, `$MAESTRI_CLI`, diretório de role, notificações do sistema, fichário/barra lateral pela UI | F15, F16, F18 | 🔄 |
+| F22 | Lacunas da auditoria: workspaces cruzados (`Nome @ Workspace`, `recruit/band --workspace`), acordar agentes sem sessão, `portal wait`, flags desconhecidas falham, `$MAESTRI_CLI`, diretório de role, notificações do sistema, fichário/barra lateral pela UI, roles globais, notificações do SO, detecção de PR em segundo plano, endurecimento de segurança (revisão) | F15, F16, F18 | ✅ |
 
 Fora de escopo (exigem o app nativo ou hardware/serviços ausentes neste ambiente): portais de dispositivo Android/iOS (`maestri-portal-devices`: exige adb/emulador), Ombro (LLM no dispositivo), Wire/Remote, impedir suspensão, anéis de uso, ambientes remotos SSH/Docker.
