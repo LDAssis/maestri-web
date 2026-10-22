@@ -27,10 +27,18 @@ import { PresenceLayer } from "./PresenceUI";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
 import PortalNode, { PortalNodeData } from "./PortalNode";
+import {
+  instantiatePartitura,
+  MAX_PARTITURA_BYTES,
+  parsePartitura,
+  partituraBounds,
+  partituraFileName,
+  serializePartitura,
+} from "@/lib/partitura";
 import NewAgentSheet from "./NewAgentSheet";
 import RolesPanel from "./RolesPanel";
 import { CommandPalette, ContextMenu, ShortcutsHelp, MenuState } from "./CanvasOverlays";
-import { Plus, UserCog, RefreshCw, StickyNote, Globe, Bell } from "lucide-react";
+import { Download, Upload, Plus, UserCog, RefreshCw, StickyNote, Globe, Bell } from "lucide-react";
 
 interface MaestriCanvasProps {
   projectId: string;
@@ -591,9 +599,46 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     sendOp({ kind: "upsertNodes", nodes: [{ ...copy, selected: undefined }] });
   };
 
+  // Partitura: exporta a seleção (ou só o nó clicado no menu; sem seleção, o canvas todo)
+  const exportPartitura = (onlyId?: string) => {
+    const all = nodesRef.current;
+    const selected = all.filter((n) => n.selected);
+    const picked = onlyId && !selected.some((n) => n.id === onlyId) ? all.filter((n) => n.id === onlyId) : selected.length ? selected : all;
+    const partitura = serializePartitura(projectName, picked, edgesRef.current);
+    const url = URL.createObjectURL(new Blob([JSON.stringify(partitura, null, 2)], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = partituraFileName(projectName);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importError, setImportError] = useState("");
+  const openImport = () => {
+    setImportError("");
+    fileInputRef.current?.click();
+  };
+  const importFile = async (file: File) => {
+    if (file.size > MAX_PARTITURA_BYTES) return setImportError("Arquivo maior que 2 MB.");
+    const result = parsePartitura(await file.text());
+    if (!result.ok) return setImportError(result.error);
+    if (result.partitura.nodes.length === 0) return setImportError("A partitura não tem nós.");
+    const { width, height } = partituraBounds(result.partitura);
+    const origin = getSpawnPosition(width, height);
+    const { nodes: added, edges: addedEdges } = instantiatePartitura(result.partitura, origin, nodesRef.current.map((n) => n.id));
+    setNodes((nds) => [...nds.map((n) => (n.selected ? { ...n, selected: false } : n)), ...(added as Node<any>[])]);
+    if (addedEdges.length) setEdges((eds) => [...eds, ...(addedEdges as Edge[])]);
+    sendOp({ kind: "upsertNodes", nodes: added.map(({ selected: _s, ...n }: { selected?: boolean }) => n) as any });
+    if (addedEdges.length) sendOp({ kind: "upsertEdges", edges: addedEdges as any });
+    setImportError("");
+  };
+
   // Atalhos globais (ignorados em campos editáveis e no xterm)
-  const shortcutsRef = useRef({ addAgent, addStickyNote, addPortal });
-  shortcutsRef.current = { addAgent, addStickyNote, addPortal };
+  const shortcutsRef = useRef({ addAgent, addStickyNote, addPortal, exportPartitura, openImport });
+  shortcutsRef.current = { addAgent, addStickyNote, addPortal, exportPartitura, openImport };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -604,9 +649,17 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         setPaletteOpen(true);
         return;
       }
+      const editable = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+      const blocked = () => editable || document.querySelector("[role=dialog][aria-modal=true], [role=menu]");
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key.toLowerCase() === "e" || e.key.toLowerCase() === "i")) {
+        if (blocked()) return;
+        e.preventDefault();
+        if (e.key.toLowerCase() === "e") shortcutsRef.current.exportPartitura();
+        else shortcutsRef.current.openImport();
+        return;
+      }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
-      if (document.querySelector("[role=dialog][aria-modal=true], [role=menu]")) return;
+      if (blocked()) return;
       const k = e.key.toLowerCase();
       if (k === "a") shortcutsRef.current.addAgent();
       else if (k === "n") shortcutsRef.current.addStickyNote();
@@ -655,6 +708,36 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         </button>
 
         <button
+          onClick={() => exportPartitura()}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+          title="Exportar partitura (seleção ou canvas todo) — Ctrl+E"
+          aria-label="Exportar partitura"
+        >
+          <Download className="h-4 w-4" />
+        </button>
+        <button
+          onClick={openImport}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+          title="Importar partitura — Ctrl+I"
+          aria-label="Importar partitura"
+        >
+          <Upload className="h-4 w-4" />
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          aria-hidden
+          tabIndex={-1}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (f) importFile(f);
+          }}
+        />
+
+        <button
           onClick={() => setRolesOpen(true)}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-medium transition"
         >
@@ -691,6 +774,16 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         </div>
       )}
 
+      {importError && (
+        <div
+          role="alert"
+          className="absolute top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 max-w-md rounded-lg border border-rose-700/70 bg-rose-950/95 px-3 py-2 text-xs text-rose-200 shadow-xl"
+        >
+          <span>Importação falhou: {importError}</span>
+          <button onClick={() => setImportError("")} aria-label="Dispensar erro" className="text-rose-300 hover:text-white">✕</button>
+        </div>
+      )}
+
       {notifications.length > 0 && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2" role="status">
           {notifications.map((n) => (
@@ -719,6 +812,8 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
             { label: "Novo agente", run: () => addAgent() },
             { label: "Nova nota", run: () => addStickyNote() },
             { label: "Novo portal", run: () => addPortal() },
+            { label: "Exportar partitura", run: () => exportPartitura() },
+            { label: "Importar partitura", run: openImport },
           ]}
         />
       )}
@@ -742,6 +837,8 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
           onClose={() => setMenu(null)}
           onAdd={(kind, at) => (kind === "agent" ? addAgent(at) : kind === "note" ? addStickyNote(at) : addPortal(at))}
           onDuplicate={duplicateNode}
+          onExport={exportPartitura}
+          onImport={openImport}
           onDelete={(id) => flowRef.current?.deleteElements({ nodes: [{ id }] })}
           onColor={(id, color) => flowRef.current?.updateNodeData(id, { color })}
         />

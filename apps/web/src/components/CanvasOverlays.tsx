@@ -160,6 +160,8 @@ export function ContextMenu({
   onClose,
   onAdd,
   onDuplicate,
+  onExport,
+  onImport,
   onDelete,
   onColor,
 }: {
@@ -167,6 +169,8 @@ export function ContextMenu({
   onClose: () => void;
   onAdd: (kind: "agent" | "note" | "portal", at: { x: number; y: number }) => void;
   onDuplicate: (id: string) => void;
+  onExport: (nodeId?: string) => void;
+  onImport: () => void;
   onDelete: (id: string) => void;
   onColor: (id: string, color: string) => void;
 }) {
@@ -212,6 +216,7 @@ export function ContextMenu({
         {menu.nodeId ? (
           <>
             <button role="menuitem" className={item} onClick={act(() => onDuplicate(menu.nodeId!))}>Duplicar</button>
+            <button role="menuitem" className={item} onClick={act(() => onExport(menu.nodeId))}>Exportar partitura</button>
             <button role="menuitem" className={`${item} text-rose-300`} onClick={act(() => onDelete(menu.nodeId!))}>Apagar</button>
             {menu.nodeType === "stickyNote" && (
               <>
@@ -230,6 +235,8 @@ export function ContextMenu({
             <button role="menuitem" className={item} onClick={act(() => onAdd("agent", menu.flow))}><Bot className="h-3 w-3" />Novo agente</button>
             <button role="menuitem" className={item} onClick={act(() => onAdd("note", menu.flow))}><StickyNote className="h-3 w-3" />Nova nota</button>
             <button role="menuitem" className={item} onClick={act(() => onAdd("portal", menu.flow))}><Globe className="h-3 w-3" />Novo portal</button>
+            <button role="menuitem" className={item} onClick={act(() => onExport())}>Exportar partitura</button>
+            <button role="menuitem" className={item} onClick={act(onImport)}>Importar partitura</button>
           </>
         )}
       </div>
@@ -243,6 +250,8 @@ const SHORTCUTS: [string, string][] = [
   ["P", "Novo portal"],
   ["F", "Enquadrar tudo"],
   ["Ctrl/⌘ K", "Buscar"],
+  ["Ctrl/⌘ E", "Exportar partitura (seleção ou tudo)"],
+  ["Ctrl/⌘ I", "Importar partitura"],
   ["Delete / Backspace", "Apagar nó selecionado"],
   ["Botão direito", "Menu de contexto"],
   ["?", "Esta lista"],
