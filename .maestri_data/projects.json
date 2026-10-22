@@ -10,7 +10,7 @@
     "id": "proj-ecommerce-api",
     "name": "Microserviço E-commerce",
     "description": "Backend de pagamentos e catálogo com agentes dedicados",
-    "repoPath": ".",
+    "repoPath": "/home/assis/maestri-projects/microservico-e-commerce-ecommerce-api",
     "createdAt": "2026-10-21T19:54:51.375Z"
   },
   {
@@ -26,5 +26,12 @@
     "description": "",
     "repoPath": ".",
     "createdAt": "2026-10-22T11:29:10.857Z"
+  },
+  {
+    "id": "proj-021392",
+    "name": "Teste.123",
+    "description": "",
+    "repoPath": "/home/assis/maestri-projects/teste-123-021392",
+    "createdAt": "2026-10-22T03:50:21.392Z"
   }
 ]
