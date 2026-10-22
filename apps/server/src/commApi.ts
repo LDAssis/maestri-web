@@ -80,7 +80,7 @@ export function recall(chat: Obj[], q: Obj, now = Date.now()) {
 }
 
 export function registerCommApi({ fastify, sessions, canvas, nodeApi, attachments }: Deps) {
-  const { base, context, resolveTarget, requireSession, wrap } = nodeApi;
+  const { base, context, resolveTarget, awake, wrap } = nodeApi;
 
   const chatOf = (projectId: string, nodeId: string): Obj[] =>
     canvas.state(projectId).nodes?.find((n) => n.id === nodeId)?.data?.chat ?? [];
@@ -92,6 +92,7 @@ export function registerCommApi({ fastify, sessions, canvas, nodeApi, attachment
   // Input cru (escapes decodificados) no PTY do alvo; com wait, espera ficar quieto e devolve a saída nova (como /ask)
   fastify.post(`${base}/raw`, async (req: any, reply) => {
     let session;
+    let starting = false;
     let input: string;
     const body = req.body ?? {};
     try {
@@ -99,16 +100,16 @@ export function registerCommApi({ fastify, sessions, canvas, nodeApi, attachment
       if (!isText(body.input, 100_000) || !body.input) throw new ApiError(400, "Informe o input cru.");
       input = decodeEscapes(body.input);
       const t = resolveTarget(c, body.target, "agentTerminal");
-      requireSession(c, t);
-      session = sessions.get(c.projectId, t.id)!;
+      ({ session, starting } = awake(c, t));
     } catch (e: any) {
       if (e instanceof ApiError) return reply.status(e.status).send({ error: e.message });
       return reply.status(500).send({ error: e?.message || "Erro interno." });
     }
     if (!body.wait) {
       sessions.write(session.projectId, session.nodeId, input);
-      return { ok: true };
+      return { ok: true, ...(starting && { starting: true }) };
     }
+    if (starting) return { output: "", starting: true, timedOut: false };
     const timeoutS = Math.min(3600, Math.max(1, Number(body.timeout) || 600));
     reply.hijack();
     const raw = reply.raw;

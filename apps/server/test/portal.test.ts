@@ -219,6 +219,39 @@ test("scroll e scrollintoview", { skip }, async () => {
   assert.match((await maestri(["portal", "scroll", "Form", "diagonal", "10"])).stderr, /direção inválida/);
 });
 
+test("wait: elemento, texto, URL e tempo; estourar o tempo é erro", { skip }, async () => {
+  await ok(["portal", "navigate", "Form", `${site}/`]);
+  // elemento que aparece depois (CSS e @ref)
+  await ok(["portal", "evaluate", "Form", "setTimeout(() => { const d = document.createElement('div'); d.id = 'tarde'; d.textContent = 'chegou-depois'; document.body.appendChild(d); }, 500); 'agendado'"]);
+  const t0 = Date.now();
+  assert.equal(await ok(["portal", "wait", "Form", "#tarde"]), "ok");
+  assert.ok(Date.now() - t0 >= 300, "esperou o elemento aparecer");
+  const snap = await ok(["portal", "snapshot", "Form"]);
+  assert.equal(await ok(["portal", "wait", "Form", refOf(snap, /button "Enviar"/)]), "ok", "@ref visível");
+  // texto
+  await ok(["portal", "evaluate", "Form", "setTimeout(() => { document.getElementById('res').textContent = 'terminou-o-trabalho'; }, 400); 1"]);
+  assert.equal(await ok(["portal", "wait", "Form", "--text", "terminou-o-trabalho"]), "ok");
+  // URL: substring e glob (a navegação acontece depois)
+  await ok(["portal", "evaluate", "Form", "setTimeout(() => { location.href = '/outra'; }, 300); 1"]);
+  assert.equal(await ok(["portal", "wait", "Form", "--url", "/outra"]), "ok");
+  await ok(["portal", "evaluate", "Form", "setTimeout(() => { location.href = '/'; }, 300); 1"]);
+  assert.equal(await ok(["portal", "wait", "Form", "--url", `${site}/`]), "ok");
+  await ok(["portal", "evaluate", "Form", "setTimeout(() => { location.href = '/outra?x=1'; }, 300); 1"]);
+  assert.equal(await ok(["portal", "wait", "Form", "--url", "*/outra?x=*"]), "ok");
+  await ok(["portal", "navigate", "Form", `${site}/`]);
+  // tempo puro (ms)
+  const t1 = Date.now();
+  assert.equal(await ok(["portal", "wait", "Form", "400"]), "ok");
+  assert.ok(Date.now() - t1 >= 350);
+  // timeout: erro no formato do Maestri, saída != 0
+  for (const args of [["#nunca"], ["--text", "texto que nunca aparece"], ["--url", "/jamais"]]) {
+    const r = await maestri(["portal", "wait", "Form", ...args, "--timeout", "1"]);
+    assert.equal(r.code, 1, args.join(" "));
+    assert.match(r.stderr, /^maestri: error: /, args.join(" "));
+  }
+  assert.match((await maestri(["portal", "wait", "Form"])).stderr, /^maestri: error: Uso: maestri portal wait/);
+});
+
 test("navigate, back, forward, reload mantêm data.url em sincronia", { skip }, async () => {
   assert.match(await ok(["portal", "navigate", "Form", `${site}/outra`]), /Outra/);
   assert.equal((await nodeByTitle("Form")).data.url, `${site}/outra`);

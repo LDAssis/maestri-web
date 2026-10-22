@@ -166,7 +166,7 @@ test("recruit: sem --preset é cópia de mim; --command/--cmd; nome repetido gan
   assert.match((await M("recruit", "X", "--color", "fúcsia")).stderr, /Cor inválida/);
   assert.match((await M("recruit", "X", "--icon", "nope")).stderr, /Ícone inválido/);
   assert.match((await M("recruit", "X", "--account", "Work")).stderr, /Contas/);
-  assert.match((await M("recruit", "X", "--workspace", "W")).stderr, /--workspace/);
+  assert.match((await M("recruit", "X", "--workspace", "W")).stderr, /Workspace "W" não encontrado/);
   assert.match((await M("recruit", "X", "--command", "a\nb")).stderr, /Comando inválido/);
   assert.equal(await byTitle("X"), undefined);
   assert.match((await maestri("worker", ["recruit", "Intruso"])).stderr, /Apenas o Maestro pode recrutar/);
@@ -199,8 +199,18 @@ test("recruit --role: por nome (current e global), id, texto livre antigo; claud
   await ok(M("recruit", "R2", "--command", "claude", "--role", "Global Dev"));
   const r2 = await byTitle("R2");
   assert.equal(r2.data.role, "Global Dev");
-  assert.match(r2.data.defaultCmd, /^claude "\$\(cat '.*\.maestri-roles\/agent-[0-9a-f]+\.md'\)"$/);
+  // padrão: contexto em .maestri/roles/<id>/ (CLAUDE.md e AGENTS.md) e o terminal começa nessa pasta; comando limpo
+  assert.equal(r2.data.defaultCmd, "claude");
   assert.equal(r2.data.baseCmd, "claude");
+  assert.equal(r2.data.worktreePath, path.join(".maestri", "roles", r2.data.roleId.toLowerCase()));
+  for (const f of ["CLAUDE.md", "AGENTS.md"]) assert.match(fs.readFileSync(path.join(repo, r2.data.worktreePath, f), "utf8"), /Escreva código\./);
+  // com --dir o terminal começa onde foi pedido: o prompt vai como argumento (arquivo + $(cat))
+  fs.mkdirSync(path.join(repo, "outro"), { recursive: true });
+  await ok(M("recruit", "R2b", "--command", "claude", "--role", "Global Dev", "--dir", "outro"));
+  const r2b = await byTitle("R2b");
+  assert.match(r2b.data.defaultCmd, /^claude "\$\(cat '.*\.maestri-roles\/agent-[0-9a-f]+\.md'\)"$/);
+  assert.equal(r2b.data.worktreePath, "outro");
+  assert.notEqual(r2b.data.roleDir, true);
 
   // role-id (UUID) e texto livre antigo
   const id = (await byTitle("R1")).data.roleId;
@@ -318,7 +328,9 @@ test("role assign: reinicia o recruta com o novo role (ou sem role), preservando
   let n = await byTitle("Alvo");
   assert.equal(n.id, t.id);
   assert.equal(n.data.role, "Revisor");
-  assert.match(n.data.defaultCmd, /^claude "\$\(cat/);
+  assert.equal(n.data.defaultCmd, "claude");
+  assert.equal(n.data.roleDir, true);
+  assert.match(fs.readFileSync(path.join(repo, n.data.worktreePath, "CLAUDE.md"), "utf8"), /Revise apenas segurança/);
   assert.match(fs.readFileSync(path.join(repo, ".maestri-roles", `${t.id}.md`), "utf8"), /Revise apenas segurança/);
   assert.ok(await edgeBetween("maestro", t.id) && (await edgeBetween("peer", t.id)));
   const p1 = await pid(t.id);
@@ -331,6 +343,8 @@ test("role assign: reinicia o recruta com o novo role (ou sem role), preservando
   n = await byTitle("Alvo");
   assert.equal(n.data.defaultCmd, "claude");
   assert.equal(n.data.roleId, null);
+  assert.equal(n.data.roleDir, false, "sem role, o terminal volta para a raiz do projeto");
+  assert.equal(n.data.worktreePath, null);
   assert.notEqual(await pid(t.id), p1);
   assert.match((await M("role", "assign", "Alvo", "Fantasma")).stderr, /não encontrado/);
   assert.match((await M("role", "assign", "Estranho", "Revisor")).stderr, /não encontrado/);
@@ -499,8 +513,9 @@ test("andares: recruit --floor usa o checkout do andar; recruta herda o andar de
   await ok(M("recruit", "Iso", "--preset", "shell", "--floor", "Iso"));
   const iso = await byTitle("Iso");
   assert.equal(iso.data.floor, "Iso");
-  const where = await ok(M("ask", "Iso", "pwd"));
-  assert.match(where.stdout, /\.worktrees\//, "cwd = checkout do andar");
+  // o bash de login pode demorar (máquina carregada): repete o pwd até o shell responder
+  let where = "";
+  await until(async () => ((where = (await ok(M("ask", "Iso", "pwd"))).stdout), /\.worktrees\//.test(where)), "cwd = checkout do andar", 20000);
 
   await ok(M("recruit", "Terra", "--preset", "shell", "--floor", "Ground"));
   assert.equal((await byTitle("Terra")).data.floor, undefined);

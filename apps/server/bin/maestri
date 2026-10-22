@@ -14,7 +14,8 @@ Comandos:
   send "Nome" "texto"                Escreve texto + Enter no terminal do agente
   check "Nome" [--lines N]           Últimas N linhas (60) do terminal do agente
   ask "Nome" "texto" [--timeout S]   send + espera o agente ficar quieto e imprime a resposta
-  recruit "Nome" [--preset P] [--role-id ID] [--cmd C] [--role R]   (Maestro) cria e inicia um novo agente
+  recruit "Nome" [--preset P] [--role R] [--floor F] [--workspace W] [--band B] [--dir D] [--command C]   (Maestro) cria e inicia um agente
+  recruit ["Novo"] --replace "Antigo" (--preset P | --command C)   (Maestro) troca o agente no mesmo nó (veja "maestri recruit --help")
   dismiss "Nome"                     (Maestro) remove um agente conectado
   notify "texto"                     Avisa todos os navegadores do projeto
   chat reply "texto markdown"        Responde na face de chat do SEU nó
@@ -46,19 +47,27 @@ const FLAGS = ["--lines", "--timeout", "--cmd", "--role", "--last", "--preset", 
 // Flags sem valor (viram flags[nome] = true); módulos de extensão acrescentam as suas
 const BOOL_FLAGS = [];
 
+// "--" encerra as flags (o resto é texto, mesmo começando com --). Uma flag desconhecida falha em vez de virar texto
+// posicional ("nunca adivinhe uma flag"); "---" e "--1" seguem sendo texto.
 function parse(argv) {
   const pos = [];
   const flags = {};
   let help = false;
+  let unknown = null;
+  let endOfFlags = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--help" || a === "-h") help = true;
+    if (endOfFlags) pos.push(a);
+    else if (a === "--") endOfFlags = true;
+    else if (a === "--help" || a === "-h") help = true;
     else if (BOOL_FLAGS.includes(a)) flags[a.slice(2)] = true;
     else if (FLAGS.includes(a)) {
       if (i + 1 >= argv.length) throw new CliError(`Falta o valor de ${a}.`);
       flags[a.slice(2)] = argv[++i];
-    } else pos.push(a);
+    } else if (/^--[A-Za-z]/.test(a)) unknown ??= a;
+    else pos.push(a);
   }
+  if (unknown && !help) throw new CliError(`Flag desconhecida: ${unknown}.${pos[0] ? ` Use maestri ${pos[0]} --help` : ' Use maestri --help'}${pos[0] ? ' (ou "--" antes de um texto que comece com --)' : ""}`);
   return { pos, flags, help };
 }
 
@@ -117,7 +126,9 @@ const COMMANDS = {
   async check({ pos, flags }) {
     need(pos, 1, 'check "Nome" [--lines N]');
     const q = new URLSearchParams({ target: pos[0], lines: flags.lines || "60" });
-    console.log((await call("GET", `/check?${q}`)).output);
+    const r = await call("GET", `/check?${q}`);
+    console.log(r.output);
+    if (r.starting) console.error(`[maestri] ${pos[0]}: terminal iniciado agora, ainda subindo; o que apareceu está acima.`);
   },
 
   async ask({ pos, flags }) {

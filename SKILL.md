@@ -174,3 +174,18 @@ Andares de PR: o seletor de andar mostra o PR (estado, review, checks), mescla c
 falhando/pendentes pede confirmação) e passa a seguir sozinho o PR aberto para a branch do andar (detecção pelo `gh pr list --head`).
 `maestri workspace create --from` recria os andares git do origem como andares git no destino (a resposta lista o que caiu para sem git).
 `maestri arrange` também aceita uma banda (Maestro): nome, ícone e cor. `maestri note create` põe a nota à esquerda do seu terminal.
+
+## CLI: PATH, flags e workspaces
+Se `maestri` não for encontrado no PATH, use `"$MAESTRI_CLI"` (caminho absoluto do binário, sempre definido no terminal). Flags desconhecidas falham ("Flag desconhecida: --x") — nunca adivinhe uma flag; para um texto que comece com `--`, ponha `--` antes dele (`maestri send "A" -- "--foo"`).
+
+Agentes de OUTROS workspaces (projetos) aparecem no `maestri list` como `Nome @ Workspace`, e o seu próprio endereço aparece na linha `Você:`. ask, send, check, `ask --batch`, connect, dismiss e os comandos de banda aceitam esse endereço:
+```
+maestri recruit "Hawk" --workspace "Frontend" [--floor "Experiment"] --preset "Claude Code"   # nasce no projeto Frontend, ligado a você
+maestri ask "Hawk @ Frontend" "status?"           maestri connect "Local" "Hawk @ Frontend"   # agente↔agente entre projetos
+maestri band create "Squad" --workspace "Frontend"   maestri band add "Squad @ Frontend" "Hawk @ Frontend"
+```
+`ask`/`send`/`check` num agente sem sessão (descarregado, servidor reiniciado) sobem o terminal com o cwd e o comando do nó; se ele acabou de subir, `ask` responde "ainda iniciando; pergunte de novo" (código 3) — repita em alguns segundos; `check` mostra o que já apareceu.
+
+`maestri portal wait "Portal" (@ref|seletor | --text "t" | --url "padrão" | MS) [--timeout S]` espera um elemento visível, um texto, uma URL (substring ou glob com `*`) ou um tempo; estourar o tempo é erro (`maestri: error:`, saída != 0).
+
+Com role, o recruta começa em `.maestri/roles/<id>/`, que traz o prompt em `CLAUDE.md` (claude) e `AGENTS.md` (codex, opencode, agy); com `--dir`/`--floor` o terminal começa onde você pediu e claude/codex recebem o prompt como argumento.

@@ -13,7 +13,11 @@ Apenas o Maestro. Cria um agente conectado a você e inicia o terminal dele.
   conta fixada no preset; sem ele, a do preset ou, numa cópia sua, a sua. "Default" = o login existente do CLI.
 --dir: diretório de partida; precisa estar dentro do projeto (padrão: o seu). --icon/--color: veja "maestri arrange --help".
 --band: coloca o recruta numa banda sua; sem ele, estando numa banda, o recruta entra nela em vez de ganhar uma corda.
---floor: cria o recruta num andar existente (e o terminal abre no checkout dele). Nomes repetidos viram "Nome (2)".
+--floor "Andar": o recruta nasce nesse andar (o terminal abre no checkout dele); sem ele, no seu. Nomes repetidos viram "Nome (2)".
+--workspace "W": cria o recruta no OUTRO workspace (projeto) W — no diretório dele ou no do --floor dele — ligado a você pelo
+  registro do servidor; você o endereça como "Nome @ W" (ask, send, check, dismiss, connect, band).
+Com role, o terminal começa em .maestri/roles/<id>/ (pasta do projeto com o prompt em CLAUDE.md e AGENTS.md, que cada CLI lê);
+  com --dir/--floor o terminal começa onde você pediu e claude/codex recebem o prompt como argumento.
 --replace "X" --account "Work" (sozinho) troca só a conta e reinicia o processo.
 --replace troca o processo do agente existente NO MESMO LUGAR (nó, cordas, posição e rotinas ficam; a sessão reinicia e o chat
   é descartado). O nome posicional renomeia. Exige --preset ou --command para trocar de agente; poderes de Maestro só mudam
@@ -42,7 +46,7 @@ maestri role assign "Recruta" "Role"   |   maestri role assign "Recruta" --none
 current = .maestri/roles do projeto (padrão); global = diretório de dados do servidor, visível em todos os projetos.
 edit/write reescrevem o prompt de quem usa o role e reiniciam esses processos; assign reinicia o recruta preservando a
 topologia. O chat se perde no reinício. Só o Maestro altera.`,
-  band: `maestri band create "Nome" ["Agente" ...] [--without-me] [--floor F] [--icon I] [--color C]
+  band: `maestri band create "Nome" ["Agente" ...] [--without-me] [--floor F] [--workspace W] [--icon I] [--color C]
 maestri band add "Banda" "Agente"
 maestri band remove "Banda" "Agente"
 maestri band dissolve "Banda"
@@ -70,7 +74,7 @@ export function register({ call, need, CliError }) {
   // ----- list / context -----
   async function list() {
     const c = await call("GET", "/context");
-    const out = [`Você: ${c.self.title}${c.self.isMaestro ? " (Maestro)" : ""}`];
+    const out = [`Você: ${c.self.title}${c.self.isMaestro ? " (Maestro)" : ""}${c.self.workspace ? ` — ${c.self.title} @ ${c.self.workspace}` : ""}`];
     const group = (name, items) => {
       if (!items.length) return;
       out.push("", `${name}:`, ...items);
@@ -110,12 +114,11 @@ export function register({ call, need, CliError }) {
 
   // ----- recruit -----
   async function recruit({ pos, flags }) {
-    if (flags.workspace !== undefined) throw new CliError("--workspace não existe no Maestri Web (cada projeto é um workspace isolado).");
     const replacing = flags.replace !== undefined;
     if (!replacing) need(pos, 1, 'recruit "Nome" [--preset P] [--role R] [--band B] [--command C] [--dir D]');
     const r = await call("POST", "/recruit", {
       name: pos[0], replace: flags.replace, preset: flags.preset, role: flags.role, roleId: flags["role-id"],
-      command: flags.command ?? flags.cmd, dir: flags.dir, floor: flags.floor, band: flags.band, icon: flags.icon, color: flags.color, account: flags.account,
+      command: flags.command ?? flags.cmd, dir: flags.dir, floor: flags.floor, workspace: flags.workspace, band: flags.band, icon: flags.icon, color: flags.color, account: flags.account,
     });
     if (r.note) console.error(`[maestri] ${r.note}`);
     console.log(replacing ? `Agente "${r.name}" trocado no mesmo lugar (sessão reiniciada).` : `Agente "${r.name}" recrutado e iniciado${r.band ? ` na banda "${r.band}"` : ""}.`);
@@ -203,8 +206,7 @@ export function register({ call, need, CliError }) {
     const [sub, name] = pos;
     if (sub === "create") {
       need(pos, 2, 'band create "Nome" ["Agente" ...] [--without-me] [--icon I] [--color C]');
-      if (flags.workspace !== undefined) throw new CliError("--workspace não existe no Maestri Web.");
-      const r = await call("POST", "/band/create", { name, agents: pos.slice(2), withoutMe: flags["without-me"] === true, floor: flags.floor, icon: flags.icon, color: flags.color });
+      const r = await call("POST", "/band/create", { name, agents: pos.slice(2), withoutMe: flags["without-me"] === true, floor: flags.floor, workspace: flags.workspace, icon: flags.icon, color: flags.color });
       console.log(`Banda "${r.name}" criada com ${r.members.join(", ")}.`);
     } else if (sub === "add" || sub === "remove") {
       need(pos, 3, `band ${sub} "Banda" "Agente"`);

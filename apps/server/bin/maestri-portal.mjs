@@ -6,7 +6,7 @@ import path from "node:path";
 const VERBS = [
   "back", "forward", "reload", "info", "screenshot", "snapshot", "click", "fill", "type", "key", "selectall", "clear",
   "hover", "focus", "select", "check", "uncheck", "upload", "scroll", "scrollintoview", "text", "html", "evaluate",
-  "logs-start", "logs", "resize", "ua",
+  "logs-start", "logs", "resize", "ua", "wait",
 ];
 
 // Quantos argumentos (depois do nome do portal) cada verbo exige
@@ -33,6 +33,11 @@ maestri portal select "Portal" SEL "Texto da opção"
 maestri portal check|uncheck "Portal" SEL
 maestri portal upload "Portal" SEL arquivo...            (não use click em input de arquivo)
 maestri portal scroll "Portal" up|down|left|right PX [x,y|@ref]
+
+Espera:
+maestri portal wait "Portal" @ref|seletor|--text "texto"|--url "padrão"|MS [--timeout S]
+  elemento visível, texto na página, URL (substring ou glob com *) ou MS milissegundos; padrão de timeout 30s.
+  Estourar o tempo é erro ("maestri: error: ...", código != 0).
 
 Responsivo:
 maestri portal resize "Portal" W H                       viewport CSS exato; imprime o obtido
@@ -77,6 +82,15 @@ export function register({ call, need, CliError }) {
       }
       need(pos, 2, `portal ${verb} "Portal" ...`);
       let args = rest.slice(1);
+      if (verb === "wait") {
+        // modo: --text, --url, número puro (ms) ou seletor/@ref
+        const timeoutMs = Math.round((Number(flags.timeout) || 30) * 1000);
+        if (flags.text !== undefined) args = ["text", flags.text, String(timeoutMs)];
+        else if (flags.url !== undefined) args = ["url", flags.url, String(timeoutMs)];
+        else if (/^\d+$/.test(args[0] ?? "")) args = ["ms", args[0], String(timeoutMs)];
+        else if (args[0]) args = ["selector", args[0], String(timeoutMs)];
+        else throw new CliError('Uso: maestri portal wait "Portal" (@ref|seletor | --text "t" | --url "padrão" | MS) [--timeout S]');
+      }
       if ((MIN_ARGS[verb] ?? 0) > args.length) throw new CliError(`Uso: maestri portal ${verb} "Portal" ... (veja "maestri portal --help")`);
       // O servidor roda em outro processo: caminhos de upload vão absolutos, a partir do cwd de quem chamou
       if (verb === "upload") args = [args[0], ...args.slice(1).map((f) => path.resolve(f))];
@@ -91,7 +105,7 @@ export function register({ call, need, CliError }) {
   return {
     commands: { portal },
     help: { portal: HELP },
-    flags: ["--size", "--url"],
+    flags: ["--size", "--url", "--text"],
     summary: [
       'portal create|edit|close ...      Cria/edita/fecha portais (navegador automatizável)',
       'portal navigate "Portal" "url"    Muda a URL de um portal conectado (e da sessão aberta)',

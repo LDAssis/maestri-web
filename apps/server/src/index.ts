@@ -19,6 +19,7 @@ import { registerWorkspacesApi } from "./workspacesApi.js";
 import { SessionHistory } from "./sessionHistory.js";
 import { AccountStore } from "./accounts.js";
 import { registerAccountsApi } from "./accountsApi.js";
+import { CrossLinks } from "./crossLinks.js";
 import { AttachmentStore } from "./attachments.js";
 import { registerAttachmentsApi } from "./attachmentsApi.js";
 import { registerFloorsApi } from "./floorsApi.js";
@@ -158,6 +159,7 @@ const host = process.env.HOST || "127.0.0.1";
 const sessionHistory = new SessionHistory(path.join(dataDir, "session_history.json"));
 const accounts = new AccountStore(dataDir);
 const attachments = new AttachmentStore(dataDir);
+const crossLinks = new CrossLinks(path.join(dataDir, "links.json"));
 const sessions = new SessionManager({
   apiUrl: () => `http://127.0.0.1:${(fastify.server.address() as { port?: number } | null)?.port ?? port}/api`,
   token: authToken,
@@ -183,7 +185,17 @@ fastify.addHook("onClose", async () => {
 
 const idPattern = /^[\w-]+$/;
 
-const nodeApi = registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, attachments });
+const nodeApi = registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, attachments,
+  links: crossLinks,
+  workspaces: { nameOf: (id) => projects.find((p) => p.id === id)?.name, idOf: (name) => projects.find((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase())?.id },
+  // Acordar um agente sem sessão: cwd (andar) e comando do nó, como a conexão da UI faria
+  wake: (projectId, node) => {
+    const repo = projects.find((p) => p.id === projectId)!.repoPath;
+    const cwd = node.data?.worktreePath ? resolveInside(repo, node.data.worktreePath) : resolveInside(repo, floors.cwdForNode(projectId, node.id, canvas.state(projectId).nodes ?? []));
+    const cmd = node.data?.defaultCmd || readProjectSettings(projectId)?.defaultCmd || readGlobalSettings()?.defaultCmd || "";
+    return sessions.ensure(projectId, node.id, { cwd, cmd });
+  },
+});
 registerAttachmentsApi({ fastify, nodeApi, attachments, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
 registerCommApi({ fastify, sessions, canvas, nodeApi, attachments });
 registerNotesApi({ fastify, canvas, nodeApi });
@@ -191,7 +203,7 @@ const floors = new FloorStore(dataDir, (id) => projects.find((p) => p.id === id)
 const floorsApi = registerFloorsApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, floors, nodeApi });
 registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds: () => projects.map((p) => p.id) });
 registerTeamApi({
-  fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, dataDir, nodeApi, floors, accounts,
+  fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, dataDir, nodeApi, floors, accounts, links: crossLinks, workspaces: { nameOf: (id) => projects.find((p) => p.id === id)?.name, idOf: (name) => projects.find((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase())?.id },
   settings: {
     readGlobal: () => readGlobalSettings(),
     writeGlobal: (s) => writeJsonAtomic(globalSettingsFile, s),
@@ -344,6 +356,7 @@ fastify.delete<{ Params: { id: string } }>("/api/projects/:id", async (req, repl
   routines.removeProject(req.params.id);
   floors.drop(req.params.id);
   sessionHistory.dropProject(req.params.id);
+  crossLinks.dropProject(req.params.id);
   fs.rmSync(path.join(dataDir, `prefs_${req.params.id}.json`), { force: true });
   attachments.dropProject(req.params.id);
   return { ok: true };
