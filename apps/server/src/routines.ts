@@ -64,6 +64,8 @@ interface Deps {
   canvas: CanvasStore;
   projectRepo: (projectId: string) => string | null;
   projectName?: (projectId: string) => string | undefined;
+  // checkout do andar do nó (null = térreo/sem isolamento)
+  floorCwd?: (projectId: string, nodeId: string, nodes: Obj[]) => string | null;
   dataDir: string;
   // de nodeApi.ts
   typeAndWait: TypeAndWait;
@@ -258,7 +260,7 @@ function migrate(raw: Obj): Routine | null {
   } as Routine;
 }
 
-export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, projectName, dataDir, typeAndWait, isChatBusy, now = Date.now }: Deps) {
+export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, projectName, floorCwd, dataDir, typeAndWait, isChatBusy, now = Date.now }: Deps) {
   const store = new Map<string, Routine[]>();
   const running = new Set<string>();
   let stopped = false;
@@ -376,7 +378,7 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, pr
     const entry: RoutineRun = { at: new Date(now()).toISOString(), status: "ok" };
     try {
       const repo = projectRepo(projectId)!;
-      const cwd = node ? resolveInside(repo, node.data?.worktreePath) : repo;
+      const cwd = node ? (node.data?.worktreePath ? resolveInside(repo, node.data.worktreePath) : floorCwd?.(projectId, node.id, canvas.state(projectId).nodes ?? []) ?? repo) : repo;
       let text = r.text;
       if (r.preRun) {
         const res = await runPreRun(r.preRun, cwd, {

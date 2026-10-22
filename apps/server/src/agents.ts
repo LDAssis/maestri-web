@@ -9,7 +9,7 @@ export class ApiError extends Error {
   }
 }
 
-export const SIZES: Record<string, [number, number]> = { agentTerminal: [460, 330], stickyNote: [280, 200], portal: [480, 330], noteStack: [300, 220] };
+export const SIZES: Record<string, [number, number]> = { agentTerminal: [460, 330], stickyNote: [280, 200], portal: [480, 330], noteStack: [300, 220], band: [260, 160] };
 const MARGIN = 40;
 
 const sizeOf = (n: Obj): [number, number] => {

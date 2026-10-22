@@ -13,6 +13,7 @@ import { CanvasStore } from "./canvas.js";
 import { PresenceHub } from "./presence.js";
 import { registerNodeApi, typeAndWait, chatBusy } from "./nodeApi.js";
 import { registerCommApi } from "./commApi.js";
+import { registerTeamApi } from "./teamApi.js";
 import { registerNotesApi } from "./notesApi.js";
 import { registerWorkspacesApi } from "./workspacesApi.js";
 import { registerFloorsApi } from "./floorsApi.js";
@@ -171,11 +172,20 @@ registerCommApi({ fastify, sessions, canvas, nodeApi });
 registerNotesApi({ fastify, canvas, nodeApi });
 const floors = new FloorStore(dataDir, (id) => projects.find((p) => p.id === id)?.repoPath ?? null, writeJsonAtomic);
 registerFloorsApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, floors, nodeApi });
+registerTeamApi({
+  fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, dataDir, nodeApi, floors,
+  settings: {
+    readGlobal: () => readGlobalSettings(),
+    writeGlobal: (s) => writeJsonAtomic(globalSettingsFile, s),
+    readProject: (id) => readProjectSettings(id),
+    writeProject: (id, s) => writeJsonAtomic(projectSettingsFile(id), s),
+  },
+});
 const projectRepo = (id: string) => projects.find((p) => p.id === id)?.repoPath ?? null;
 export const portals = registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAuthorized });
 const { createFloorFor } = registerWorktreeApi({ fastify, sessions, canvas, projectRepo });
 registerRolesApi({ fastify, canvas, projectRepo, createFloorFor });
-const routines = registerRoutinesApi({ fastify, sessions, canvas, projectRepo, projectName: (id) => projects.find((p) => p.id === id)?.name, dataDir, typeAndWait, isChatBusy: (p, n) => chatBusy.has(`${p}:${n}`) });
+const routines = registerRoutinesApi({ fastify, sessions, canvas, projectRepo, projectName: (id) => projects.find((p) => p.id === id)?.name, floorCwd: (p, n, nodes) => floors.cwdForNode(p, n, nodes), dataDir, typeAndWait, isChatBusy: (p, n) => chatBusy.has(`${p}:${n}`) });
 registerFilesApi({ fastify, projectRepo });
 registerWorkspacesApi({ fastify, canvas, projects, saveProjects, dataDir, writeJson: writeJsonAtomic, floors, nodeApi });
 

@@ -27,6 +27,7 @@ import { PresenceLayer } from "./PresenceUI";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
 import NoteStackNode from "./NoteStackNode";
+import BandNode from "./BandNode";
 import { CanvasOpsContext } from "@/lib/canvasOps";
 import PortalNode, { PortalNodeData } from "./PortalNode";
 import {
@@ -237,6 +238,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       agentTerminal: AgentTerminalNode as any,
       stickyNote: StickyNoteNode as any,
       noteStack: NoteStackNode as any,
+      band: BandNode as any,
       portal: PortalNode as any,
       fileTree: FileTreeNode as any,
       diff: DiffNode as any,
@@ -655,7 +657,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     const {
       chat, chatBusy, worktree, branch, worktreePath, ...data
     } = (src.data || {}) as Record<string, unknown>;
-    const prefix = ({ agentTerminal: "agent", stickyNote: "note", noteStack: "stack", fileTree: "files", diff: "diff" } as Record<string, string>)[String(src.type)] ?? "portal";
+    const prefix = ({ agentTerminal: "agent", stickyNote: "note", noteStack: "stack", band: "band", fileTree: "files", diff: "diff" } as Record<string, string>)[String(src.type)] ?? "portal";
     const copy: Node<any> = {
       id: `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
       type: src.type,

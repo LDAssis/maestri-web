@@ -19,7 +19,7 @@ const COLOR_RE = /^#[0-9a-f]{6}$/i;
 const DEFAULT_COLOR = "#007AFF";
 const DEFAULT_ICON = "person.text.rectangle";
 
-const rolesDir = (repo: string) => path.join(repo, ".maestri", "roles");
+export const rolesDir = (repo: string) => path.join(repo, ".maestri", "roles");
 
 // Mesmo formato do app nativo: <repo>/.maestri/roles/<uuid minúsculo>/role.json com id em maiúsculas
 export function readRole(repo: string, roleId: string): Obj | null {
@@ -34,7 +34,7 @@ export function readRole(repo: string, roleId: string): Obj | null {
   }
 }
 
-function writeRole(repo: string, role: Obj) {
+export function writeRole(repo: string, role: Obj) {
   const dir = path.join(rolesDir(repo), String(role.id).toLowerCase());
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, "role.json");
@@ -43,7 +43,7 @@ function writeRole(repo: string, role: Obj) {
   fs.renameSync(tmp, file);
 }
 
-function listRoles(repo: string): Obj[] {
+export function listRoles(repo: string): Obj[] {
   let dirs: fs.Dirent[] = [];
   try {
     dirs = fs.readdirSync(rolesDir(repo), { withFileTypes: true });
@@ -133,7 +133,7 @@ export function registerRolesApi({ fastify, canvas, projectRepo, createFloorFor 
 
   // Cria o nó de agente; a sessão nasce quando o navegador anexa (initialCmd = defaultCmd)
   fastify.post("/api/projects/:p/agents", wrap(async ({ projectId, repo }, req, reply) => {
-    const { title, preset, cmd, roleId, position, worktree, floor } = req.body ?? {};
+    const { title, preset, cmd, roleId, position, worktree, floor, isMaestro, chatFirst, presetName } = req.body ?? {};
     if (typeof title !== "string" || !title.trim() || title.trim().length > 64) throw new ApiError(400, "Título: 1 a 64 caracteres.");
     if (typeof preset !== "string" || !Object.hasOwn(PRESETS, preset)) throw new ApiError(400, `preset inválido (${Object.keys(PRESETS).join(", ")}).`);
     if (cmd !== undefined && !validCmd(cmd)) throw new ApiError(400, "Comando inválido.");
@@ -141,7 +141,8 @@ export function registerRolesApi({ fastify, canvas, projectRepo, createFloorFor 
     const role = roleId === undefined || roleId === null ? null : roleOr404(repo, roleId);
 
     const id = `agent-${crypto.randomUUID().slice(0, 8)}`;
-    let defaultCmd = (cmd?.trim() || PRESETS[preset]).trim();
+    const baseCmd = (cmd?.trim() || PRESETS[preset]).trim();
+    let defaultCmd = baseCmd;
     if (role) defaultCmd = withRolePrompt(repo, id, defaultCmd, role.prompt);
 
     const nodes: Obj[] = canvas.state(projectId).nodes ?? [];
@@ -151,7 +152,7 @@ export function registerRolesApi({ fastify, canvas, projectRepo, createFloorFor 
       type: "agentTerminal",
       position: position ? { x: position.x, y: position.y } : freePosition(nodes, ref, SIZES.agentTerminal),
       style: { width: 460, height: 330 },
-      data: { title: title.trim(), preset, ...(role && { roleId: role.id }), role: role?.name ?? PRESET_LABELS[preset], status: "idle", defaultCmd, ...(typeof floor === "string" && floor.trim() && floor.trim().length <= 60 && floor.trim().toLowerCase() !== "ground" && { floor: floor.trim() }) },
+      data: { title: title.trim(), preset, ...(role && { roleId: role.id }), role: role?.name ?? PRESET_LABELS[preset], status: "idle", baseCmd, defaultCmd, ...(typeof presetName === "string" && presetName && { presetName }), ...(isMaestro === true && { isMaestro: true }), ...(chatFirst === true && { chatFirst: true }), ...(typeof floor === "string" && floor.trim() && floor.trim().length <= 60 && floor.trim().toLowerCase() !== "ground" && { floor: floor.trim() }) },
     };
     canvas.applyAndBroadcast(projectId, { kind: "upsertNodes", nodes: [node] }, "agents");
 
