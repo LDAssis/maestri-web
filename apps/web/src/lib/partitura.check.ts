@@ -84,9 +84,19 @@ const dirty = parsePartitura(JSON.stringify({ ...good, nodes: [{ ...dup, type: "
 assert.ok(dirty.ok && dirty.partitura.nodes[0].data.status === "idle" && !("chat" in dirty.partitura.nodes[0].data) && !("branch" in dirty.partitura.nodes[0].data));
 
 // lista de tipos extensível
-assert.deepEqual(PARTITURA_NODE_TYPES, ["agentTerminal", "stickyNote", "portal"]);
-PARTITURA_NODE_TYPES.push("fileTree");
-assert.ok(parsePartitura(JSON.stringify({ ...good, nodes: [{ ...dup, type: "fileTree" }] })).ok);
+assert.deepEqual(PARTITURA_NODE_TYPES, ["agentTerminal", "stickyNote", "portal", "fileTree", "diff"]);
+PARTITURA_NODE_TYPES.push("outro");
+assert.ok(parsePartitura(JSON.stringify({ ...good, nodes: [{ ...dup, type: "outro" }] })).ok);
 PARTITURA_NODE_TYPES.pop();
+
+// fileTree/diff: andares são locais -> limpos na exportação e na importação
+const ft = { id: "t", type: "fileTree", position: { x: 5, y: 5 }, data: { title: "Arquivos", root: "meu-andar" } };
+const df = { id: "d", type: "diff", position: { x: 9, y: 9 }, data: { title: "Diff", worktree: "meu-andar", status: "x" } };
+const pf = serializePartitura("x", [ft, df], []);
+assert.equal(pf.nodes[0].data.root, "main");
+assert.ok(!("worktree" in pf.nodes[1].data) && pf.nodes[1].data.title === "Diff");
+const back = parsePartitura(JSON.stringify({ ...good, nodes: [ft, df] }));
+assert.ok(back.ok && back.partitura.nodes[0].data.root === "main" && !("worktree" in back.partitura.nodes[1].data));
+assert.equal(ft.data.root, "meu-andar", "entrada não é mutada");
 
 console.log("partitura.check: OK");

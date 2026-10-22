@@ -35,10 +35,12 @@ import {
   partituraFileName,
   serializePartitura,
 } from "@/lib/partitura";
+import FileTreeNode, { FileTreeNodeData } from "./FileTreeNode";
+import DiffNode, { DiffNodeData } from "./DiffNode";
 import NewAgentSheet from "./NewAgentSheet";
 import RolesPanel from "./RolesPanel";
 import { CommandPalette, ContextMenu, ShortcutsHelp, MenuState } from "./CanvasOverlays";
-import { Download, Upload, Plus, UserCog, RefreshCw, StickyNote, Globe, Bell } from "lucide-react";
+import { Download, Upload, Plus, UserCog, RefreshCw, StickyNote, Globe, FolderTree, FileDiff, Bell } from "lucide-react";
 
 interface MaestriCanvasProps {
   projectId: string;
@@ -229,6 +231,8 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       agentTerminal: AgentTerminalNode as any,
       stickyNote: StickyNoteNode as any,
       portal: PortalNode as any,
+      fileTree: FileTreeNode as any,
+      diff: DiffNode as any,
     }),
     []
   );
@@ -586,7 +590,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     const {
       chat, chatBusy, worktree, branch, worktreePath, ...data
     } = (src.data || {}) as Record<string, unknown>;
-    const prefix = String(src.type === "agentTerminal" ? "agent" : src.type === "stickyNote" ? "note" : "portal");
+    const prefix = ({ agentTerminal: "agent", stickyNote: "note", fileTree: "files", diff: "diff" } as Record<string, string>)[String(src.type)] ?? "portal";
     const copy: Node<any> = {
       id: `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
       type: src.type,
@@ -673,6 +677,30 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const addFileTree = (at?: { x: number; y: number }) => {
+    const newNode: Node<FileTreeNodeData> = {
+      id: `files-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+      type: "fileTree",
+      position: at ?? getSpawnPosition(320, 420),
+      style: { width: 320, height: 420 },
+      data: { title: "Arquivos", root: "main" },
+    };
+    setNodes((nds) => [...nds, newNode]);
+    sendOp({ kind: "upsertNodes", nodes: [newNode] });
+  };
+
+  const addDiff = (at?: { x: number; y: number }) => {
+    const newNode: Node<DiffNodeData> = {
+      id: `diff-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+      type: "diff",
+      position: at ?? getSpawnPosition(520, 380),
+      style: { width: 520, height: 380 },
+      data: { title: "Diff", worktree: "" },
+    };
+    setNodes((nds) => [...nds, newNode]);
+    sendOp({ kind: "upsertNodes", nodes: [newNode] });
+  };
+
   const resetToDefault = () => {
     if (!window.confirm("Restaurar o arranjo padrão? Isso substitui o canvas para todos os usuários.")) return;
     applyRemoteOp({ kind: "replace", ...defaultPartituraFullstack });
@@ -705,6 +733,22 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         >
           <Globe className="h-3.5 w-3.5" />
           Novo Portal Web
+        </button>
+
+        <button
+          onClick={() => addFileTree()}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-medium transition"
+        >
+          <FolderTree className="h-3.5 w-3.5" />
+          Arquivos
+        </button>
+
+        <button
+          onClick={() => addDiff()}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-700 hover:bg-purple-600 text-white text-xs font-medium transition"
+        >
+          <FileDiff className="h-3.5 w-3.5" />
+          Diff
         </button>
 
         <button
@@ -812,6 +856,8 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
             { label: "Novo agente", run: () => addAgent() },
             { label: "Nova nota", run: () => addStickyNote() },
             { label: "Novo portal", run: () => addPortal() },
+            { label: "Nova árvore de arquivos", run: () => addFileTree() },
+            { label: "Novo diff", run: () => addDiff() },
             { label: "Exportar partitura", run: () => exportPartitura() },
             { label: "Importar partitura", run: openImport },
           ]}
@@ -835,7 +881,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         <ContextMenu
           menu={menu}
           onClose={() => setMenu(null)}
-          onAdd={(kind, at) => (kind === "agent" ? addAgent(at) : kind === "note" ? addStickyNote(at) : addPortal(at))}
+          onAdd={(kind, at) => (kind === "agent" ? addAgent(at) : kind === "note" ? addStickyNote(at) : kind === "fileTree" ? addFileTree(at) : kind === "diff" ? addDiff(at) : addPortal(at))}
           onDuplicate={duplicateNode}
           onExport={exportPartitura}
           onImport={openImport}
@@ -906,6 +952,10 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
               ? "#f59e0b"
               : n.type === "portal"
               ? "#06b6d4"
+              : n.type === "fileTree"
+              ? "#10b981"
+              : n.type === "diff"
+              ? "#a855f7"
               : "#6366f1"
           }
           className="!bg-slate-950/80 !border !border-slate-800 !rounded-xl overflow-hidden"

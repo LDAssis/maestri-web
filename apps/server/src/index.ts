@@ -13,6 +13,7 @@ import { CanvasStore } from "./canvas.js";
 import { PresenceHub } from "./presence.js";
 import { registerNodeApi, typeAndWait, chatBusy } from "./nodeApi.js";
 import { registerRoutinesApi } from "./routines.js";
+import { registerFilesApi } from "./files.js";
 
 // Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
 process.on("uncaughtException", (err) => {
@@ -151,6 +152,7 @@ const projectRepo = (id: string) => projects.find((p) => p.id === id)?.repoPath 
 const { createFloorFor } = registerWorktreeApi({ fastify, sessions, canvas, projectRepo });
 registerRolesApi({ fastify, canvas, projectRepo, createFloorFor });
 const routines = registerRoutinesApi({ fastify, sessions, canvas, projectRepo, dataDir, typeAndWait, isChatBusy: (p, n) => chatBusy.has(`${p}:${n}`) });
+registerFilesApi({ fastify, projectRepo });
 
 // Endpoints de Projetos
 fastify.get("/api/projects", async () => {

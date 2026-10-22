@@ -5,6 +5,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import type { SessionManager } from "./sessions.js";
 import { ApiError } from "./agents.js";
+import { safeRelPath } from "./files.js";
 
 type Obj = Record<string, any>;
 
@@ -113,7 +114,7 @@ export function registerWorktreeApi({ fastify, sessions, canvas, projectRepo }: 
           ahead,
           behind,
           changed: lines(status).length,
-          nodeIds: nodes.filter((n) => n.data?.worktree === w.name).map((n) => n.id),
+          nodeIds: nodes.filter((n) => n.type === "agentTerminal" && n.data?.worktree === w.name).map((n) => n.id),
         };
       }),
     );
@@ -167,6 +168,13 @@ export function registerWorktreeApi({ fastify, sessions, canvas, projectRepo }: 
     } catch (e: any) {
       throw new ApiError(500, `Falha ao criar o andar: ${e.message}`);
     }
+    // Repos sem .gitignore para .worktrees: esconde os andares do status/ls-files do principal
+    const exclude = path.resolve(c.repo, (await git(c.repo, ["rev-parse", "--git-path", "info/exclude"])).trim());
+    const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
+    if (!/^\/?\.worktrees\/?$/m.test(cur)) {
+      fs.mkdirSync(path.dirname(exclude), { recursive: true });
+      fs.appendFileSync(exclude, `${cur && !cur.endsWith("\n") ? "\n" : ""}/.worktrees/\n`);
+    }
 
     canvas.applyAndBroadcast(c.projectId, { kind: "patchNodeData", id: node.id, data: { worktree: name, branch, worktreePath: wtPath } }, "worktrees");
     sessions.restart(c.projectId, node.id, wtPath);
@@ -184,21 +192,30 @@ export function registerWorktreeApi({ fastify, sessions, canvas, projectRepo }: 
     const name = validName(req.params.name);
     const { w, baseName } = await find(c, name);
     const mergeBase = (await git(w.path, ["merge-base", baseName, "HEAD"])).trim();
+    // ?path= opcional: restringe lista e patch a um arquivo
+    let spec: string[] = [];
+    if (req.query?.path !== undefined) {
+      try {
+        spec = ["--", `:(literal)${safeRelPath(req.query.path)}`];
+      } catch (e: any) {
+        throw new ApiError(400, e.message);
+      }
+    }
 
     const files: { path: string; status: string; additions: number; deletions: number }[] = [];
-    const statuses = (await git(w.path, ["diff", "--no-renames", "--name-status", "-z", mergeBase])).split("\0").filter(Boolean);
+    const statuses = (await git(w.path, ["diff", "--no-renames", "--name-status", "-z", mergeBase, ...spec])).split("\0").filter(Boolean);
     for (let i = 0; i + 1 < statuses.length; i += 2) {
       const s = statuses[i][0];
       files.push({ path: statuses[i + 1], status: FILE_STATUS.has(s) ? s : "M", additions: 0, deletions: 0 });
     }
-    for (const row of (await git(w.path, ["diff", "--no-renames", "--numstat", "-z", mergeBase])).split("\0").filter(Boolean)) {
+    for (const row of (await git(w.path, ["diff", "--no-renames", "--numstat", "-z", mergeBase, ...spec])).split("\0").filter(Boolean)) {
       const [a, d, ...p] = row.split("\t");
       const f = files.find((x) => x.path === p.join("\t"));
       if (f) Object.assign(f, { additions: Number(a) || 0, deletions: Number(d) || 0 });
     }
 
-    let patch = await git(w.path, ["diff", "--no-renames", mergeBase]);
-    for (const p of (await git(w.path, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean)) {
+    let patch = await git(w.path, ["diff", "--no-renames", mergeBase, ...spec]);
+    for (const p of (await git(w.path, ["ls-files", "--others", "--exclude-standard", "-z", ...spec])).split("\0").filter(Boolean)) {
       // --no-index sai com 1 quando há diferença: o patch vem em stdout
       const one = await git(w.path, ["diff", "--no-index", "--", "/dev/null", p]).catch((e: GitError) => (e.code === 1 ? e.stdout : ""));
       files.push({ path: p, status: "?", additions: lines(one).filter((l) => l.startsWith("+") && !l.startsWith("+++")).length, deletions: 0 });

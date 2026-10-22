@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Node } from "@xyflow/react";
-import { Search, Bot, StickyNote, Globe, Plus } from "lucide-react";
+import { Search, Bot, StickyNote, Globe, Plus, FolderTree, FileDiff } from "lucide-react";
 
 export const NOTE_COLORS = ["amber", "indigo", "emerald", "rose"] as const;
 export const NOTE_DOT: Record<string, string> = {
@@ -12,7 +12,7 @@ export const NOTE_DOT: Record<string, string> = {
   rose: "bg-rose-400",
 };
 
-const TYPE_LABEL: Record<string, string> = { agentTerminal: "agente", stickyNote: "nota", portal: "portal" };
+const TYPE_LABEL: Record<string, string> = { agentTerminal: "agente", stickyNote: "nota", portal: "portal", fileTree: "arquivos", diff: "diff" };
 
 // Devolve o foco ao elemento que o tinha antes do overlay abrir
 // Captura o foco no render (antes do autoFocus do commit) e o devolve ao desmontar — só se o foco
@@ -167,7 +167,7 @@ export function ContextMenu({
 }: {
   menu: MenuState;
   onClose: () => void;
-  onAdd: (kind: "agent" | "note" | "portal", at: { x: number; y: number }) => void;
+  onAdd: (kind: "agent" | "note" | "portal" | "fileTree" | "diff", at: { x: number; y: number }) => void;
   onDuplicate: (id: string) => void;
   onExport: (nodeId?: string) => void;
   onImport: () => void;
@@ -235,6 +235,8 @@ export function ContextMenu({
             <button role="menuitem" className={item} onClick={act(() => onAdd("agent", menu.flow))}><Bot className="h-3 w-3" />Novo agente</button>
             <button role="menuitem" className={item} onClick={act(() => onAdd("note", menu.flow))}><StickyNote className="h-3 w-3" />Nova nota</button>
             <button role="menuitem" className={item} onClick={act(() => onAdd("portal", menu.flow))}><Globe className="h-3 w-3" />Novo portal</button>
+            <button role="menuitem" className={item} onClick={act(() => onAdd("fileTree", menu.flow))}><FolderTree className="h-3 w-3" />Nova árvore de arquivos</button>
+            <button role="menuitem" className={item} onClick={act(() => onAdd("diff", menu.flow))}><FileDiff className="h-3 w-3" />Novo diff</button>
             <button role="menuitem" className={item} onClick={act(() => onExport())}>Exportar partitura</button>
             <button role="menuitem" className={item} onClick={act(onImport)}>Importar partitura</button>
           </>

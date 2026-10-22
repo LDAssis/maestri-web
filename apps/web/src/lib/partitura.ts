@@ -6,7 +6,7 @@ export const PARTITURA_VERSION = 1;
 export const MAX_PARTITURA_BYTES = 2 * 1024 * 1024;
 
 // Tipos de nó aceitos na importação; novos tipos (ex.: fileTree, diff) entram só aqui
-export const PARTITURA_NODE_TYPES: string[] = ["agentTerminal", "stickyNote", "portal"];
+export const PARTITURA_NODE_TYPES: string[] = ["agentTerminal", "stickyNote", "portal", "fileTree", "diff"];
 
 // Estado efêmero/pessoal que nunca viaja na partitura
 const EPHEMERAL_DATA_KEYS = ["chat", "chatBusy", "worktree", "branch", "worktreePath"];
@@ -51,6 +51,9 @@ function cleanNode(n: Record<string, any>, position: { x: number; y: number }): 
   for (const k of EPHEMERAL_DATA_KEYS) delete data[k];
   if (n.type === "agentTerminal") data.status = "idle";
   else delete data.status;
+  // Andares são locais: o diff perde o andar e a árvore volta para a raiz principal
+  if (n.type === "diff") delete data.worktree;
+  if (n.type === "fileTree") data.root = "main";
   const out: Record<string, any> = { ...n, position, data };
   for (const k of EPHEMERAL_NODE_KEYS) delete out[k];
   return out as PartituraNode;

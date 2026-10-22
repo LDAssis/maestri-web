@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { FolderGit2, GitBranch, GitMerge, Trash2, FileDiff, RefreshCw, AlertTriangle } from "lucide-react";
 import { apiFetch, wsUrl } from "@/lib/api";
+import DiffView, { Diff } from "./DiffView";
 
 interface Worktree {
   name: string;
@@ -13,48 +14,6 @@ interface Worktree {
   behind: number;
   changed: number;
   nodeIds: string[];
-}
-
-interface DiffFile {
-  path: string;
-  status: "A" | "M" | "D" | "R" | "?";
-  additions: number;
-  deletions: number;
-}
-
-interface Diff {
-  base: string;
-  files: DiffFile[];
-  patch: string;
-  truncated?: boolean;
-}
-
-const STATUS_COLOR: Record<string, string> = {
-  A: "text-emerald-400",
-  "?": "text-emerald-400",
-  M: "text-amber-300",
-  D: "text-rose-400",
-  R: "text-sky-300",
-};
-
-function lineClass(l: string) {
-  if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("diff ") || l.startsWith("index ")) return "text-slate-500";
-  if (l.startsWith("@@")) return "text-sky-300 bg-sky-950/40";
-  if (l.startsWith("+")) return "text-emerald-300 bg-emerald-950/40";
-  if (l.startsWith("-")) return "text-rose-300 bg-rose-950/40";
-  return "text-slate-300";
-}
-
-function PatchView({ patch }: { patch: string }) {
-  return (
-    <pre className="font-mono text-[11px] leading-4 overflow-auto max-h-[55vh] rounded-lg border border-slate-800 bg-black/50 py-1">
-      {patch.split("\n").map((l, i) => (
-        <div key={i} className={`px-2 whitespace-pre ${lineClass(l)}`}>
-          {l || " "}
-        </div>
-      ))}
-    </pre>
-  );
 }
 
 export default function WorktreesPanel({
@@ -75,7 +34,6 @@ export default function WorktreesPanel({
   const [diffName, setDiffName] = useState<string | null>(null);
   const [diff, setDiff] = useState<Diff | null>(null);
   const [diffError, setDiffError] = useState("");
-  const [fileSel, setFileSel] = useState<string | null>(null);
   // confirmação inline por andar: land / delete / force-delete
   const [confirm, setConfirm] = useState<{ name: string; kind: "land" | "delete" | "force" } | null>(null);
   const [landMsg, setLandMsg] = useState("");
@@ -165,7 +123,6 @@ export default function WorktreesPanel({
     (name: string) => {
       setDiffName(name);
       setDiff(null);
-      setFileSel(null);
       loadDiff(name);
     },
     [loadDiff]
@@ -209,12 +166,6 @@ export default function WorktreesPanel({
     if (status === 409 && !force) setConfirm({ name, kind: "force" });
   };
 
-  const sections = diff ? diff.patch.split(/^(?=diff --git )/m).filter(Boolean) : [];
-  const shownPatch = !diff
-    ? ""
-    : fileSel
-      ? sections.filter((s) => s.split("\n", 1)[0].endsWith(`b/${fileSel}`)).join("") || diff.patch
-      : diff.patch;
   const btn = "px-2 py-1 rounded-md text-[11px] font-medium transition disabled:opacity-40";
 
   return (
@@ -332,34 +283,8 @@ export default function WorktreesPanel({
               )}
 
               {diffName === w.name && (
-                <div className="mt-3 space-y-2">
-                  {diffError && <div role="alert" className="text-[11px] text-rose-300">{diffError}</div>}
-                  {!diff && !diffError && <div className="text-[11px] text-slate-500 font-mono">Carregando diff…</div>}
-                  {diff && diff.files.length === 0 && <div className="text-[11px] text-slate-500">Sem diferenças em relação a {diff.base}.</div>}
-                  {diff && diff.files.length > 0 && (
-                    <>
-                      <div className="flex flex-wrap gap-1">
-                        <button
-                          onClick={() => setFileSel(null)}
-                          className={`${btn} ${fileSel === null ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700"}`}
-                        >
-                          Todos ({diff.files.length})
-                        </button>
-                        {diff.files.map((f) => (
-                          <button
-                            key={f.path}
-                            onClick={() => setFileSel(f.path)}
-                            className={`${btn} font-mono ${fileSel === f.path ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700"}`}
-                          >
-                            <span className={STATUS_COLOR[f.status]}>{f.status}</span> {f.path}{" "}
-                            <span className="text-emerald-400">+{f.additions}</span> <span className="text-rose-400">-{f.deletions}</span>
-                          </button>
-                        ))}
-                      </div>
-                      <PatchView patch={shownPatch} />
-                      {diff.truncated && <div className="text-[11px] text-amber-300">Patch truncado em 500 KB.</div>}
-                    </>
-                  )}
+                <div className="mt-3">
+                  <DiffView diff={diff} error={diffError} />
                 </div>
               )}
             </div>
