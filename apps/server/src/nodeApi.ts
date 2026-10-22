@@ -206,17 +206,7 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
 
   // Rotas de nota (read/write/append/edit/delete/create/stack) vivem em notesApi.ts
 
-  fastify.post(`${base}/portal-navigate`, wrap((c, req) => {
-    const t = resolveTarget(c, req.body?.target, "portal");
-    let href = "";
-    try {
-      const u = new URL(String(req.body?.url ?? ""));
-      if (u.protocol === "http:" || u.protocol === "https:") href = u.href;
-    } catch {}
-    if (!href) throw new ApiError(400, "URL inválida (apenas http/https).");
-    patch(c, t.id, { url: href });
-    return { ok: true, url: href };
-  }));
+  // portal-navigate (e os demais verbos de portal) vivem em portalApi.ts
 
   fastify.post(`${base}/recruit`, wrap((c, req) => {
     requireMaestro(c, "recrutar");
