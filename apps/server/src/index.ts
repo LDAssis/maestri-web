@@ -188,7 +188,7 @@ registerAttachmentsApi({ fastify, nodeApi, attachments, projectRepo: (id) => pro
 registerCommApi({ fastify, sessions, canvas, nodeApi, attachments });
 registerNotesApi({ fastify, canvas, nodeApi });
 const floors = new FloorStore(dataDir, (id) => projects.find((p) => p.id === id)?.repoPath ?? null, writeJsonAtomic);
-registerFloorsApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, floors, nodeApi });
+const floorsApi = registerFloorsApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, floors, nodeApi });
 registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds: () => projects.map((p) => p.id) });
 registerTeamApi({
   fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, dataDir, nodeApi, floors, accounts,
@@ -205,7 +205,7 @@ const { createFloorFor } = registerWorktreeApi({ fastify, sessions, canvas, proj
 registerRolesApi({ fastify, canvas, projectRepo, createFloorFor });
 const routines = registerRoutinesApi({ fastify, sessions, canvas, projectRepo, projectName: (id) => projects.find((p) => p.id === id)?.name, floorCwd: (p, n, nodes) => floors.cwdForNode(p, n, nodes), dataDir, typeAndWait, isChatBusy: (p, n) => chatBusy.has(`${p}:${n}`) });
 registerFilesApi({ fastify, projectRepo });
-registerWorkspacesApi({ fastify, canvas, projects, saveProjects, dataDir, writeJson: writeJsonAtomic, floors, nodeApi });
+registerWorkspacesApi({ fastify, canvas, projects, saveProjects, dataDir, writeJson: writeJsonAtomic, floors, nodeApi, createFloor: floorsApi.createFloor as any });
 
 // Endpoints de Projetos
 

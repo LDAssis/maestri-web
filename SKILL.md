@@ -160,3 +160,17 @@ maestri recruit --replace "Hawk" --account "Default"                            
 maestri preset create "Claude Work" --command claude --account "Work"                      # preset que já nasce na conta
 ```
 Depois de recrutar numa conta nova, o login é feito rodando o CLI naquele terminal. `maestri preset list` mostra `accounts: "Default", "Work"`; `maestri list` mostra `[conta: Work]`.
+
+## Mensagem "Novo andar" (`<maestri-create-floor skill="maestri-workspace" />`)
+Um prompt que começa com `<maestri-create-floor skill="maestri-workspace" />` vem da ação **Novo andar** do chat do agente: a pessoa
+quer um andar para a tarefa descrita. Como reagir (você precisa ser o Maestro; senão avise que não pode criar andares):
+1. Crie o andar com `maestri floor create "<nome da tarefa em poucas palavras>"` (a branch segue o nome), sem outras flags a menos
+   que o prompt peça. Quando a tarefa for **revisar um pull request**, use `maestri floor create --pull-request <número|link>` em vez de um nome.
+2. Se o prompt também pedir o trabalho, **recrute alguém no andar** (`maestri recruit "Nome" --floor "<andar>" --role "..."`) em vez de
+   fazer você mesmo, e termine o prompt dele com a linha de ask-back.
+3. Responda (`maestri say`, se o prompt veio do chat) com o **nome do andar e a branch**.
+
+Andares de PR: o seletor de andar mostra o PR (estado, review, checks), mescla com `gh pr merge` (merge, squash ou rebase; com checks
+falhando/pendentes pede confirmação) e passa a seguir sozinho o PR aberto para a branch do andar (detecção pelo `gh pr list --head`).
+`maestri workspace create --from` recria os andares git do origem como andares git no destino (a resposta lista o que caiu para sem git).
+`maestri arrange` também aceita uma banda (Maestro): nome, ícone e cor. `maestri note create` põe a nota à esquerda do seu terminal.

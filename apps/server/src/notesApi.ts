@@ -4,6 +4,7 @@ import type { NodeApi } from "./nodeApi.js";
 import { isText, lc } from "./nodeApi.js";
 import { ApiError, SIZES, freePosition } from "./agents.js";
 import { newNodeData } from "./floors.js";
+import { isBand, myBands } from "./team.js";
 
 type Obj = Record<string, any>;
 
@@ -153,7 +154,7 @@ export function registerNotesApi({ fastify, canvas, nodeApi }: Deps) {
     const finalTitle = uniqueTitle(c.nodes, "stickyNote", base0);
     const id = `note-${crypto.randomUUID().slice(0, 8)}`;
     const node = {
-      id, type: "stickyNote", position: freePosition(visible(c), c.me, SIZES.stickyNote), style: { width: 280, height: 200 },
+      id, type: "stickyNote", position: freePosition(visible(c), c.me, SIZES.stickyNote, "left"), style: { width: 280, height: 200 },
       data: {
         title: finalTitle, color: color ?? "amber", author: `🤖 ${nt(c.me)}`, content, ...newNodeData(c.me),
         ...(pinned ? { pinnedName: true } : { autoTitle: true }),
@@ -199,7 +200,10 @@ export function registerNotesApi({ fastify, canvas, nodeApi }: Deps) {
 
   fastify.get(`${base}/arrange`, wrap((c: Ctx) => {
     const list = [c.me, ...c.reach.notes.map((r) => r.node), ...c.reach.stacks];
-    if (c.me.data?.isMaestro === true) list.push(...c.connected.filter((n) => n.type === "agentTerminal"));
+    if (c.me.data?.isMaestro === true) {
+      list.push(...c.connected.filter((n) => n.type === "agentTerminal"));
+      list.push(...myBands(c.nodes, c.edges, c.me.id));
+    }
     return { items: list.map(styleOf), icons: ICONS, colors: COLORS };
   }));
 
@@ -212,9 +216,12 @@ export function registerNotesApi({ fastify, canvas, nodeApi }: Deps) {
     // Sem alvo = o próprio nó
     if (target !== undefined && (!isText(target, 200) || !target.trim())) throw new ApiError(400, "Informe o nome do alvo.");
     const self = target === undefined || lc(target) === lc(nt(c.me));
-    const t = self ? c.me : resolveTarget(c, target);
+    // Banda (só Maestro): resolve entre as bandas a que pertenço ou estou ligado
+    const bandHit = self ? undefined : myBands(c.nodes, c.edges, c.me.id).find((b) => lc(nt(b)) === lc(target));
+    const t = self ? c.me : bandHit ?? resolveTarget(c, target);
     if (!self && t.type === "agentTerminal") requireMaestro(c, "alterar o estilo de outro agente");
-    if (!["agentTerminal", "stickyNote", "noteStack"].includes(t.type)) throw new ApiError(400, "Só agentes, notas e fichários aceitam arrange.");
+    if (isBand(t)) requireMaestro(c, "alterar o estilo de uma banda");
+    if (!["agentTerminal", "stickyNote", "noteStack", "band"].includes(t.type)) throw new ApiError(400, "Só agentes, notas, fichários e bandas aceitam arrange.");
     const data: Obj = {};
     if (icon !== undefined) data.icon = icon;
     if (color !== undefined) data.color = color;

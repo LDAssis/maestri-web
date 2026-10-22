@@ -2,12 +2,15 @@
 
 import React, { useState } from "react";
 import { Settings, Plus, Trash2, Check, X, Play } from "lucide-react";
+import PresetLookFields from "./PresetLookFields";
+import { randomPresetLook } from "./palette";
 
 export interface CliPreset {
   id: string;
   label: string;
   cmd: string;
   color?: string;
+  icon?: string;
 }
 
 export const DEFAULT_CLI_PRESETS: CliPreset[] = [
@@ -48,7 +51,7 @@ export default function CliConfigModal({
     const newId = `cli-${Date.now().toString().slice(-4)}`;
     setPresets((prev) => [
       ...prev,
-      { id: newId, label: newLabel.trim(), cmd: newCmd.trim(), color: "indigo" },
+      { id: newId, label: newLabel.trim(), cmd: newCmd.trim(), ...randomPresetLook(newCmd) },
     ]);
     setNewLabel("");
     setNewCmd("");
@@ -169,6 +172,7 @@ export default function CliConfigModal({
                   placeholder="comando CLI"
                   title="Comando disparado"
                 />
+                <PresetLookFields color={preset.color} icon={preset.icon} onChange={(patch) => setPresets((prev) => prev.map((p) => (p.id === preset.id ? { ...p, ...patch } : p)))} />
                 {onRunNow && (
                   <button
                     type="button"

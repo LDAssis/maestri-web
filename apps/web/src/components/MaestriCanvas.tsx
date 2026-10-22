@@ -46,6 +46,8 @@ import DrawingNode from "./DrawingNode";
 import { DrawToolbar, DrawingLayer, type DrawTool } from "./DrawingTools";
 import { useFloors, GROUND } from "@/lib/useFloors";
 import { FloorNavContext } from "@/lib/floorContext";
+import { systemNotify } from "@/lib/systemNotify";
+import SystemNotifyToggle from "./SystemNotifyToggle";
 import { hitStack, stackOps, uniqueStackTitle } from "@/lib/noteStack";
 import RolesPanel from "./RolesPanel";
 import { CommandPalette, ContextMenu, ShortcutsHelp, MenuState } from "./CanvasOverlays";
@@ -334,6 +336,8 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     const id = ++notifySeqRef.current;
     setNotifications((list) => [...list, { id, nodeId: from.nodeId, title: from.title, text }]);
     setTimeout(() => setNotifications((list) => list.filter((n) => n.id !== id)), 6000);
+    // Também como notificação do sistema (se o usuário permitiu)
+    systemNotify(from.title, text, `maestri-${from.nodeId}-${text.slice(0, 80)}`);
   }, []);
   const centerOnNode = (nodeId: string) => {
     const node = nodesRef.current.find((n) => n.id === nodeId);
@@ -976,6 +980,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
               </span>
             </button>
           ))}
+          <SystemNotifyToggle compact />
         </div>
       )}
 

@@ -29,3 +29,11 @@ export const ICON_MAP: Record<string, LucideIcon> = {
   wrench: Wrench, book: BookOpen, pen: PenTool, star: Star, heart: Heart, zap: Zap, flag: Flag,
   crown: Crown, sparkles: Sparkles, lightbulb: Lightbulb,
 };
+
+// Cor sorteada e ícone do CLI (quando conhecido; senão sorteado) para presets novos — espelha server/src/presetLook.ts
+const CLI_ICON: Record<string, string> = { claude: "sparkles", codex: "code", opencode: "terminal", agy: "rocket", gemini: "brain", aider: "pen", cursor: "wrench" };
+export function randomPresetLook(cmd: string, rnd: () => number = Math.random) {
+  const pick = <T,>(xs: readonly T[]) => xs[Math.min(xs.length - 1, Math.floor(rnd() * xs.length))];
+  const prog = cmd.trim().split(/\s+/)[0].split("/").pop() ?? "";
+  return { color: pick(ARRANGE_COLORS) as string, icon: CLI_ICON[prog] ?? pick(Object.keys(ICON_MAP)) };
+}

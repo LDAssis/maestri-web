@@ -2,7 +2,8 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useReactFlow } from "@xyflow/react";
-import { Send, AtSign, Trash2, AlertTriangle, Paperclip, X } from "lucide-react";
+import { Send, AtSign, Trash2, AlertTriangle, Paperclip, X, Layers } from "lucide-react";
+import { splitFloorMarker, withFloorMarker } from "@/lib/floorMarker";
 import { apiFetch } from "@/lib/api";
 import { Avatar, readUser } from "./EntryGate";
 import Markdown from "./Markdown";
@@ -196,9 +197,12 @@ export default function ChatFace({
     addFiles(files);
   };
 
+  // Ação "Novo andar": o prompt segue com o marcador no início e o agente cria o andar (skill maestri-workspace)
+  const [newFloor, setNewFloor] = useState(false);
   const send = async () => {
-    const text = input.trim();
-    if ((!text && !pending.length) || busy || uploading) return;
+    const typed = input.trim();
+    if ((!typed && !pending.length) || busy || uploading) return;
+    const text = newFloor && typed ? withFloorMarker(typed) : typed;
     setWarning("");
     try {
       const res = await apiFetch(`/api/projects/${projectId}/nodes/${nodeId}/chat`, {
@@ -214,6 +218,7 @@ export default function ChatFace({
       setInput("");
       setPending([]);
       setMentions([]);
+      setNewFloor(false);
       stickRef.current = true;
     } catch {
       setWarning("Servidor indisponível");
@@ -295,7 +300,15 @@ export default function ChatFace({
                 <span>{m.author?.name || "Usuário"}</span>
               </div>
               <div className="p-2.5 rounded-xl bg-indigo-600 text-white leading-relaxed whitespace-pre-wrap">
-                {m.text}
+                {(() => {
+                  const { marker, rest } = splitFloorMarker(m.text);
+                  return (
+                    <>
+                      {marker && <span className="mb-1 inline-flex items-center gap-1 rounded-md bg-indigo-900/70 px-1.5 py-0.5 text-[10px] font-semibold"><Layers className="h-3 w-3" />Novo andar</span>}
+                      {marker && rest ? <div>{rest}</div> : marker ? null : m.text}
+                    </>
+                  );
+                })()}
                 <Attachments projectId={projectId} items={m.attachments} text={m.text} />
               </div>
             </div>
@@ -392,6 +405,19 @@ export default function ChatFace({
         >
           <Paperclip className="h-3.5 w-3.5" />
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            setNewFloor((v) => !v);
+            inputRef.current?.focus();
+          }}
+          aria-pressed={newFloor}
+          className={`p-1 rounded hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400 ${newFloor ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-indigo-400"}`}
+          title="Novo andar: o agente cria um andar para a tarefa descrita"
+          aria-label="Novo andar"
+        >
+          <Layers className="h-3.5 w-3.5" />
+        </button>
         <textarea
           ref={inputRef}
           rows={1}
@@ -406,7 +432,7 @@ export default function ChatFace({
           aria-autocomplete="list"
           aria-expanded={mentions.length > 0}
           aria-controls="chat-mentions"
-          placeholder="Instrução (Enter envia, Shift+Enter quebra linha, @ menciona)"
+          placeholder={newFloor ? "Descreva a tarefa do novo andar (Enter envia)" : "Instrução (Enter envia, Shift+Enter quebra linha, @ menciona)"}
           className="nodrag flex-1 resize-none bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs leading-4 focus:outline-none focus:border-indigo-500"
         />
         <button

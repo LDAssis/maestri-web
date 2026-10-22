@@ -17,12 +17,12 @@ const sizeOf = (n: Obj): [number, number] => {
   return [Number(n.style?.width) || dw, Number(n.style?.height) || dh];
 };
 
-// Primeira posição livre (sem sobrepor), a mais próxima de "logo abaixo" do nó de referência
-export function freePosition(nodes: Obj[], ref: Obj, size: [number, number]) {
+// Primeira posição livre (sem sobrepor), a mais próxima de "logo abaixo" (ou "à esquerda") do nó de referência
+export function freePosition(nodes: Obj[], ref: Obj, size: [number, number], side: "below" | "left" = "below") {
   const [, rh] = sizeOf(ref);
   const rx = ref.position?.x ?? 0;
   const ry = ref.position?.y ?? 0;
-  const anchor = { x: rx, y: ry + rh + MARGIN };
+  const anchor = side === "left" ? { x: rx - size[0] - MARGIN, y: ry } : { x: rx, y: ry + rh + MARGIN };
   const step = 40;
   const candidates: { x: number; y: number }[] = [];
   for (let gx = -30; gx <= 30; gx++) {
