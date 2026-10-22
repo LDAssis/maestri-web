@@ -61,7 +61,8 @@ function useLiveSession(projectId: string, nodeId: string, enabled: boolean) {
         lastUrl = url;
       };
       ws.onclose = () => {
-        wsRef.current = null;
+        // Um socket antigo (ex.: efeito duplicado do StrictMode) não pode apagar a referência do novo
+        if (wsRef.current === ws) wsRef.current = null;
         if (closed) return;
         setStatus("offline");
         retry = setTimeout(connect, 2000);
