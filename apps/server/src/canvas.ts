@@ -158,6 +158,11 @@ export class CanvasStore {
     }
   }
 
+  // Mensagem avulsa (ex.: notify) para todos os clientes do projeto
+  notify(projectId: string, msg: unknown) {
+    this.broadcast(projectId, msg);
+  }
+
   // Aplica uma op vinda de fora do WS (ex.: POST /canvas) e transmite a todos
   applyAndBroadcast(projectId: string, op: any, from: string) {
     const res = this.apply(projectId, op);
