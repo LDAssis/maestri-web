@@ -16,11 +16,14 @@ const PRESETS = [
 export default function NewAgentSheet({
   projectId,
   position,
+  floor,
   onClose,
   onCreated,
 }: {
   projectId: string;
   position?: { x: number; y: number };
+  // Andar em que o agente nasce (ausente = Ground)
+  floor?: string;
   onClose: () => void;
   onCreated: (node: { id: string }) => void;
 }) {
@@ -74,6 +77,7 @@ export default function NewAgentSheet({
           ...(preset === "shell" && cmd.trim() && { cmd: cmd.trim() }),
           ...(roleId && { roleId }),
           ...(position && { position }),
+          ...(floor && { floor }),
           ...(worktree && { worktree: true }),
         }),
       });

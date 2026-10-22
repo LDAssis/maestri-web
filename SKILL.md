@@ -110,3 +110,19 @@ maestri routine show|edit|enable|disable|run|delete "Nome"                      
 maestri routine edit "Auditoria" --id a1b2c3 --daily 03:00                        # --id (prefixo) quando há nomes iguais
 ```
 Horários na hora local do servidor. O `--pre-run` roda no diretório do alvo e precisa sair com 0 (senão o disparo é pulado); `{{output}}` no comando vira o stdout. Por padrão o disparo é pulado se o terminal estiver ocupado (chat em andamento ou saída nos últimos 5s; `--no-skip-if-busy` desliga). `delete` é destrutivo: só a pedido do usuário.
+
+## Andares e workspaces
+Andares são níveis do canvas do projeto ("Ground" = térreo; cada nó tem `data.floor`). Com git, um andar é uma worktree na
+própria branch em `<repo>/.worktrees/<slug>` (terminais dele começam nesse checkout).
+```
+maestri floor list
+maestri floor status "Testes verdes" --progress 3/5          # qualquer agente, para o PRÓPRIO andar
+maestri floor status "Preciso de decisão" --state blocked    # blocked/review/done também avisam o usuário (toast)
+maestri floor create "Nome" [--branch B] [--existing-branch] [--no-git] [--copy-ground]   # só Maestro
+maestri floor land "Nome" [--into BRANCH] [--delete-branch] [--keep-floor]                # só Maestro, do térreo; só se o usuário pedir
+maestri floor delete "Nome" [--keep-branch] [--force]                                      # só Maestro, do térreo; só se o usuário pedir
+maestri floor unload "Nome"                                                                # só Maestro; não o seu andar
+maestri workspace list | create "Nome" --dir PATH [--from "Origem"] [--group G] [--folder F] | rename "A" "B" | move "Nome" --group G | --folder F | --root   # só Maestro
+```
+`floor land` recusa (sem alterar nada) se houver trabalho não commitado no andar ou no térreo, ou conflito de merge; peça ao
+agente do andar para commitar antes. Workspaces não têm delete pela CLI.

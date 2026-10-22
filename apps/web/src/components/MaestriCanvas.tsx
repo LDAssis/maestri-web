@@ -40,6 +40,8 @@ import {
 import FileTreeNode, { FileTreeNodeData } from "./FileTreeNode";
 import DiffNode, { DiffNodeData } from "./DiffNode";
 import NewAgentSheet from "./NewAgentSheet";
+import FloorSwitcher from "./FloorSwitcher";
+import { useFloors, GROUND } from "@/lib/useFloors";
 import RolesPanel from "./RolesPanel";
 import { CommandPalette, ContextMenu, ShortcutsHelp, MenuState } from "./CanvasOverlays";
 import { Download, Upload, Plus, UserCog, RefreshCw, StickyNote, Globe, FolderTree, FileDiff, Bell } from "lucide-react";
@@ -242,11 +244,31 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
 
   const [nodes, setNodes, onNodesChangeBase] = useNodesState<Node<any>>([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState<Edge>([]);
-  // Notas guardadas em fichário (data.stackId) ficam escondidas no canvas, qualquer que seja o flag hidden
+  // Andar (nível do canvas) em exibição; nós sem data.floor estão no Ground
+  const [floor, setFloor] = useState(GROUND);
+  const { floors, refresh: refreshFloors } = useFloors(projectId);
+  useEffect(() => {
+    // Se o andar visto foi apagado, volta ao térreo
+    if (floor !== GROUND && floors.length > 1 && !floors.some((f) => f.name === floor)) setFloor(GROUND);
+  }, [floors, floor]);
+  const floorOfNode = (n: Node<any>): string => (n.data as any)?.floor || GROUND;
+  const withFloor = <T extends Record<string, unknown>>(data: T): T => (floor === GROUND ? data : { ...data, floor });
+  // O canvas mostra um andar por vez e esconde as notas guardadas em fichário (data.stackId);
+  // arestas de nós escondidos somem sozinhas
   const displayNodes = useMemo(
-    () => nodes.map((n) => (Boolean((n.data as any)?.stackId) !== Boolean(n.hidden) ? { ...n, hidden: Boolean((n.data as any)?.stackId) } : n)),
-    [nodes],
+    () =>
+      nodes.map((n) => {
+        const hide = Boolean((n.data as any)?.stackId) || floorOfNode(n) !== floor;
+        return hide !== Boolean(n.hidden) ? { ...n, hidden: hide } : n;
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [nodes, floor],
   );
+  const floorCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const n of nodes) c[(n.data as any)?.floor || GROUND] = (c[(n.data as any)?.floor || GROUND] || 0) + 1;
+    return c;
+  }, [nodes]);
   const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
   const [connState, setConnState] = useState<ConnState>("connecting");
   const [initialViewport] = useState<Viewport | undefined>(() => readViewport(projectId));
@@ -507,6 +529,10 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         markerEnd: { type: MarkerType.ArrowClosed, color: "#818cf8" },
       };
       if (edgesRef.current.some((e) => e.id === edge.id)) return;
+      // Entre andares diferentes só agente↔agente
+      const a = nodesRef.current.find((n) => n.id === params.source);
+      const b = nodesRef.current.find((n) => n.id === params.target);
+      if (a && b && floorOfNode(a) !== floorOfNode(b) && !(a.type === "agentTerminal" && b.type === "agentTerminal")) return;
       setEdges((eds) => addEdge(edge, eds));
       sendOp({ kind: "upsertEdges", edges: [edge] });
     },
@@ -558,12 +584,12 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       type: "stickyNote",
       position: at ?? getSpawnPosition(280, 200),
       style: { width: 280, height: 200 },
-      data: {
+      data: withFloor({
         title: `Nota: ${projectName}`,
         color: "amber",
         author: "Dev / Equipe",
         content: "Clique no ícone de lápis para escrever notas deste projeto.",
-      },
+      }),
     };
     setNodes((nds) => [...nds, newNode]);
     sendOp({ kind: "upsertNodes", nodes: [newNode] });
@@ -576,10 +602,10 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       type: "portal",
       position: at ?? getSpawnPosition(480, 330),
       style: { width: 480, height: 330 },
-      data: {
+      data: withFloor({
         title: `Portal: ${projectName}`,
         url: "",
-      },
+      }),
     };
     setNodes((nds) => [...nds, newNode]);
     sendOp({ kind: "upsertNodes", nodes: [newNode] });
@@ -588,6 +614,9 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
   const [helpOpen, setHelpOpen] = useState(false);
 
   const selectNode = (id: string) => {
+    // Nó de outro andar: troca de andar primeiro
+    const target = nodesRef.current.find((n) => n.id === id);
+    if (target && floorOfNode(target) !== floor) setFloor(floorOfNode(target));
     setNodes((nds) => nds.map((n) => (n.selected === (n.id === id) ? n : { ...n, selected: n.id === id })));
     centerOnNode(id);
   };
@@ -640,7 +669,8 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     if (result.partitura.nodes.length === 0) return setImportError("A partitura não tem nós.");
     const { width, height } = partituraBounds(result.partitura);
     const origin = getSpawnPosition(width, height);
-    const { nodes: added, edges: addedEdges } = instantiatePartitura(result.partitura, origin, nodesRef.current.map((n) => n.id));
+    const { nodes: instantiated, edges: addedEdges } = instantiatePartitura(result.partitura, origin, nodesRef.current.map((n) => n.id));
+    const added = floor === GROUND ? instantiated : instantiated.map((n: any) => ({ ...n, data: { ...n.data, floor } }));
     setNodes((nds) => [...nds.map((n) => (n.selected ? { ...n, selected: false } : n)), ...(added as Node<any>[])]);
     if (addedEdges.length) setEdges((eds) => [...eds, ...(addedEdges as Edge[])]);
     sendOp({ kind: "upsertNodes", nodes: added.map(({ selected: _s, ...n }: { selected?: boolean }) => n) as any });
@@ -691,7 +721,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       type: "fileTree",
       position: at ?? getSpawnPosition(320, 420),
       style: { width: 320, height: 420 },
-      data: { title: "Arquivos", root: "main" },
+      data: withFloor({ title: "Arquivos", root: "main" }),
     };
     setNodes((nds) => [...nds, newNode]);
     sendOp({ kind: "upsertNodes", nodes: [newNode] });
@@ -703,7 +733,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       type: "diff",
       position: at ?? getSpawnPosition(520, 380),
       style: { width: 520, height: 380 },
-      data: { title: "Diff", worktree: "" },
+      data: withFloor({ title: "Diff", worktree: "" }),
     };
     setNodes((nds) => [...nds, newNode]);
     sendOp({ kind: "upsertNodes", nodes: [newNode] });
@@ -875,6 +905,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         <NewAgentSheet
           projectId={projectId}
           position={agentSheet.at}
+          floor={floor === GROUND ? undefined : floor}
           onClose={() => setAgentSheet(null)}
           onCreated={(node) => {
             setAgentSheet(null);
@@ -906,6 +937,8 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
           Reconectando…
         </div>
       )}
+
+      <FloorSwitcher projectId={projectId} floors={floors} current={floor} counts={floorCounts} onSelect={setFloor} onChanged={refreshFloors} />
 
       {/* O Canvas Principal com React Flow */}
       {loadState === "ready" && (

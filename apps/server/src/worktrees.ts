@@ -20,14 +20,14 @@ const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 const PATCH_MAX = 500 * 1024;
 const FILE_STATUS = new Set(["A", "M", "D"]);
 
-class GitError extends Error {
+export class GitError extends Error {
   constructor(message: string, public stdout: string, public code: number | string | undefined) {
     super(message);
   }
 }
 
 // Sempre execFile com argv: nenhum valor externo passa por shell
-function git(cwd: string, args: string[], env: Record<string, string> = {}): Promise<string> {
+export function git(cwd: string, args: string[], env: Record<string, string> = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile("git", args, { cwd, env: { ...process.env, ...env }, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (!err) return resolve(stdout);
@@ -38,20 +38,20 @@ function git(cwd: string, args: string[], env: Record<string, string> = {}): Pro
 
 const lines = (s: string) => s.split("\n").filter(Boolean);
 
-function slug(title: string) {
+export function slug(title: string) {
   return title.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "agente";
+}
+
+// Um mutex por repositório: create/land/delete não se intercalam (também usado pelos andares, floorsApi.ts)
+const chains = new Map<string, Promise<unknown>>();
+export function locked<T>(repo: string, fn: () => Promise<T>): Promise<T> {
+  const run = (chains.get(repo) ?? Promise.resolve()).then(fn, fn);
+  chains.set(repo, run.catch(() => {}));
+  return run;
 }
 
 export function registerWorktreeApi({ fastify, sessions, canvas, projectRepo }: Deps) {
   const base = "/api/projects/:p/worktrees";
-
-  // Um mutex por repositório: create/land/delete não se intercalam
-  const chains = new Map<string, Promise<unknown>>();
-  function locked<T>(repo: string, fn: () => Promise<T>): Promise<T> {
-    const run = (chains.get(repo) ?? Promise.resolve()).then(fn, fn);
-    chains.set(repo, run.catch(() => {}));
-    return run;
-  }
 
   function context(params: { p: string }) {
     if (!/^[\w-]+$/.test(params.p)) throw new ApiError(400, "Ids inválidos.");
