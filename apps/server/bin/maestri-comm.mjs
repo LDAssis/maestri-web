@@ -140,6 +140,7 @@ export function register({ call, need, CliError }) {
     } catch {
       throw new CliError(`Arquivo não encontrado: ${file}`);
     }
+    if (!data.length) throw new CliError(`Arquivo vazio: ${file}`);
     if (data.length > ATTACH_MAX) throw new CliError(`Arquivo grande demais (máximo ${ATTACH_MAX / 1024 / 1024}MB): ${file}`);
     return (await call("POST", "/attachments", { name: path.basename(file), data: data.toString("base64") })).attachment;
   }

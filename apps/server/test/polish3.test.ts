@@ -354,6 +354,8 @@ test("say --file <imagem> e --attach: arquivos vão ao servidor com id estável;
   assert.match((await maestri("chatty", ["recall", "attachment", "000000000000"])).stderr, /não encontrado/);
   assert.match((await maestri("chatty", ["recall", "attachment"])).stderr, /Uso/);
   assert.match((await maestri("chatty", ["say", "--attach", path.join(dir, "nao-existe.pdf"), "x"])).stderr, /não encontrado/);
+  fs.writeFileSync(path.join(dir, "vazio.txt"), "");
+  assert.match((await maestri("chatty", ["say", "--attach", path.join(dir, "vazio.txt"), "x"])).stderr, /Arquivo vazio/);
   assert.match((await maestri("chatty", ["say", "--progress", "x", "--attach", pdf])).stderr, /só valem na resposta final/);
   fs.writeFileSync(path.join(dir, "falsa.png"), "isto não é uma imagem");
   assert.match((await maestri("chatty", ["say", `![x](${path.join(dir, "falsa.png")})`])).stderr, /Não é uma imagem/);

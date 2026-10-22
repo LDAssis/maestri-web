@@ -9,6 +9,7 @@ import { ApiError, PRESETS, PRESET_LABELS, SIZES, freePosition, validCmd, withRo
 import { isText, lc, chatBusy, type NodeApi } from "./nodeApi.js";
 import { listRoles, readRole, rolesDir, writeRole } from "./roles.js";
 import { COLORS, ICONS } from "./notesApi.js";
+import { presetLook } from "./presetLook.js";
 import { isInside, resolveInside } from "./projectDirs.js";
 import { BAND_SIZE, bandOf, dissolve, isBand, materialize, memberIds, myBands, neighbors, sameFloorNodes, sweepBands, teamTree } from "./team.js";
 import { FloorStore, GROUND, floorOf } from "./floors.js";
@@ -47,6 +48,7 @@ export interface Preset {
   builtin: boolean;
   source: "builtin" | "global" | "project";
   color?: string;
+  icon?: string;
   account?: string; // conta de CLI fixada (claude/codex)
   accounts?: string[]; // contas disponíveis para o CLI do preset (só quando há mais de uma)
 }
@@ -98,7 +100,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
       for (const e of list) {
         if (!e || typeof e.id !== "string" || typeof e.label !== "string" || typeof e.cmd !== "string") continue;
         const b = map.get(e.id);
-        map.set(e.id, { id: e.id, label: e.label, cmd: e.cmd, maestro: e.maestro === true, chat: e.chat === true, quickStart: e.quickStart !== false, builtin: !!b?.builtin, source, ...(typeof e.color === "string" && { color: e.color }), ...(typeof e.account === "string" && e.account && { account: e.account }) });
+        map.set(e.id, { id: e.id, label: e.label, cmd: e.cmd, maestro: e.maestro === true, chat: e.chat === true, quickStart: e.quickStart !== false, builtin: !!b?.builtin, source, ...(typeof e.color === "string" && { color: e.color }), ...(typeof e.icon === "string" && { icon: e.icon }), ...(typeof e.account === "string" && e.account && { account: e.account }) });
       }
     };
     overlay(settings.readGlobal()?.cliPresets, "global");
@@ -118,7 +120,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     return hit;
   }
 
-  const entryOf = (p: Preset) => ({ id: p.id, label: p.label, cmd: p.cmd, maestro: p.maestro, chat: p.chat, quickStart: p.quickStart, ...(p.color && { color: p.color }), ...(p.account && { account: p.account }) });
+  const entryOf = (p: Preset) => ({ id: p.id, label: p.label, cmd: p.cmd, maestro: p.maestro, chat: p.chat, quickStart: p.quickStart, ...(p.color && { color: p.color }), ...(p.icon && { icon: p.icon }), ...(p.account && { account: p.account }) });
 
   function writePreset(projectId: string, p: Preset, source: "global" | "project") {
     const holder = source === "project" ? settings.readProject(projectId) ?? {} : clone(settings.readGlobal() ?? {});
@@ -166,8 +168,11 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     const taken = new Set(loadPresets(c.projectId).map((p) => p.id));
     let id = slug(label);
     for (let n = 2; taken.has(id); n++) id = `${slug(label)}-${n}`;
+    checkLook(b.color, b.icon);
+    const cmd0 = b.command === undefined ? "" : parseCmd(b.command);
+    const look = presetLook(cmd0); // sem --color/--icon: cor sorteada e o ícone do CLI
     const preset: Preset = {
-      id, label, cmd: b.command === undefined ? "" : parseCmd(b.command),
+      id, label, cmd: cmd0, color: b.color ?? look.color, icon: b.icon ?? look.icon,
       maestro: b.maestro === undefined ? false : onOff(b.maestro, "maestro"),
       chat: b.chat === undefined ? false : onOff(b.chat, "chat"),
       quickStart: b.quickStart === undefined ? true : onOff(b.quickStart, "quick-start"),
@@ -183,8 +188,11 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     requireMaestro(c, "alterar presets");
     const b = req.body ?? {};
     const cur = findPreset(c.projectId, b.name);
+    checkLook(b.color, b.icon);
     const next: Preset = {
       ...cur,
+      ...(b.color !== undefined && { color: b.color }),
+      ...(b.icon !== undefined && { icon: b.icon }),
       ...(b.newName !== undefined && { label: checkLabel(c.projectId, b.newName, cur.id) }),
       ...(b.command !== undefined && { cmd: parseCmd(b.command) }),
       ...(b.maestro !== undefined && { maestro: onOff(b.maestro, "maestro") }),
@@ -466,8 +474,9 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
         ...(accountName && { account: accountName }),
         ...(preset?.maestro && { isMaestro: true }),
         ...(preset?.chat && { chatFirst: true }),
-        ...(b.color !== undefined && { color: b.color }),
-        ...(b.icon !== undefined && { icon: b.icon }),
+        // aparência: --color/--icon vencem; senão a do preset (quando é uma cor/ícone válido do arrange)
+        ...((b.color ?? (preset?.color && (COLORS as readonly string[]).includes(preset.color) ? preset.color : undefined)) !== undefined && { color: b.color ?? preset!.color }),
+        ...((b.icon ?? (preset?.icon && (ICONS as readonly string[]).includes(preset.icon) ? preset.icon : undefined)) !== undefined && { icon: b.icon ?? preset!.icon }),
       },
     };
     canvas.applyAndBroadcast(c.projectId, { kind: "upsertNodes", nodes: [node] }, by(c));
