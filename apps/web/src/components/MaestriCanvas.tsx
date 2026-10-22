@@ -27,7 +27,7 @@ import { PresenceLayer } from "./PresenceUI";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
 import PortalNode, { PortalNodeData } from "./PortalNode";
-import { Plus, RefreshCw, StickyNote, Globe } from "lucide-react";
+import { Plus, RefreshCw, StickyNote, Globe, Bell } from "lucide-react";
 
 interface MaestriCanvasProps {
   projectId: string;
@@ -263,6 +263,24 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     return () => clearTimeout(t);
   }, [focus, loadState]);
 
+  // Notificações do CLI (maestri notify): toast por 6s, clicável para centralizar no nó emissor
+  const [notifications, setNotifications] = useState<{ id: number; nodeId: string; title: string; text: string }[]>([]);
+  const notifySeqRef = useRef(0);
+  const pushNotification = useCallback((from: { nodeId: string; title: string }, text: string) => {
+    const id = ++notifySeqRef.current;
+    setNotifications((list) => [...list, { id, nodeId: from.nodeId, title: from.title, text }]);
+    setTimeout(() => setNotifications((list) => list.filter((n) => n.id !== id)), 6000);
+  }, []);
+  const centerOnNode = (nodeId: string) => {
+    const node = nodesRef.current.find((n) => n.id === nodeId);
+    if (!node) return;
+    flowRef.current?.setCenter(
+      node.position.x + Number(node.measured?.width ?? node.width ?? node.style?.width ?? 300) / 2,
+      node.position.y + Number(node.measured?.height ?? node.height ?? node.style?.height ?? 200) / 2,
+      { zoom: flowRef.current.getZoom(), duration: 400 }
+    );
+  };
+
   const sendOp = useCallback((op: CanvasOp) => {
     const ws = wsRef.current;
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "op", op }));
@@ -348,6 +366,8 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
           setLoadState("ready");
         } else if (msg.type === "op") {
           applyRemoteOp(msg.op);
+        } else if (msg.type === "notify") {
+          pushNotification(msg.from, String(msg.text ?? ""));
         } else if (msg.type === "error") {
           console.warn("Op recusada pelo servidor:", msg.error);
         }
@@ -368,7 +388,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [projectId, clientId, setNodes, setEdges, sendOp, applyRemoteOp]);
+  }, [projectId, clientId, setNodes, setEdges, sendOp, applyRemoteOp, pushNotification]);
 
   // Arrasto/resize saem como upsertNodes parciais ({id, position} / {id, width, height, style}) com throttle de 60ms
   const pendingUpsertRef = useRef<Map<string, { pos?: boolean; size?: boolean }>>(new Map());
@@ -610,6 +630,25 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       {loadState === "loading" && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#080d1a] text-slate-500 font-mono text-xs">
           Carregando canvas do projeto...
+        </div>
+      )}
+
+      {notifications.length > 0 && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2" role="status">
+          {notifications.map((n) => (
+            <button
+              key={n.id}
+              onClick={() => centerOnNode(n.nodeId)}
+              className="flex items-start gap-2 max-w-md text-left rounded-xl border border-amber-600/70 bg-slate-900/95 px-3 py-2 text-xs shadow-xl backdrop-blur-md hover:border-amber-400 transition"
+              title="Ir até o nó"
+            >
+              <Bell className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-400" />
+              <span>
+                <span className="block font-semibold text-amber-300">{n.title}</span>
+                <span className="text-slate-200 whitespace-pre-wrap">{n.text}</span>
+              </span>
+            </button>
+          ))}
         </div>
       )}
 

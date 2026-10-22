@@ -1,0 +1,182 @@
+#!/usr/bin/env node
+// CLI do Maestri Web: fala com a API do servidor usando o ambiente injetado no PTY
+// (MAESTRI_API_URL, MAESTRI_PROJECT_ID, MAESTRI_NODE_ID, MAESTRI_TOKEN). Sem dependências.
+
+const HELP = {
+  _: `maestri — CLI dos terminais do canvas do Maestri Web
+
+Comandos:
+  list | context                     Mostra você e os nós conectados
+  send "Nome" "texto"                Escreve texto + Enter no terminal do agente
+  check "Nome" [--lines N]           Últimas N linhas (60) do terminal do agente
+  ask "Nome" "texto" [--timeout S]   send + espera o agente ficar quieto e imprime a resposta
+  note read|write|append "Nome" ["texto"]   Lê/substitui/acrescenta uma nota conectada
+  note create "Título" "texto"       Cria uma nota perto de você, conectada a você
+  portal navigate "Nome" "url"       Muda a URL de um portal conectado
+  recruit "Nome" [--cmd C] [--role R]   (Maestro) cria e inicia um novo agente
+  dismiss "Nome"                     (Maestro) remove um agente conectado
+  notify "texto"                     Avisa todos os navegadores do projeto
+
+Use "maestri <comando> --help" para detalhes. Nomes são os títulos dos nós (sem diferenciar maiúsculas)
+e o alvo precisa estar conectado a você por uma aresta.`,
+  list: `maestri list | context\nMostra "Você: <título> (Maestro)" e os nós conectados: Agentes, Notas e Portais (com URL).`,
+  context: `maestri list | context\nMostra "Você: <título> (Maestro)" e os nós conectados: Agentes, Notas e Portais (com URL).`,
+  send: `maestri send "Nome" "texto"\nEscreve o texto e Enter no terminal do agente conectado, sem esperar resposta.`,
+  check: `maestri check "Nome" [--lines N]\nImprime as últimas N linhas (padrão 60) do terminal do agente, sem sequências ANSI.`,
+  ask: `maestri ask "Nome" "texto" [--timeout S]\nEnvia o texto e espera o terminal do alvo ficar 5s quieto; imprime só a saída nova.\nTimeout (padrão 600s): imprime o que houver e sai com código 2.`,
+  note: `maestri note read "Nome"\nmaestri note write "Nome" "texto"     (substitui o conteúdo)\nmaestri note append "Nome" "texto"\nmaestri note create "Título" "texto" (cria uma nota perto de você, conectada a você)`,
+  portal: `maestri portal navigate "Nome" "url"\nMuda a URL do portal conectado (apenas http/https).`,
+  recruit: `maestri recruit "Nome" [--cmd "claude"] [--role "texto do papel"]\nApenas o Maestro. Cria um agente conectado a você e inicia o terminal dele.\n--role grava o texto em .maestri-roles/<id>.md; com --cmd claude/codex o arquivo é passado como prompt.`,
+  dismiss: `maestri dismiss "Nome"\nApenas o Maestro. Remove o nó conectado e encerra o terminal dele.`,
+  notify: `maestri notify "texto"\nMostra um aviso (toast) para todos os navegadores no projeto, com o título do seu nó.`,
+};
+
+class CliError extends Error {
+  constructor(message, code = 1) {
+    super(message);
+    this.code = code;
+  }
+}
+
+const FLAGS = ["--lines", "--timeout", "--cmd", "--role"];
+
+function parse(argv) {
+  const pos = [];
+  const flags = {};
+  let help = false;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--help" || a === "-h") help = true;
+    else if (FLAGS.includes(a)) {
+      if (i + 1 >= argv.length) throw new CliError(`Falta o valor de ${a}.`);
+      flags[a.slice(2)] = argv[++i];
+    } else pos.push(a);
+  }
+  return { pos, flags, help };
+}
+
+function env() {
+  const { MAESTRI_API_URL: api, MAESTRI_PROJECT_ID: project, MAESTRI_NODE_ID: node, MAESTRI_TOKEN: token } = process.env;
+  if (!api || !project || !node) throw new CliError("Fora de um terminal do Maestri Web (variáveis MAESTRI_* ausentes).");
+  return { base: `${api.replace(/\/$/, "")}/projects/${project}/nodes/${node}`, token };
+}
+
+async function call(method, route, body) {
+  const { base, token } = env();
+  const headers = {};
+  if (body !== undefined) headers["content-type"] = "application/json";
+  if (token) headers.authorization = `Bearer ${token}`;
+  let res;
+  try {
+    res = await fetch(base + route, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  } catch (e) {
+    throw new CliError(`Não foi possível falar com o servidor Maestri (${process.env.MAESTRI_API_URL}): ${e.cause?.code || e.message}`);
+  }
+  const raw = await res.text();
+  let data = {};
+  try {
+    data = raw.trim() ? JSON.parse(raw) : {};
+  } catch {}
+  if (!res.ok) throw new CliError(data.error || `Erro ${res.status} do servidor.`);
+  return data;
+}
+
+const need = (pos, n, usage) => {
+  if (pos.length < n) throw new CliError(`Uso: maestri ${usage}`);
+};
+
+const COMMANDS = {
+  async context() {
+    const c = await call("GET", "/context");
+    const out = [`Você: ${c.self.title}${c.self.isMaestro ? " (Maestro)" : ""}`];
+    const group = (name, list, fmt) => {
+      if (!list.length) return;
+      out.push("", `${name}:`);
+      for (const n of list) out.push(`  - ${fmt(n)}`);
+    };
+    group("Agentes", c.agents, (n) => n.title + (n.isMaestro ? " (Maestro)" : ""));
+    group("Notas", c.notes, (n) => n.title);
+    group("Portais", c.portals, (n) => `${n.title}${n.url ? ` — ${n.url}` : ""}`);
+    if (c.agents.length + c.notes.length + c.portals.length === 0) out.push("", "Nenhum nó conectado.");
+    console.log(out.join("\n"));
+  },
+
+  async send({ pos }) {
+    need(pos, 2, 'send "Nome" "texto"');
+    await call("POST", "/send", { target: pos[0], text: pos.slice(1).join(" ") });
+    console.log(`Enviado para ${pos[0]}.`);
+  },
+
+  async check({ pos, flags }) {
+    need(pos, 1, 'check "Nome" [--lines N]');
+    const q = new URLSearchParams({ target: pos[0], lines: flags.lines || "60" });
+    console.log((await call("GET", `/check?${q}`)).output);
+  },
+
+  async ask({ pos, flags }) {
+    need(pos, 2, 'ask "Nome" "texto" [--timeout S]');
+    const r = await call("POST", "/ask", { target: pos[0], text: pos.slice(1).join(" "), timeout: Number(flags.timeout) || 600 });
+    if (r.output) console.log(r.output);
+    if (r.timedOut) {
+      console.error(`[maestri] Timeout: ${pos[0]} não ficou quieto a tempo; saída parcial acima.`);
+      process.exitCode = 2;
+    }
+  },
+
+  async note({ pos }) {
+    const [sub, name, ...rest] = pos;
+    const route = `/notes/${encodeURIComponent(name ?? "")}`;
+    if (sub === "read") {
+      need([name], 1, 'note read "Nome"');
+      console.log((await call("GET", route)).content);
+    } else if (sub === "write" || sub === "append") {
+      need([name, ...rest], 2, `note ${sub} "Nome" "texto"`);
+      await call(sub === "write" ? "PUT" : "POST", route, { text: rest.join(" ") });
+      console.log(sub === "write" ? "Nota atualizada." : "Texto acrescentado à nota.");
+    } else if (sub === "create") {
+      need([name, ...rest], 2, 'note create "Título" "texto"');
+      await call("POST", "/notes", { title: name, text: rest.join(" ") });
+      console.log(`Nota "${name}" criada e conectada.`);
+    } else throw new CliError('Uso: maestri note read|write|append|create ... (veja "maestri note --help")');
+  },
+
+  async portal({ pos }) {
+    if (pos[0] !== "navigate") throw new CliError('Uso: maestri portal navigate "Nome" "url"');
+    need(pos, 3, 'portal navigate "Nome" "url"');
+    const r = await call("POST", "/portal-navigate", { target: pos[1], url: pos[2] });
+    console.log(`Portal "${pos[1]}" agora em ${r.url}`);
+  },
+
+  async recruit({ pos, flags }) {
+    need(pos, 1, 'recruit "Nome" [--cmd "claude"] [--role "texto"]');
+    await call("POST", "/recruit", { name: pos[0], cmd: flags.cmd, role: flags.role });
+    console.log(`Agente "${pos[0]}" recrutado e iniciado.`);
+  },
+
+  async dismiss({ pos }) {
+    need(pos, 1, 'dismiss "Nome"');
+    await call("POST", "/dismiss", { target: pos[0] });
+    console.log(`Agente "${pos[0]}" dispensado.`);
+  },
+
+  async notify({ pos }) {
+    need(pos, 1, 'notify "texto"');
+    await call("POST", "/notify", { text: pos.join(" ") });
+    console.log("Notificação enviada.");
+  },
+};
+COMMANDS.list = COMMANDS.context;
+
+async function main() {
+  const { pos, flags, help } = parse(process.argv.slice(2));
+  const cmd = pos.shift();
+  if (!cmd || cmd === "help") return console.log(HELP._);
+  if (!COMMANDS[cmd]) throw new CliError(`Comando desconhecido: ${cmd}. Use "maestri --help".`);
+  if (help) return console.log(HELP[cmd]);
+  await COMMANDS[cmd]({ pos, flags });
+}
+
+main().catch((e) => {
+  console.error(`maestri: ${e instanceof CliError ? e.message : e?.message || e}`);
+  process.exitCode = e instanceof CliError ? e.code : 1;
+});

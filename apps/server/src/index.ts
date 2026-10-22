@@ -10,6 +10,7 @@ import { WorktreeManager, WorktreeSession } from "./worktree.js";
 import { SessionManager } from "./sessions.js";
 import { CanvasStore } from "./canvas.js";
 import { PresenceHub } from "./presence.js";
+import { registerNodeApi } from "./nodeApi.js";
 
 // Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
 process.on("uncaughtException", (err) => {
@@ -125,7 +126,13 @@ function canvasFileFor(id: string) {
   return /^[\w-]+$/.test(id) && projects.some((p) => p.id === id) ? path.join(dataDir, `canvas_${id}.json`) : null;
 }
 
-const sessions = new SessionManager();
+const port = Number(process.env.PORT) || 4000;
+const host = process.env.HOST || "127.0.0.1";
+
+const sessions = new SessionManager({
+  apiUrl: () => `http://127.0.0.1:${(fastify.server.address() as { port?: number } | null)?.port ?? port}/api`,
+  token: authToken,
+});
 const presence = new PresenceHub();
 const canvas = new CanvasStore(canvasFileFor, writeJsonAtomic, (projectId, ids) => sessions.killNodes(projectId, ids));
 
@@ -136,6 +143,8 @@ fastify.addHook("onClose", async () => {
 });
 
 const idPattern = /^[\w-]+$/;
+
+registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
 
 // Endpoints de Projetos
 fastify.get("/api/projects", async () => {
@@ -291,9 +300,6 @@ fastify.get("/ws/presence", { websocket: true }, (socket, req) => {
   if (!wsAuthorized(socket, req, url)) return;
   presence.attach(socket);
 });
-
-const port = Number(process.env.PORT) || 4000;
-const host = process.env.HOST || "127.0.0.1";
 
 const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(host);
 

@@ -1,39 +1,45 @@
 ---
 name: maestri-canvas
-description: Instruções essenciais para agentes (agy, claude, opencode) operando dentro do Maestri Canvas Web. Explica como identificar o nó, comunicar-se com nós conectados via PTY, atualizar notas adesivas e invocar novos terminais.
+description: Instruções essenciais para agentes (claude, codex, opencode) operando dentro de um terminal do Maestri Canvas Web. Explica como ver os nós conectados e usar o comando `maestri` para conversar com outros agentes, ler/escrever notas, navegar portais, notificar e (Maestro) recrutar agentes.
 ---
 
 # Maestri Canvas Skill
 
-Você está operando como um Agente de Inteligência Artificial dentro de um nó no **Maestri Canvas Web**.
+Você roda em um terminal de um nó do **Maestri Canvas Web**, ligado por arestas a outros nós: agentes (terminais), notas adesivas e portais (navegadores). O comando `maestri` já está no seu PATH e o ambiente (`MAESTRI_API_URL`, `MAESTRI_PROJECT_ID`, `MAESTRI_NODE_ID`, `MAESTRI_TOKEN`) já está configurado.
 
-## 1. Consciência Espacial & Contexto
-- Você **não é um chatbot isolado**. Você é um nó dentro de um enxame de agentes interligados por cabos visuais no canvas.
-- Seu código e suas execuções rodam em um **Git Worktree isolado**, sem risco de colidir com os arquivos dos outros agentes.
-- Você possui nós vizinhos:
-  - **Upstream (acima):** Agentes que enviam especificações e tarefas para você.
-  - **Downstream (abaixo):** Agentes que recebem seu trabalho, diffs ou revisões de código.
-  - **Notas Adesivas:** Blocos de notas conectados onde você deve registrar decisões de arquitetura e progresso.
-  - **Portais Web:** Navegadores embutidos inspecionando a aplicação viva (`localhost:3000`).
+**Regras de nomes:** o alvo é o **título** do nó (sem diferenciar maiúsculas) e precisa estar **conectado ao seu nó** por uma aresta (em qualquer direção). Erros saem em stderr com código 1.
 
-## 2. CLI do Maestri no Terminal
-Você tem o comando `maestri` disponível diretamente no seu terminal:
+## Comandos
 
 ```bash
-# Inspecione o nó atual e os vizinhos conectados
-maestri context
+maestri list                 # (ou: maestri context) quem é você e quem está conectado
+                             #   Você: Agente 01 (Maestro)
+                             #   Agentes: / Notas: / Portais: (com URL)
 
-# Envie comandos ou instruções para o terminal de outro agente conectado
-maestri send @coder-backend "Migração de banco concluída. Inicie a rota de autenticação."
+maestri send "Backend" "rode os testes e me avise"      # escreve texto + Enter no terminal do agente
+maestri check "Backend" --lines 80                       # últimas 80 linhas do terminal dele (sem ANSI; padrão 60)
+maestri ask "Backend" "qual o status da migração?"      # send + espera o agente ficar 5s quieto e imprime a resposta
+maestri ask "Backend" "..." --timeout 120                # padrão 600s; ao estourar imprime o parcial e sai com código 2
 
-# Atualize a Nota Adesiva conectada para que o desenvolvedor humano veja o progresso
-maestri note update "Status: Testes de unidade 100% passando. Branch pronta para review."
+maestri note read "Notas"                                # lê uma nota conectada
+maestri note write "Notas" "texto"                       # substitui o conteúdo
+maestri note append "Notas" "mais uma linha"             # acrescenta
+maestri note create "Decisões" "texto"                   # cria uma nota perto de você, já conectada a você
 
-# (Se você for o nó Maestro) Invoque um novo agente especialista no canvas
-maestri spawn --role "QA Tester"
+maestri portal navigate "Preview" "http://localhost:3000"   # só http/https
+
+maestri notify "Deploy concluído"                        # toast para todos os navegadores no projeto
+
+# Somente o nó Maestro (coroa) — outros recebem erro "Apenas o Maestro pode ..."
+maestri recruit "QA" --cmd claude --role "Você testa a API e reporta falhas"
+maestri dismiss "QA"
 ```
 
-## 3. Diretrizes de Comunicação em Equipe
-1. Ao concluir uma etapa importante, sempre atualize a **Nota Adesiva** com o resumo (`maestri note update`).
-2. Se depender de outro nó, envie uma notificação via `maestri send` com detalhes do arquivo ou diff gerado.
-3. Se for marcado com a coroa de **Maestro**, você é o coordenador: quebre os requisitos em tarefas e delegue para os coders conectados.
+`maestri --help` e `maestri <comando> --help` mostram o uso.
+
+## Como usar bem
+1. Comece com `maestri list` para saber quem são seus vizinhos.
+2. Use `send` para delegar sem esperar; `ask` quando precisar da resposta antes de continuar; `check` para acompanhar o progresso de quem está trabalhando.
+3. Registre decisões e progresso nas notas conectadas (`note append`) — os humanos veem ao vivo no canvas.
+4. `recruit`: com `--role`, o texto do papel vai para `.maestri-roles/<id>.md` (nunca é interpolado no comando); com `--cmd claude` ou `--cmd codex` o arquivo é passado como prompt inicial. O novo agente já nasce conectado a você e com o terminal iniciado.
+5. Se for o Maestro: quebre o objetivo em tarefas, recrute especialistas, delegue com `send`/`ask`, acompanhe com `check` e dispense (`dismiss`) quem terminou.

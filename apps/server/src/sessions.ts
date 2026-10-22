@@ -1,6 +1,7 @@
 import pty from "node-pty";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { WebSocket } from "ws";
 
 const isWindows = process.platform === "win32";
@@ -18,7 +19,9 @@ const extraPaths = isWindows
     ]
   : [];
 
-const enrichedPath = [...extraPaths, process.env.PATH || ""].join(path.delimiter);
+// apps/server/bin vence qualquer outro `maestri` instalado no sistema
+const binDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../bin");
+const enrichedPath = [binDir, ...extraPaths, process.env.PATH || ""].join(path.delimiter);
 
 const SCROLLBACK_MAX = 200 * 1024;
 
@@ -34,9 +37,10 @@ export interface Session {
   cols: number;
   rows: number;
   dead: boolean;
+  listeners: Set<(data: string) => void>;
 }
 
-function spawnPty(cwd: string, cols: number, rows: number) {
+function spawnPty(cwd: string, cols: number, rows: number, extraEnv: Record<string, string>) {
   const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : isWindows ? ["-NoLogo"] : [];
   return pty.spawn(defaultShell, shellArgs, {
     name: "xterm-256color",
@@ -49,6 +53,7 @@ function spawnPty(cwd: string, cols: number, rows: number) {
       PATH: enrichedPath,
       TERM: "xterm-256color",
       COLORTERM: "truecolor",
+      ...extraEnv,
     },
   });
 }
@@ -75,6 +80,18 @@ function killGroup(p: pty.IPty) {
 export class SessionManager {
   private sessions = new Map<string, Session>();
 
+  // apiUrl é avaliado a cada spawn (a porta real só é conhecida depois do listen)
+  constructor(private cli: { apiUrl: () => string; token: string }) {}
+
+  private env(projectId: string, nodeId: string) {
+    return {
+      MAESTRI_API_URL: this.cli.apiUrl(),
+      MAESTRI_PROJECT_ID: projectId,
+      MAESTRI_NODE_ID: nodeId,
+      MAESTRI_TOKEN: this.cli.token,
+    };
+  }
+
   private key(projectId: string, nodeId: string) {
     return `${projectId}:${nodeId}`;
   }
@@ -93,6 +110,7 @@ export class SessionManager {
     s.scrollback += data;
     if (s.scrollback.length > SCROLLBACK_MAX) s.scrollback = s.scrollback.slice(-SCROLLBACK_MAX);
     this.broadcast(s, data);
+    for (const fn of s.listeners) fn(data);
   }
 
   private runCmd(s: Session, p: pty.IPty) {
@@ -129,28 +147,46 @@ export class SessionManager {
     killGroup(s.pty);
   }
 
-  attach(socket: WebSocket, projectId: string, nodeId: string, opts: { cwd: string; cmd: string }) {
+  // Cria a sessão se ainda não existir (sem precisar de cliente); lança se o PTY falhar
+  ensure(projectId: string, nodeId: string, opts: { cwd: string; cmd: string }) {
     const k = this.key(projectId, nodeId);
     let s = this.sessions.get(k);
-    if (!s) {
-      try {
-        const cols = 80;
-        const rows = 24;
-        const p = spawnPty(opts.cwd, cols, rows);
-        s = {
-          projectId, nodeId, pty: p, clients: new Set(), cwd: opts.cwd, cmd: opts.cmd,
-          createdAt: new Date().toISOString(), cols, rows, dead: false,
-          scrollback: `\r\n\x1b[32m[Maestri Web - ConPTY Ativo]\x1b[0m Terminal pronto em: ${opts.cwd}\r\n`,
-        };
-        this.sessions.set(k, s);
-        this.wire(s, p);
-        this.runCmd(s, p);
-      } catch (err: any) {
-        console.error("Erro ao iniciar ConPTY:", err.message);
-        socket.send(`\r\n\x1b[31m[Erro]: Falha ao iniciar ConPTY: ${err.message}\x1b[0m\r\n`);
-        socket.close();
-        return;
-      }
+    if (s) return s;
+    const cols = 80;
+    const rows = 24;
+    const p = spawnPty(opts.cwd, cols, rows, this.env(projectId, nodeId));
+    s = {
+      projectId, nodeId, pty: p, clients: new Set(), cwd: opts.cwd, cmd: opts.cmd,
+      createdAt: new Date().toISOString(), cols, rows, dead: false, listeners: new Set(),
+      scrollback: `\r\n\x1b[32m[Maestri Web - ConPTY Ativo]\x1b[0m Terminal pronto em: ${opts.cwd}\r\n`,
+    };
+    this.sessions.set(k, s);
+    this.wire(s, p);
+    this.runCmd(s, p);
+    return s;
+  }
+
+  get(projectId: string, nodeId: string) {
+    return this.sessions.get(this.key(projectId, nodeId));
+  }
+
+  // Escreve no PTY como se fosse digitado
+  write(projectId: string, nodeId: string, text: string) {
+    const s = this.get(projectId, nodeId);
+    if (!s) return false;
+    s.pty.write(text);
+    return true;
+  }
+
+  attach(socket: WebSocket, projectId: string, nodeId: string, opts: { cwd: string; cmd: string }) {
+    let s: Session;
+    try {
+      s = this.ensure(projectId, nodeId, opts);
+    } catch (err: any) {
+      console.error("Erro ao iniciar ConPTY:", err.message);
+      socket.send(`\r\n\x1b[31m[Erro]: Falha ao iniciar ConPTY: ${err.message}\x1b[0m\r\n`);
+      socket.close();
+      return;
     }
 
     const session = s;
@@ -211,7 +247,7 @@ export class SessionManager {
     const s = this.sessions.get(this.key(projectId, nodeId));
     if (!s) return false;
     const old = s.pty;
-    const p = spawnPty(s.cwd, s.cols, s.rows);
+    const p = spawnPty(s.cwd, s.cols, s.rows, this.env(projectId, nodeId));
     s.pty = p;
     killGroup(old);
     this.push(s, "\r\n\x1b[33m[Sessão reiniciada]\x1b[0m\r\n");

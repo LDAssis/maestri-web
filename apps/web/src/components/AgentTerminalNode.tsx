@@ -13,6 +13,7 @@ import {
   Crown,
   Sparkles,
   RotateCw,
+  HelpCircle,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import DeleteNodeButton from "./DeleteNodeButton";
@@ -58,6 +59,7 @@ export default function AgentTerminalNode({
     const p = s.peers.find((x) => x.projectId === s.projectId && x.activeNodeId === id && x.activity === "typing");
     return p ? `${p.user.name} digitando…` : "";
   });
+  const [showCli, setShowCli] = useState(false);
   const [termStatus, setTermStatus] = useState<TerminalStatus>("conectando");
   const isMaestro = Boolean(nodeData.isMaestro);
   const [chatInput, setChatInput] = useState("");
@@ -276,11 +278,31 @@ export default function AgentTerminalNode({
       </div>
 
       {/* Footer bar */}
-      <div className="px-3 py-1 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 font-mono shrink-0">
+      <div className="relative px-3 py-1 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 font-mono shrink-0">
         <span className="flex items-center gap-1 text-indigo-400 truncate max-w-[200px]">
           <Terminal className="h-3 w-3" />
           {nodeData.branch || "worktree isolado"}
         </span>
+        {showCli && (
+          <div
+            role="dialog"
+            aria-label="CLI maestri"
+            className="nodrag absolute bottom-full right-2 mb-1 w-72 rounded-xl border border-slate-700 bg-slate-950 p-3 text-[11px] shadow-2xl z-10 space-y-1 text-slate-300"
+          >
+            <div className="font-semibold text-slate-100 mb-1">CLI maestri (neste terminal)</div>
+            <div><code className="text-indigo-300">maestri list</code> — nós conectados</div>
+            <div><code className="text-indigo-300">maestri ask "Nome" "texto"</code> — pergunta e espera a resposta</div>
+            <div><code className="text-indigo-300">maestri check "Nome"</code> — últimas linhas do terminal</div>
+            <div><code className="text-indigo-300">maestri send "Nome" "texto"</code> — envia ao terminal</div>
+            <div><code className="text-indigo-300">maestri note read|write|append "Nome"</code> — notas</div>
+            <div><code className="text-indigo-300">maestri notify "texto"</code> — avisa todos no projeto</div>
+            {isMaestro && (
+              <div>
+                <code className="text-amber-300">maestri recruit|dismiss "Nome"</code> — só Maestro
+              </div>
+            )}
+          </div>
+        )}
         <span className="flex items-center gap-2 text-slate-500">
           {typingLabel && <span className="text-indigo-300 truncate max-w-[140px]">{typingLabel}</span>}
           {isMaestro && "👑"}
@@ -304,6 +326,15 @@ export default function AgentTerminalNode({
             aria-label="Reiniciar sessão"
           >
             <RotateCw className="h-3 w-3" />
+          </button>
+          <button
+            onClick={() => setShowCli(!showCli)}
+            className="p-0.5 rounded hover:text-white hover:bg-slate-800 transition"
+            title="CLI maestri"
+            aria-label="CLI maestri"
+            aria-expanded={showCli}
+          >
+            <HelpCircle className="h-3 w-3" />
           </button>
         </span>
       </div>
