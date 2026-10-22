@@ -112,6 +112,19 @@ test("--help funciona sem ambiente do Maestri", async () => {
   assert.match(h.stdout, /maestri ask/);
 });
 
+test("help geral sem linhas duplicadas e recall documenta o que ignora", async () => {
+  const env = { MAESTRI_API_URL: "", MAESTRI_PROJECT_ID: "", MAESTRI_NODE_ID: "" };
+  const { stdout } = await maestri("x", ["help"], env);
+  const lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+  assert.equal(lines.length, new Set(lines).size, "linhas repetidas no help");
+  assert.doesNotMatch(stdout, /note read\|write\|append "Nome"/); // linha antiga do núcleo
+  assert.equal((stdout.match(/portal navigate/g) ?? []).length, 1);
+  assert.equal((stdout.match(/note read\|write\|append\|edit/g) ?? []).length, 1);
+  const recall = await maestri("x", ["recall", "--help"], env);
+  assert.match(recall.stdout, /progresso/);
+  assert.match(recall.stdout, /terminal/);
+});
+
 test("context lista os conectados agrupados, sem os não conectados", async () => {
   for (const cmd of ["context", "list"]) {
     const r = await maestri("maestro", [cmd]);

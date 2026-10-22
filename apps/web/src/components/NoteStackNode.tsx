@@ -70,8 +70,10 @@ export default function NoteStackNode({ id, data }: { id: string; data: NoteStac
             onClick={() => setExpanded((v) => !v)}
             aria-pressed={expanded}
             aria-label={expanded ? "Recolher páginas" : "Expandir todas as páginas"}
-            title={expanded ? "Recolher" : "Expandir todas as páginas"}
-            className="p-1 hover:bg-white/10 rounded transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70"
+            // Com menos de 2 páginas não há o que expandir (e o botão não parece quebrado)
+            disabled={pages.length < 2 && !expanded}
+            title={pages.length < 2 && !expanded ? "Expandir (precisa de 2 ou mais páginas)" : expanded ? "Recolher" : "Expandir todas as páginas"}
+            className="p-1 hover:bg-white/10 rounded transition disabled:opacity-30 disabled:hover:bg-transparent focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70"
           >
             <ChevronsUpDown className="h-3 w-3 opacity-70" />
           </button>

@@ -94,6 +94,7 @@ export function register({ call, need, CliError }) {
     flags: ["--size", "--url"],
     summary: [
       'portal create|edit|close ...      Cria/edita/fecha portais (navegador automatizável)',
+      'portal navigate "Portal" "url"    Muda a URL de um portal conectado (e da sessão aberta)',
       'portal snapshot|click|fill|... "Portal"   Automação de portais conectados (veja "maestri portal --help")',
     ],
   };
