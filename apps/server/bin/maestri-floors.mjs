@@ -19,7 +19,7 @@ conflito e remove o andar (mantendo a branch) salvo --keep-floor.
 const WORKSPACE_HELP = `maestri workspace list
 maestri workspace create "Nome" --dir PATH [--from "Origem"] [--group G] [--folder F] [--root]
 maestri workspace rename "Antigo" "Novo"
-maestri workspace move "Nome" --group G | --folder F | --root
+maestri workspace move "Nome" --group G | --folder F | --root | --pin | --unpin
 Só o Maestro. Workspace = projeto. O diretório de create precisa existir; --from copia o layout do canvas com ids novos,
 reescrevendo caminhos sob o diretório de origem (sem sessões). Não há delete pela CLI.`;
 
@@ -66,7 +66,7 @@ export function register({ call, need, CliError }) {
       const r = await call("POST", "/floors/status", {
         text: text || undefined, state: flags.state, progress: flags.progress, floor: flags.floor, clear: flags.clear,
       });
-      console.log(r.status ? `Status de "${r.floor}":${statusLine(r.status)}` : `Status de "${r.floor}" removido.`);
+      console.log(r.status ? `Status de "${r.floor}":${statusLine(r.status).replace(/^ —/, "")}` : `Status de "${r.floor}" removido.`);
     } else throw new CliError('Uso: maestri floor list|create|land|delete|status|unload ... (veja "maestri floor --help")');
   }
 
@@ -94,9 +94,11 @@ export function register({ call, need, CliError }) {
       const r = await call("POST", "/workspaces/rename", { name, to: extra });
       console.log(`Workspace renomeado para "${r.name}".`);
     } else if (sub === "move") {
-      need(pos, 2, 'workspace move "Nome" --group G | --folder F | --root');
-      const r = await call("POST", "/workspaces/move", { name, group: flags.group, folder: flags.folder, root: flags.root });
-      console.log(`Workspace "${name}" movido para ${r.group ? `o grupo "${r.group}"` : "a raiz"}${r.folder ? `, pasta "${r.folder}"` : ""}.`);
+      need(pos, 2, 'workspace move "Nome" --group G | --folder F | --root | --pin | --unpin');
+      const r = await call("POST", "/workspaces/move", { name, group: flags.group, folder: flags.folder, root: flags.root, pin: flags.pin, unpin: flags.unpin });
+      const moved = flags.group !== undefined || flags.folder !== undefined || flags.root;
+      if (moved) console.log(`Workspace "${name}" movido para ${r.group ? `o grupo "${r.group}"` : "a raiz"}${r.folder ? `, pasta "${r.folder}"` : ""}${flags.pin ? " e fixado" : flags.unpin ? " e desafixado" : ""}.`);
+      else console.log(`Workspace "${name}" ${flags.pin ? "fixado" : "desafixado"}.`);
     } else throw new CliError('Uso: maestri workspace list|create|rename|move ... (veja "maestri workspace --help")');
   }
 
@@ -104,7 +106,7 @@ export function register({ call, need, CliError }) {
     commands: { floor, workspace },
     help: { floor: FLOOR_HELP, workspace: WORKSPACE_HELP },
     flags: ["--branch", "--into", "--dir", "--from", "--group", "--folder", "--state", "--progress", "--floor", "--pull-request"],
-    boolFlags: ["--existing-branch", "--copy", "--no-git", "--copy-ground", "--delete-branch", "--keep-floor", "--keep-branch", "--force", "--clear", "--root"],
+    boolFlags: ["--existing-branch", "--copy", "--no-git", "--copy-ground", "--delete-branch", "--keep-floor", "--keep-branch", "--force", "--clear", "--root", "--pin", "--unpin"],
     summary: [
       "Andares e workspaces:",
       '  floor list|create|land|delete|status|unload   Andares do canvas (veja "maestri floor --help"); status é de qualquer agente',

@@ -154,10 +154,12 @@ export function nextRun(s: Schedule, from: number): number | null {
   return null;
 }
 
+const DAY_PT: Record<Day, string> = { mon: "seg", tue: "ter", wed: "qua", thu: "qui", fri: "sex", sat: "sáb", sun: "dom" };
+
 export function scheduleLabel(s: Schedule): string {
   if (s.type === "interval") return `a cada ${formatDuration(s.seconds)}`;
   if (s.type === "daily") return `todo dia às ${s.time}`;
-  if (s.type === "weekly") return `${s.days.join(",")} às ${s.time}`;
+  if (s.type === "weekly") return `${s.days.map((d) => DAY_PT[d]).join(",")} às ${s.time}`;
   return `uma vez em ${s.at}`;
 }
 

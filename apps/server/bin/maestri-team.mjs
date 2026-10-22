@@ -11,7 +11,7 @@ Apenas o Maestro. Cria um agente conectado a você e inicia o terminal dele.
   valendo como papel livre (formato antigo). --cmd é o apelido antigo de --command.
 --dir: diretório de partida; precisa estar dentro do projeto (padrão: o seu). --icon/--color: veja "maestri arrange --help".
 --band: coloca o recruta numa banda sua; sem ele, estando numa banda, o recruta entra nela em vez de ganhar uma corda.
---floor: (aguarda os andares/F16). Nomes repetidos viram "Nome (2)".
+--floor: cria o recruta num andar existente (e o terminal abre no checkout dele). Nomes repetidos viram "Nome (2)".
 --replace troca o processo do agente existente NO MESMO LUGAR (nó, cordas, posição e rotinas ficam; a sessão reinicia e o chat
   é descartado). O nome posicional renomeia. Exige --preset ou --command para trocar de agente; poderes de Maestro só mudam
   com --preset explícito. --floor não vale com --replace.`,

@@ -266,6 +266,7 @@ test("floor status: próprio andar, limite de 120, progress, --floor só Maestro
   const n0 = events.filter((e) => e.type === "notify").length;
   assert.match(await ok("w", ["floor", "status"]), /Obra: sem status/);
   assert.match(await ok("w", ["floor", "status", "Testes verdes", "--progress", "3/5"]), /working.*60%.*Testes verdes/);
+  assert.doesNotMatch(await ok("w", ["floor", "status", "Testes verdes", "--progress", "3/5"]), /": —/); // sem travessão sobrando
   assert.equal(events.filter((e) => e.type === "notify").length, n0);
   await ok("w", ["floor", "status", "x".repeat(300)]);
   assert.match(await ok("w", ["floor", "status"]), new RegExp(`x{120}$`, "m"));
@@ -375,6 +376,15 @@ test("workspaces: list/create/rename/move com grupos e pastas", async () => {
     cur = (await fastify.inject({ method: "GET", url: "/api/projects", headers: auth })).json().find((p: any) => p.id === a.id);
     assert.deepEqual([cur.group, cur.folder], [null, null]);
     await fail("maestro", ["workspace", "move", "CLONE A"], /Informe/);
+    // fixar/desafixar não move; aparece em "Fixados" no list
+    assert.match(await ok("maestro", ["workspace", "move", "CLONE A", "--pin"]), /fixado/);
+    cur = (await fastify.inject({ method: "GET", url: "/api/projects", headers: auth })).json().find((p: any) => p.id === a.id);
+    assert.deepEqual([cur.group, cur.folder, cur.pinned], [null, null, true]);
+    assert.match(await ok("maestro", ["workspace", "list"]), /Fixados:\n {2}- CLONE A/);
+    assert.match(await ok("maestro", ["workspace", "move", "CLONE A", "--unpin"]), /desafixado/);
+    cur = (await fastify.inject({ method: "GET", url: "/api/projects", headers: auth })).json().find((p: any) => p.id === a.id);
+    assert.equal(cur.pinned, false);
+    await fail("maestro", ["workspace", "move", "CLONE A", "--pin", "--unpin"], /não combina/);
     await fail("maestro", ["workspace", "move", "CLONE A", "--root", "--group", "G"], /não combina/);
     // grupos e pastas vazios continuam no list e em /api/sidebar
     assert.match(await ok("maestro", ["workspace", "list"]), /Grupo "Outro":\n {2}\(vazio\)/);
