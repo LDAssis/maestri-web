@@ -21,8 +21,8 @@ const COLOR_RE = /^#[0-9a-f]{6}$/i;
 const lc = (v: unknown) => String(v ?? "").trim().toLowerCase();
 
 // Roles globais para a UI (RolesPanel/NewAgentSheet). Mesmo armazenamento do `role create --scope global` (teamApi.ts):
-// <dataDir>/global-roles/.maestri/roles/<uuid>/role.json. Para criar um agente com um role global, a UI "materializa"
-// uma cópia no projeto (mesmo id, marcada com origin:"global"), porque POST /agents só resolve roles do projeto.
+// <dataDir>/global-roles/.maestri/roles/<uuid>/role.json. POST /agents (e `recruit --role`) aceitam o id de um role global
+// quando o projeto não tem um com esse id.
 export function registerGlobalRolesApi({ fastify, canvas, dataDir, projectRepo, projectIds }: Deps) {
   const root = path.join(dataDir, "global-roles");
   const changed = () => projectIds().forEach((id) => canvas.notify(id, { type: "roles" }));
@@ -90,17 +90,5 @@ export function registerGlobalRolesApi({ fastify, canvas, dataDir, projectRepo, 
     fs.rmSync(path.join(rolesDir(root), String(cur.id).toLowerCase()), { recursive: true, force: true });
     changed();
     return { ok: true };
-  }));
-
-  // Cópia do role global dentro do projeto (idempotente, sempre com o prompt atual); devolve o roleId a usar no agente
-  fastify.post("/api/projects/:p/roles/materialize-global", guard((req) => {
-    const repo = /^[\w-]+$/.test(String(req.params.p)) ? projectRepo(req.params.p) : null;
-    if (!repo) throw new ApiError(404, "Projeto não encontrado.");
-    const g = get(req.body?.roleId);
-    const existing = readRole(repo, g.id);
-    if (existing && existing.origin !== "global") return { roleId: existing.id, copied: false }; // já é um role do projeto com esse id
-    writeRole(repo, { ...g, origin: "global" });
-    canvas.notify(req.params.p, { type: "roles" });
-    return { roleId: g.id, copied: true };
   }));
 }

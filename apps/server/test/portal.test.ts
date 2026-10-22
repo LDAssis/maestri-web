@@ -316,7 +316,12 @@ test("screenshot salva um PNG e imprime o caminho", { skip }, async () => {
   assert.ok(path.isAbsolute(file) && file.endsWith(".png"), file);
   const buf = fs.readFileSync(file);
   assert.equal(buf.subarray(1, 4).toString(), "PNG");
-  fs.rmSync(file);
+  // pasta própria 0700 e arquivo 0600 (nome imprevisível; nada de caminho fixo no /tmp)
+  assert.match(path.basename(path.dirname(file)), /^maestri-portal-[A-Za-z0-9]{6}$/);
+  assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.notEqual(await ok(["portal", "screenshot", "Form"]), file, "cada screenshot tem a própria pasta");
+  fs.rmSync(path.dirname(file), { recursive: true, force: true });
 });
 
 test("popup vira o portal '[Pai] #2' e some quando a página o fecha", { skip }, async () => {
@@ -361,6 +366,89 @@ test("WS ao vivo: frames JPEG + meta, e eventos do usuário chegam à página", 
   assert.equal(code, 4400);
   const noTok = new WebSocket(`ws://127.0.0.1:${port}/ws/portal?project=${P}&node=${n.id}`);
   assert.equal(await new Promise<number>((r) => noTok.on("close", (c) => r(c))), 4401);
+});
+
+test("popups: no máximo 8 abertos por portal raiz; o excedente é fechado", { skip }, async () => {
+  await ok(["portal", "navigate", "Form", `${site}/`]);
+  await ok(["portal", "evaluate", "Form", "for (let i = 0; i < 12; i++) window.open('/popup?n=' + i, '_blank'); 'ok'"]);
+  await until(async () => (await canvasState()).nodes.filter((n: any) => /^Form #\d+$/.test(n.data?.title ?? "")).length >= 8, "popups adotados");
+  await sleep(1500); // dá tempo aos excedentes de chegar (e serem fechados)
+  const popups = (await canvasState()).nodes.filter((n: any) => /^Form #\d+$/.test(n.data?.title ?? ""));
+  assert.equal(popups.length, 8);
+  // fechar um abre vaga
+  await ok(["portal", "close", popups[0].data.title]);
+  await ok(["portal", "evaluate", "Form", "window.open('/popup?n=extra', '_blank'); 'ok'"]);
+  await until(async () => (await canvasState()).nodes.filter((n: any) => /^Form #\d+$/.test(n.data?.title ?? "")).length === 8, "uma vaga reaproveitada");
+  for (const p of (await canvasState()).nodes.filter((n: any) => /^Form #\d+$/.test(n.data?.title ?? ""))) await maestri(["portal", "close", p.data.title]);
+});
+
+test("upload só lê arquivos do projeto, dos anexos do chat e do tmp", { skip }, async () => {
+  await ok(["portal", "navigate", "Form", `${site}/`]);
+  const outside = "/etc/passwd";
+  const r = await maestri(["portal", "upload", "Form", "#arq", outside]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /^maestri: error: upload recusado: "\/etc\/passwd" está fora do projeto/);
+  // link simbólico do tmp para fora também é recusado (vale o caminho real)
+  const link = path.join(os.tmpdir(), `p7-link-${Date.now()}`);
+  fs.symlinkSync(outside, link);
+  assert.match((await maestri(["portal", "upload", "Form", "#arq", link])).stderr, /upload recusado/);
+  fs.rmSync(link);
+  // dentro do projeto (repo) e do tmp: ok
+  const inRepo = path.join(repo, "dentro.txt");
+  fs.writeFileSync(inRepo, "x");
+  assert.match(await ok(["portal", "upload", "Form", "#arq", inRepo]), /1 arquivo/);
+  // anexo do chat
+  const att = (await fastify.inject({ method: "POST", url: `/api/projects/${P}/attachments`, headers: auth, payload: { name: "doc.txt", data: Buffer.from("anexo").toString("base64") } })).json().attachment;
+  const attFile = path.join(repo, ".maestri_data", "attachments", P, att.id, "file");
+  assert.match(await ok(["portal", "upload", "Form", "#arq", attFile]), /1 arquivo/);
+});
+
+test("URLs bloqueadas: metadata/link-local e a API do próprio servidor; localhost em outra porta e ALLOW_PRIVATE liberam", { skip }, async () => {
+  for (const url of ["http://169.254.169.254/latest/meta-data", "http://169.254.1.1/", "http://[fd00:ec2::254]/", "http://[::ffff:169.254.169.254]/", "http://metadata.google.internal/computeMetadata/v1/", `http://127.0.0.1:${port}/api/health`, `http://localhost:${port}/`]) {
+    const create = await maestri(["portal", "create", url, "Bloq"]);
+    assert.equal(create.code, 1, url);
+    assert.match(create.stderr, /^maestri: error: URL bloqueada: /, url);
+    assert.match((await maestri(["portal", "navigate", "Form", url])).stderr, /URL bloqueada/, url);
+  }
+  assert.equal(await nodeByTitle("Bloq"), undefined);
+  assert.match((await maestri(["portal", "create", "ftp://x/", "Bloq"])).stderr, /URL inválida \(apenas http\/https\)/);
+  // localhost em outra porta (o site de teste) segue permitido
+  assert.equal((await maestri(["portal", "navigate", "Form", `${site}/outra`])).code, 0);
+  await ok(["portal", "navigate", "Form", `${site}/`]);
+  // o site não alcança o metadata nem por sub-requisição (fetch) nem por redirecionamento: a requisição é abortada
+  assert.equal(await ok(["portal", "evaluate", "Form", "(async () => { try { await fetch('http://169.254.169.254/x'); return 'passou'; } catch { return 'bloqueado'; } })()"]), "bloqueado");
+  assert.equal(await ok(["portal", "evaluate", "Form", `(async () => { try { await fetch('http://127.0.0.1:${port}/api/health', { mode: 'no-cors' }); return 'passou'; } catch { return 'bloqueado'; } })()`]), "bloqueado");
+  // MAESTRI_PORTAL_ALLOW_PRIVATE=1 libera
+  process.env.MAESTRI_PORTAL_ALLOW_PRIVATE = "1";
+  try {
+    const r = await maestri(["portal", "create", `http://127.0.0.1:${port}/api/health`, "Liberado"]);
+    assert.equal(r.code, 0, r.stderr);
+    await ok(["portal", "close", "Liberado"]);
+  } finally {
+    delete process.env.MAESTRI_PORTAL_ALLOW_PRIVATE;
+  }
+});
+
+test("WS: entradas enviadas antes da página abrir ficam na fila e valem; erro com cliente caído não derruba", { skip }, async () => {
+  const again = await maestri(["portal", "create", site, "Fila2"]);
+  assert.equal(again.code, 0, again.stderr);
+  const n2 = await nodeByTitle("Fila2");
+  // fecha a página (o nó fica) e reabre via WS: a navegação enviada no mesmo instante do open é aplicada depois do ensure
+  portals.closeNodes(P, [n2.id]);
+  assert.equal(portals.has(P, n2.id), false);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/portal?project=${P}&node=${n2.id}&token=tok-portal`);
+  const got: any[] = [];
+  ws.on("message", (d, isBinary) => !isBinary && got.push(JSON.parse(d.toString())));
+  await new Promise((res, rej) => (ws.on("open", res), ws.on("error", rej)));
+  ws.send(JSON.stringify({ type: "navigate", url: `${site}/outra` })); // antes de o ensure terminar
+  await until(() => got.some((m) => m.type === "meta" && m.title === "Outra"), "navegação enfileirada aplicada", 20000);
+  ws.close();
+  // cliente que cai durante a abertura: o servidor segue de pé
+  const quick = new WebSocket(`ws://127.0.0.1:${port}/ws/portal?project=${P}&node=${n2.id}&token=tok-portal`);
+  quick.on("open", () => quick.terminate());
+  await sleep(500);
+  assert.match(await ok(["portal", "info", "Fila2"]), /url: /);
+  await ok(["portal", "close", "Fila2"]);
 });
 
 test("create --size, close e remoção do nó pelo canvas fecham a página", { skip }, async () => {

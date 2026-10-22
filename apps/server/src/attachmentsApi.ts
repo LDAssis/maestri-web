@@ -46,7 +46,7 @@ export function registerAttachmentsApi({ fastify, nodeApi, attachments, projectR
   fastify.get("/api/projects/:p/attachments/:id", async (req: any, reply) => {
     const p = project(req, reply);
     if (!p) return;
-    const a = attachments.read(p, req.params.id);
+    const a = await attachments.read(p, req.params.id);
     if (!a) return reply.status(404).send({ error: "Anexo não encontrado." });
     const safeName = encodeURIComponent(a.meta.name);
     return reply
@@ -59,8 +59,8 @@ export function registerAttachmentsApi({ fastify, nodeApi, attachments, projectR
 
   // CLI: o agente envia um arquivo (para `say --attach/--file`) e baixa um anexo (`recall attachment`)
   fastify.post(`${base}/attachments`, { bodyLimit: BODY_LIMIT }, wrap((c, req) => ({ attachment: attachments.save(c.projectId, req.body?.name, decodeBase64(req.body?.data)) })));
-  fastify.get(`${base}/attachments/:id`, wrap((c, req) => {
-    const a = attachments.read(c.projectId, req.params.id);
+  fastify.get(`${base}/attachments/:id`, wrap(async (c, req) => {
+    const a = await attachments.read(c.projectId, req.params.id);
     if (!a) throw new ApiError(404, "Anexo não encontrado (veja os ids em `maestri recall`).");
     return { attachment: a.meta, data: a.data.toString("base64") };
   }));

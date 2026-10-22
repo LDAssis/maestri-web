@@ -75,11 +75,12 @@ export class AttachmentStore {
     }
   }
 
-  read(projectId: string, id: unknown): { meta: AttachmentMeta; data: Buffer } | null {
+  // Assíncrono: ler até 20MB não trava o laço de eventos (o servidor também atende terminais e WebSockets)
+  async read(projectId: string, id: unknown): Promise<{ meta: AttachmentMeta; data: Buffer } | null> {
     const meta = this.meta(projectId, id);
     if (!meta) return null;
     try {
-      return { meta, data: fs.readFileSync(path.join(this.dir(projectId, meta.id), "file")) };
+      return { meta, data: await fs.promises.readFile(path.join(this.dir(projectId, meta.id), "file")) };
     } catch {
       return null;
     }

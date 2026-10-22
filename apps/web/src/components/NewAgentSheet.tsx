@@ -14,6 +14,8 @@ interface PresetItem {
   chat: boolean;
   quickStart: boolean;
   builtin: boolean;
+  color?: string;
+  icon?: string;
 }
 const FALLBACK: PresetItem[] = [
   ["claude", "Claude"], ["codex", "Codex"], ["opencode", "OpenCode"], ["agy", "Antigravity"], ["shell", "Shell"],
@@ -35,8 +37,7 @@ export default function NewAgentSheet({
 }) {
   const { roles: allRoles } = useRoles(projectId);
   const { globalRoles } = useGlobalRoles(projectId);
-  // Cópias de roles globais já no projeto aparecem só na lista de globais
-  const roles = allRoles.filter((r) => r.origin !== "global");
+  const roles = allRoles;
   const [title, setTitle] = useState("");
   const [presets, setPresets] = useState<PresetItem[]>(FALLBACK);
   const [preset, setPreset] = useState("claude");
@@ -92,11 +93,6 @@ export default function NewAgentSheet({
     setBusy(true);
     setError("");
     try {
-      // Role global: o servidor só resolve roles do projeto, então traz uma cópia para o projeto antes de criar o agente
-      if (roleId && globalRoles.some((g) => g.id === roleId)) {
-        const m = await apiFetch(`/api/projects/${projectId}/roles/materialize-global`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roleId }) });
-        if (!m.ok) return setError((await m.json().catch(() => ({})))?.error || `Servidor respondeu ${m.status}`);
-      }
       const res = await apiFetch(`/api/projects/${projectId}/agents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -107,6 +103,9 @@ export default function NewAgentSheet({
           ...((chosen.id === "shell" ? cmd.trim() : chosen.cmd) && { cmd: chosen.id === "shell" ? cmd.trim() : chosen.cmd }),
           ...(!chosen.builtin && { presetName: chosen.label }),
           ...(chosen.maestro && { isMaestro: true }),
+          // aparência do preset (o servidor mapeia cores antigas como purple para a paleta do arrange)
+          ...(chosen.color && { color: chosen.color }),
+          ...(chosen.icon && { icon: chosen.icon }),
           ...(chosen.chat && { chatFirst: true }),
           ...(roleId && { roleId }),
           ...(position && { position }),

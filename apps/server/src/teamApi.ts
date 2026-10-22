@@ -16,6 +16,7 @@ import { FloorStore, GROUND, floorOf } from "./floors.js";
 import { AccountStore, DEFAULT_ACCOUNT } from "./accounts.js";
 import type { CrossLinks } from "./crossLinks.js";
 import { programOf } from "./resume.js";
+import { arrangeColor, deliverRole, roleCwdPatch } from "./agentSetup.js";
 
 type Obj = Record<string, any>;
 
@@ -103,7 +104,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
       for (const e of list) {
         if (!e || typeof e.id !== "string" || typeof e.label !== "string" || typeof e.cmd !== "string") continue;
         const b = map.get(e.id);
-        map.set(e.id, { id: e.id, label: e.label, cmd: e.cmd, maestro: e.maestro === true, chat: e.chat === true, quickStart: e.quickStart !== false, builtin: !!b?.builtin, source, ...(typeof e.color === "string" && { color: e.color }), ...(typeof e.icon === "string" && { icon: e.icon }), ...(typeof e.account === "string" && e.account && { account: e.account }) });
+        map.set(e.id, { id: e.id, label: e.label, cmd: e.cmd, maestro: e.maestro === true, chat: e.chat === true, quickStart: e.quickStart !== false, builtin: !!b?.builtin, source, ...(typeof e.color === "string" && { color: arrangeColor(e.color) ?? e.color }), ...(typeof e.icon === "string" && { icon: e.icon }), ...(typeof e.account === "string" && e.account && { account: e.account }) });
       }
     };
     overlay(settings.readGlobal()?.cliPresets, "global");
@@ -363,27 +364,6 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     for (const p of new Set(pids)) canvas.notify(p, { type: "links" });
   };
 
-  // ---------- Prompt do role como arquivo de contexto ----------
-  // Cada CLI lê o seu: CLAUDE.md (claude) e AGENTS.md (codex, opencode, agy). Escrevemos os dois.
-  function writeRoleContext(dir: string, prompt: string, projectRoot: string) {
-    fs.mkdirSync(dir, { recursive: true });
-    const body = `<your_assigned_role>\n${prompt}\n</your_assigned_role>\n\n<working_directory>\nYou were started in this directory only to receive the role above. The actual project you work on is located at:\n${projectRoot}\n</working_directory>\n`;
-    for (const f of ["CLAUDE.md", "AGENTS.md"]) fs.writeFileSync(path.join(dir, f), body);
-  }
-  // Entrega o prompt ao agente. Padrão: arquivos de contexto em .maestri/roles/<id>/ (ou .maestri-roles/<nó>/ para papel
-  // livre) e o terminal começa NESSA pasta. Com --dir/--floor o terminal começa em outro lugar (explicit): claude e codex
-  // recebem o prompt como argumento (arquivo + $(cat)); os demais CLIs ficam sem o prompt.
-  function deliverRole(repo: string, nodeId: string, baseCmd: string, prompt: string | null, roleId: string | null, explicit: boolean) {
-    if (!prompt) return { defaultCmd: baseCmd, worktreePath: null as string | null, roleDir: false };
-    const wrapped = withRolePrompt(repo, nodeId, baseCmd, prompt); // também grava .maestri-roles/<nó>.md (o prompt vigente)
-    if (explicit) return { defaultCmd: wrapped, worktreePath: null, roleDir: false };
-    const dir = roleId ? path.join(rolesDir(repo), roleId.toLowerCase()) : path.join(repo, ".maestri-roles", nodeId);
-    writeRoleContext(dir, prompt, fs.realpathSync(repo));
-    return { defaultCmd: baseCmd, worktreePath: path.relative(fs.realpathSync(repo), fs.realpathSync(dir)), roleDir: true };
-  }
-  // Muda (ou desfaz) o cwd de role-dir do nó conforme a entrega
-  const roleCwdPatch = (node: Obj, d: { worktreePath: string | null; roleDir: boolean }): Obj =>
-    d.roleDir ? { worktreePath: d.worktreePath, roleDir: true } : node.data?.roleDir ? { worktreePath: null, roleDir: false } : {};
 
   // Grava o comando (com o prompt do role) no nó e reinicia o PTY no mesmo lugar; o chat é descartado.
   // Sem sessão ativa só atualiza o nó (a sessão nasce quando alguém abrir o terminal).
@@ -509,6 +489,10 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
       if (band && floorOf(band) !== floor) band = null;
     }
 
+    const look = {
+      color: b.color ?? arrangeColor(preset?.color),
+      icon: b.icon ?? (preset?.icon && (ICONS as readonly string[]).includes(preset.icon) ? preset.icon : undefined),
+    };
     const title = uniqueTitle(tnodes, b.name.trim());
     const roleLabel = saved ? saved.name : text.trim() ? (text.trim().length <= 60 ? text.trim() : "Agente") : preset?.label ?? PRESET_LABELS[presetField] ?? "Agente";
     const ref = cross ? tnodes.at(-1) ?? { type: "agentTerminal", position: { x: 0, y: 0 } } : c.me;
@@ -529,9 +513,9 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
         ...(accountName && { account: accountName }),
         ...(preset?.maestro && { isMaestro: true }),
         ...(preset?.chat && { chatFirst: true }),
-        // aparência: --color/--icon vencem; senão a do preset (quando é uma cor/ícone válido do arrange)
-        ...((b.color ?? (preset?.color && (COLORS as readonly string[]).includes(preset.color) ? preset.color : undefined)) !== undefined && { color: b.color ?? preset!.color }),
-        ...((b.icon ?? (preset?.icon && (ICONS as readonly string[]).includes(preset.icon) ? preset.icon : undefined)) !== undefined && { icon: b.icon ?? preset!.icon }),
+        // aparência: --color/--icon vencem; senão a do preset (cor antiga da UI, como purple, vira a da paleta do arrange)
+        ...(look.color !== undefined && { color: look.color }),
+        ...(look.icon !== undefined && { icon: look.icon }),
       },
     };
     canvas.applyAndBroadcast(tpid, { kind: "upsertNodes", nodes: [node] }, by(c));

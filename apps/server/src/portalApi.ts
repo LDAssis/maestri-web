@@ -1,12 +1,13 @@
 import { newNodeData } from "./floors.js";
 import crypto from "node:crypto";
+import path from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import type { CanvasStore } from "./canvas.js";
 import type { NodeApi } from "./nodeApi.js";
 import { isText, lc } from "./nodeApi.js";
 import { ApiError, SIZES, freePosition } from "./agents.js";
-import { DEFAULT_VIEWPORT, PortalManager, httpUrl } from "./portals.js";
+import { DEFAULT_VIEWPORT, PortalManager, httpUrl, urlError } from "./portals.js";
 
 interface Deps {
   fastify: FastifyInstance;
@@ -14,6 +15,7 @@ interface Deps {
   projectRepo: (projectId: string) => string | null;
   nodeApi: NodeApi;
   wsAuthorized: (socket: WebSocket, req: FastifyRequest, url: URL) => boolean;
+  dataDir?: string; // anexos do chat (<dataDir>/attachments/<projeto>) valem como origem de upload
 }
 
 // "WxH" -> { w, h } (50..5000)
@@ -33,9 +35,9 @@ function nodeSize(vp: { w: number; h: number }) {
   return { width: Math.max(dw, 560), height: Math.max(dh, Math.round((560 * vp.h) / vp.w) + 110) };
 }
 
-export function registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAuthorized }: Deps) {
+export function registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAuthorized, dataDir }: Deps) {
   const { base, resolveTarget, wrap, patch } = nodeApi;
-  const manager = new PortalManager(canvas);
+  const manager = new PortalManager(canvas, { repoOf: projectRepo, extraUploadRoots: (projectId) => (dataDir ? [path.join(dataDir, "attachments", projectId)] : []) });
 
   fastify.addHook("onClose", async () => manager.closeAll());
 
@@ -43,7 +45,7 @@ export function registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAut
   fastify.post(`${base}/portal/create`, wrap(async (c, req) => {
     const { url, name, size } = req.body ?? {};
     const href = httpUrl(url);
-    if (!href) throw new ApiError(400, "URL inválida (apenas http/https).");
+    if (!href) throw new ApiError(400, urlError(url));
     if (name !== undefined && (!isText(name, 100) || !name.trim())) throw new ApiError(400, "Nome inválido.");
     const vp = size === undefined ? { ...DEFAULT_VIEWPORT } : parseSize(size);
     const titles = new Set(c.nodes.map((n) => lc(n.data?.title)));
@@ -78,7 +80,7 @@ export function registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAut
   fastify.post(`${base}/portal/edit`, wrap(async (c, req) => {
     const t = resolveTarget(c, req.body?.target, "portal");
     const href = httpUrl(req.body?.url);
-    if (!href) throw new ApiError(400, "URL inválida (apenas http/https).");
+    if (!href) throw new ApiError(400, urlError(req.body?.url));
     patch(c, t.id, { url: href });
     const r = await manager.navigate(c.projectId, t.id, href);
     return { ok: true, url: r?.url ?? href };
@@ -94,7 +96,7 @@ export function registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAut
   fastify.post(`${base}/portal-navigate`, wrap(async (c, req) => {
     const t = resolveTarget(c, req.body?.target, "portal");
     const href = httpUrl(req.body?.url);
-    if (!href) throw new ApiError(400, "URL inválida (apenas http/https).");
+    if (!href) throw new ApiError(400, urlError(req.body?.url));
     patch(c, t.id, { url: href });
     const r = await manager.navigate(c.projectId, t.id, href);
     return { ok: true, url: r?.url ?? href, title: r?.title };

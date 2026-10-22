@@ -8,7 +8,7 @@ Contas de CLI para rodar agentes lado a lado em assinaturas/chaves diferentes: "
 "maestri preset create/set ... --account Nome" e "maestri recruit --replace X --account Nome". "Default" é o login existente
 do CLI e não precisa ser criada. Depois de recrutar na conta nova, faça o login rodando o CLI naquele terminal.
 create/delete: só o Maestro. delete apaga o diretório de configuração (o login dessa conta) e só deve ser usado a pedido
-explícito do usuário; é recusado enquanto algum terminal usa a conta.`;
+explícito do usuário; é recusado enquanto algum terminal usa a conta. Presets que fixavam a conta são desafixados (e listados).`;
 
 export function register({ call, need, CliError }) {
   async function account({ pos, flags }) {
@@ -24,7 +24,7 @@ export function register({ call, need, CliError }) {
       need(pos, 2, `account ${sub} "Nome" --cli claude|codex`);
       if (!cli) throw new CliError("Falta --cli claude|codex.");
       const r = await call("POST", `/accounts/${sub}`, { name, program: cli });
-      console.log(sub === "create" ? `Conta "${r.name}" criada para ${cli}. Recrute com --account "${r.name}" e faça o login rodando ${cli} naquele terminal.` : `Conta "${r.name}" apagada (${cli}).`);
+      console.log(sub === "create" ? `Conta "${r.name}" criada para ${cli}. Recrute com --account "${r.name}" e faça o login rodando ${cli} naquele terminal.` : `Conta "${r.name}" apagada (${cli}).${r.unpinned?.length ? ` Presets desafixados (voltam ao login padrão): ${r.unpinned.map((p) => `"${p}"`).join(", ")}.` : ""}`);
     } else throw new CliError('Uso: maestri account list|create|delete (veja "maestri account --help")');
   }
 

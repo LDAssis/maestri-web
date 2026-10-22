@@ -17,6 +17,7 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
   const [program, setProgram] = useState<"claude" | "codex">("claude");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -66,10 +67,13 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
 
   const remove = async (a: Account) => {
     setError("");
+    setNotice("");
     const res = await apiFetch(`/api/accounts/${a.program}/${encodeURIComponent(a.name)}`, { method: "DELETE" }).catch(() => null);
     const body = await res?.json().catch(() => ({}));
     setConfirmDel(null);
     if (!res?.ok) return setError(body?.error || "Não foi possível apagar a conta");
+    // presets que fixavam a conta foram desafixados: avisa quais
+    if (body?.unpinned?.length) setNotice(`Presets desafixados (voltam ao login padrão): ${body.unpinned.join(", ")}.`);
     load();
   };
 
@@ -130,6 +134,8 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
           </button>
         </form>
         {error && <div role="alert" className="mt-1.5 text-[11px] text-amber-300">{error}</div>}
+        {notice && <div role="status" className="mt-1.5 text-[11px] text-sky-300">{notice}</div>}
+        {notice && <div role="status" className="mt-1.5 text-[11px] text-sky-300">{notice}</div>}
       </div>
     </div>
   );

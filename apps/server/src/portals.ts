@@ -12,6 +12,7 @@ type Obj = Record<string, any>;
 export const DEFAULT_VIEWPORT = { w: 1280, h: 800 };
 const ACTION_TIMEOUT = 5000;
 const NAV_TIMEOUT = 20_000;
+const MAX_POPUPS = 8; // popups abertos ao mesmo tempo por portal raiz
 const FRAME_MS = Number(process.env.MAESTRI_PORTAL_FRAME_MS) || 700;
 const SNAPSHOT_MAX = 300;
 
@@ -28,14 +29,47 @@ export const UA_PRESETS: Record<string, string | null> = {
 };
 const MOBILE_UA = new Set(["ios", "android", "firefox-android", "edge-android"]);
 
-// Só http/https (localhost incluso); devolve a URL normalizada ou ""
+// Portas em que a própria API do Maestri atende (definidas pelo servidor ao subir); o portal não navega até ela
+let selfPorts: () => number[] = () => [];
+export const setPortalSelfPorts = (fn: () => number[]) => {
+  selfPorts = fn;
+};
+
+// Por que um destino é bloqueado (por padrão): link-local e metadata de nuvem (credenciais!) e a API do próprio servidor.
+// localhost em OUTRAS portas continua livre (é o caso de uso de dev). MAESTRI_PORTAL_ALLOW_PRIVATE=1 libera tudo.
+// Limite: só olha o nome/IP digitado; um nome DNS que resolva para esses endereços não é detectado.
+export function blockedReason(u: URL): string | null {
+  if (process.env.MAESTRI_PORTAL_ALLOW_PRIVATE === "1") return null;
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "metadata.google.internal" || host === "metadata") return "endereço de metadata de nuvem";
+  if (/^169\.254\./.test(host)) return "endereço link-local/metadata (169.254.0.0/16)";
+  if (host === "fd00:ec2::254" || /^fe[89ab][0-9a-f]:/.test(host)) return "endereço link-local/metadata (IPv6)";
+  if (/^::ffff:a9fe:/.test(host)) return "endereço link-local/metadata (169.254.0.0/16)";
+  const port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
+  const loopback = host === "localhost" || host.endsWith(".localhost") || /^127\./.test(host) || host === "::1" || host === "0.0.0.0" || host === "::";
+  if (loopback && selfPorts().includes(port)) return "a API do próprio servidor do Maestri";
+  return null;
+}
+
+// Só http/https (localhost incluso); devolve a URL normalizada ou "" (inválida ou bloqueada, veja urlError)
 export function httpUrl(raw: unknown) {
   try {
     const u = new URL(String(raw ?? "").trim());
-    return u.protocol === "http:" || u.protocol === "https:" ? u.href : "";
+    if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+    return blockedReason(u) ? "" : u.href;
   } catch {
     return "";
   }
+}
+
+// Mensagem de erro para uma URL que httpUrl recusou
+export function urlError(raw: unknown): string {
+  try {
+    const u = new URL(String(raw ?? "").trim());
+    const why = (u.protocol === "http:" || u.protocol === "https:") && blockedReason(u);
+    if (why) return `URL bloqueada: ${why}. (MAESTRI_PORTAL_ALLOW_PRIVATE=1 libera.)`;
+  } catch {}
+  return "URL inválida (apenas http/https).";
 }
 
 interface Entry {
@@ -65,7 +99,19 @@ export class PortalManager {
   private opening = new Map<string, Promise<Entry>>();
   private browserP: Promise<Browser> | null = null;
 
-  constructor(private canvas: CanvasStore) {}
+  // repoOf/extraUploadRoots: de onde o `upload` pode ler arquivos (projeto, anexos do chat); o tmpdir vale sempre
+  constructor(private canvas: CanvasStore, private opts: { repoOf?: (projectId: string) => string | null; extraUploadRoots?: (projectId: string) => string[] } = {}) {}
+
+  uploadRoots(projectId: string): string[] {
+    const roots = [os.tmpdir(), this.opts.repoOf?.(projectId), ...(this.opts.extraUploadRoots?.(projectId) ?? [])].filter((r): r is string => !!r);
+    return roots.flatMap((r) => {
+      try {
+        return [fs.realpathSync(r)];
+      } catch {
+        return [];
+      }
+    });
+  }
 
   private key(projectId: string, nodeId: string) {
     return `${projectId}:${nodeId}`;
@@ -85,11 +131,14 @@ export class PortalManager {
 
   private async newContext(vp: { w: number; h: number }, ua: string | null, preset?: string) {
     const browser = await this.browser();
-    return browser.newContext({
+    const ctx = await browser.newContext({
       viewport: { width: vp.w, height: vp.h },
       ...(ua ? { userAgent: ua } : {}),
       ...(preset && MOBILE_UA.has(preset) ? { isMobile: preset !== "firefox-android", hasTouch: true } : {}),
     });
+    // Cobre também redirecionamentos e sub-requisições: nada chega ao metadata/link-local nem à API do servidor
+    await ctx.route((url) => blockedReason(url) !== null, (route) => route.abort("blockedbyclient"));
+    return ctx;
   }
 
   has(projectId: string, nodeId: string) {
@@ -164,6 +213,14 @@ export class PortalManager {
 
   // Popup aberto pela página vira um nó de portal "[Pai] #N", ligado aos mesmos agentes do pai
   private async adoptPopup(parent: Entry, page: Page) {
+    // Teto de popups abertos por portal raiz: um site que abre janelas sem parar não enche o canvas nem a memória
+    let root = parent;
+    for (let up = root.parent ? this.entries.get(root.parent) : undefined; up; up = root.parent ? this.entries.get(root.parent) : undefined) root = up;
+    const open = [...this.entries.values()].filter((x) => x !== root && x.parent && this.rootOf(x) === root).length;
+    if (open >= MAX_POPUPS) {
+      await page.close().catch(() => {});
+      return;
+    }
     const st = this.canvas.state(parent.projectId);
     const pn = st.nodes?.find((n) => n.id === parent.nodeId);
     if (!pn) return;
@@ -190,6 +247,12 @@ export class PortalManager {
     const e = this.register(parent.projectId, id, parent.ctx, page, false, parent.viewport, parent.key);
     e.ua = parent.ua;
     void this.pushFrame(e);
+  }
+
+  private rootOf(e: Entry): Entry {
+    let cur = e;
+    for (let up = cur.parent ? this.entries.get(cur.parent) : undefined; up; up = cur.parent ? this.entries.get(cur.parent) : undefined) cur = up;
+    return cur;
   }
 
   // Popup fechado pelo site: remove o nó dele do canvas
@@ -308,41 +371,56 @@ export class PortalManager {
 
   // Cliente do canvas passa a observar a sessão (abre a página se preciso)
   async watch(projectId: string, nodeId: string, socket: WebSocket) {
-    let e: Entry;
-    try {
-      e = await this.ensure(projectId, nodeId);
-    } catch (err: any) {
-      socket.send(JSON.stringify({ type: "error", error: err?.message ?? "Falha ao abrir o portal." }));
-      // a página existe mesmo com falha de carga (about:blank); ainda assim observa se houver
-      const cur = this.entries.get(this.key(projectId, nodeId));
-      if (!cur) return;
-      e = cur;
-    }
-    e.watchers.add(socket);
-    e.lastFrame = undefined;
-    e.lastMeta = undefined;
-    if (!e.timer) e.timer = setInterval(() => void this.pushFrame(e), FRAME_MS);
-    void this.pushFrame(e, true);
-    socket.on("message", (raw: Buffer | string) => {
+    const say = (m: Obj) => {
+      try {
+        socket.send(JSON.stringify(m));
+      } catch {} // o cliente pode ter caído no meio
+    };
+    // Os handlers entram ANTES do await do ensure: entradas iniciais do usuário ficam na fila (até 50) e não se perdem
+    let entry: Entry | null = null;
+    let closed = false;
+    const queued: (Buffer | string)[] = [];
+    const handle = (e: Entry, raw: Buffer | string) => {
       let msg: any;
       try {
         msg = JSON.parse(raw.toString());
       } catch {
         return;
       }
-      void this.userInput(e, msg).catch((err) => {
-        try {
-          socket.send(JSON.stringify({ type: "error", error: err?.message ?? String(err) }));
-        } catch {}
-      });
+      void this.userInput(e, msg).catch((err) => say({ type: "error", error: err?.message ?? String(err) }));
+    };
+    socket.on("message", (raw: Buffer | string) => {
+      if (entry) handle(entry, raw);
+      else if (queued.length < 50) queued.push(raw);
     });
     socket.on("close", () => {
-      e.watchers.delete(socket);
-      if (!e.watchers.size && e.timer) {
-        clearInterval(e.timer);
-        e.timer = undefined;
+      closed = true;
+      if (!entry) return;
+      entry.watchers.delete(socket);
+      if (!entry.watchers.size && entry.timer) {
+        clearInterval(entry.timer);
+        entry.timer = undefined;
       }
     });
+
+    let e: Entry;
+    try {
+      e = await this.ensure(projectId, nodeId);
+    } catch (err: any) {
+      say({ type: "error", error: err?.message ?? "Falha ao abrir o portal." });
+      // a página existe mesmo com falha de carga (about:blank); ainda assim observa se houver
+      const cur = this.entries.get(this.key(projectId, nodeId));
+      if (!cur) return;
+      e = cur;
+    }
+    if (closed) return;
+    entry = e;
+    e.watchers.add(socket);
+    e.lastFrame = undefined;
+    e.lastMeta = undefined;
+    if (!e.timer) e.timer = setInterval(() => void this.pushFrame(e), FRAME_MS);
+    void this.pushFrame(e, true);
+    for (const raw of queued.splice(0)) handle(e, raw);
   }
 
   // Cliques, digitação, rolagem e navegação feitos pelo usuário no nó
@@ -369,7 +447,7 @@ export class PortalManager {
           break;
         case "navigate": {
           const url = httpUrl(m.url);
-          if (!url) throw new ApiError(400, "URL inválida (apenas http/https).");
+          if (!url) throw new ApiError(400, urlError(m.url));
           await this.goto(e, url);
           break;
         }
@@ -585,8 +663,10 @@ const COMMANDS: Record<string, Handler> = {
 
   async screenshot(_m, e) {
     const buf = await e.page.screenshot({ type: "png" });
-    const file = path.join(os.tmpdir(), `maestri-portal-${e.nodeId}-${Date.now()}.png`);
-    fs.writeFileSync(file, buf);
+    // Pasta própria (0700) e arquivo novo (wx, 0600): nome imprevisível, sem sobrescrever nem seguir links plantados no /tmp
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "maestri-portal-"));
+    const file = path.join(dir, `${e.nodeId}-${Date.now()}.png`);
+    fs.writeFileSync(file, buf, { flag: "wx", mode: 0o600 });
     return file;
   },
 
@@ -704,8 +784,14 @@ const COMMANDS: Record<string, Handler> = {
   async upload(_m, e, a) {
     need(a, 2, 'upload "Portal" <seletor> arquivo...');
     const files = a.slice(1);
+    // Só arquivos do projeto, dos anexos do chat ou do tmp (o caminho real, depois de seguir links simbólicos)
+    const roots = _m.uploadRoots(e.projectId);
     for (const f of files) {
       if (!path.isAbsolute(f) || !fs.existsSync(f)) throw new ApiError(400, `arquivo não encontrado: ${f}`);
+      const real = fs.realpathSync(f);
+      if (!roots.some((r) => real === r || real.startsWith(r + path.sep))) {
+        throw new ApiError(400, `upload recusado: "${f}" está fora do projeto (só arquivos do projeto, dos anexos do chat ou de ${os.tmpdir()}).`);
+      }
     }
     const t = await target(e, a[0]);
     if (!t.loc) throw new ApiError(400, "upload não aceita coordenadas.");

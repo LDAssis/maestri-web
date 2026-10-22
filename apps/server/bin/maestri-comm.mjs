@@ -79,6 +79,7 @@ export function register({ call, need, CliError }) {
     try {
       const r = await call("POST", "/ask", { target: name, text, timeout });
       if (r.starting) return { name, output: "", starting: true, error: STARTING };
+      if (r.error) return { name, error: r.error };
       return { name, output: r.output ?? "", ...(r.timedOut && { timedOut: true }) };
     } catch (e) {
       return { name, error: e?.message || String(e) };
@@ -116,6 +117,7 @@ export function register({ call, need, CliError }) {
     if (flags.raw !== undefined) {
       need(pos, 1, 'ask "Nome" --raw "texto com escapes"');
       const r = await call("POST", "/raw", { target: pos[0], input: flags.raw, wait: true, timeout });
+      if (r.error) throw new CliError(r.error);
       if (r.starting) return starting(pos[0]);
       if (r.output) console.log(r.output);
       if (r.timedOut) {
@@ -126,6 +128,7 @@ export function register({ call, need, CliError }) {
     }
     need(pos, 2, 'ask "Nome" "texto" [--timeout S]');
     const r = await call("POST", "/ask", { target: pos[0], text: pos.slice(1).join(" "), timeout });
+    if (r.error) throw new CliError(r.error);
     if (r.starting) return starting(pos[0]);
     if (r.output) console.log(r.output);
     if (r.timedOut) {
