@@ -16,10 +16,10 @@ interface Deps {
 }
 
 const ANSI = /\x1b\[[0-?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
-const stripAnsi = (s: string) => s.replace(ANSI, "").replace(/\r\n?/g, "\n");
+export const stripAnsi = (s: string) => s.replace(ANSI, "").replace(/\r\n?/g, "\n");
 
-const lc = (v: unknown) => String(v ?? "").trim().toLowerCase();
-const isText = (v: unknown, max = 100_000): v is string => typeof v === "string" && v.length <= max;
+export const lc = (v: unknown) => String(v ?? "").trim().toLowerCase();
+export const isText = (v: unknown, max = 100_000): v is string => typeof v === "string" && v.length <= max;
 
 // Chat ocupado (captura em andamento), chave `${projectId}:${nodeId}`; lido pelas rotinas
 export const chatBusy = new Set<string>();
@@ -69,6 +69,8 @@ function expandMentions(text: string, connected: Obj[]) {
     return `${m} (use: ${n.type === "stickyNote" ? `maestri note read "${q}"` : `maestri ask "${q}" ...`})`;
   });
 }
+
+export type NodeApi = ReturnType<typeof registerNodeApi>;
 
 export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps) {
   const base = "/api/projects/:p/nodes/:n";
@@ -360,4 +362,7 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
       });
     return reply.status(202).send({ ok: true });
   }));
+
+  // Helpers reaproveitados pelos módulos de extensão da API de nós (registerXxxApi em index.ts)
+  return { base, context, resolveTarget, requireMaestro, requireSession, patch, wrap };
 }

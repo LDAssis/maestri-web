@@ -153,7 +153,7 @@ fastify.addHook("onClose", async () => {
 
 const idPattern = /^[\w-]+$/;
 
-registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
+const nodeApi = registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
 const projectRepo = (id: string) => projects.find((p) => p.id === id)?.repoPath ?? null;
 const { createFloorFor } = registerWorktreeApi({ fastify, sessions, canvas, projectRepo });
 registerRolesApi({ fastify, canvas, projectRepo, createFloorFor });

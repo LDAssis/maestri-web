@@ -2,6 +2,9 @@
 // CLI do Maestri Web: fala com a API do servidor usando o ambiente injetado no PTY
 // (MAESTRI_API_URL, MAESTRI_PROJECT_ID, MAESTRI_NODE_ID, MAESTRI_TOKEN). Sem dependências.
 
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { makeRoutine, ROUTINE_FLAGS, ROUTINE_HELP } from "./maestri-routine.mjs";
 
 const HELP = {
@@ -46,6 +49,8 @@ class CliError extends Error {
 }
 
 const FLAGS = ["--lines", "--timeout", "--cmd", "--role", "--last", "--preset", "--role-id", ...ROUTINE_FLAGS];
+// Flags sem valor (viram flags[nome] = true); módulos de extensão acrescentam as suas
+const BOOL_FLAGS = [];
 
 function parse(argv) {
   const pos = [];
@@ -54,6 +59,7 @@ function parse(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") help = true;
+    else if (BOOL_FLAGS.includes(a)) flags[a.slice(2)] = true;
     else if (FLAGS.includes(a)) {
       if (i + 1 >= argv.length) throw new CliError(`Falta o valor de ${a}.`);
       flags[a.slice(2)] = argv[++i];
@@ -190,7 +196,25 @@ const COMMANDS = {
 COMMANDS.list = COMMANDS.context;
 COMMANDS.routine = makeRoutine({ call, need, CliError });
 
+// Módulos de extensão: bin/maestri-*.mjs que exportam register({ call, need, CliError }) e devolvem
+// { commands, help?, flags?, boolFlags? }. Cada área do CLI vive no próprio arquivo.
+async function loadModules() {
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  for (const f of fs.readdirSync(dir).filter((x) => /^maestri-.+\.mjs$/.test(x)).sort()) {
+    const mod = await import(pathToFileURL(path.join(dir, f)).href);
+    if (typeof mod.register !== "function") continue;
+    const ext = mod.register({ call, need, CliError });
+    Object.assign(COMMANDS, ext.commands);
+    Object.assign(HELP, ext.help ?? {});
+    // summary: linhas extras para o "maestri help" geral
+    if (ext.summary?.length) HELP._ += "\n\n" + ext.summary.join("\n");
+    FLAGS.push(...(ext.flags ?? []));
+    BOOL_FLAGS.push(...(ext.boolFlags ?? []));
+  }
+}
+
 async function main() {
+  await loadModules();
   const { pos, flags, help } = parse(process.argv.slice(2));
   const cmd = pos.shift();
   if (!cmd || cmd === "help") return console.log(HELP._);
