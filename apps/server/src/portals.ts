@@ -749,6 +749,39 @@ const COMMANDS: Record<string, Handler> = {
     return "ok";
   },
 
+  // wait: aguarda um elemento (@ref/CSS), um texto na página, uma URL (substring ou glob com *) ou um tempo em ms.
+  // args = [tipo, valor, timeoutMs]; estourar o tempo vira erro (maestri: error:, saída != 0)
+  async wait(_m, e, a) {
+    const [kind, value = "", t] = a;
+    const timeout = Math.min(600_000, Math.max(100, Number(t) || 30_000));
+    if (kind === "ms") {
+      await e.page.waitForTimeout(Math.min(600_000, Math.max(0, Number(value) || 0)));
+      return "ok";
+    }
+    if (kind === "text") {
+      await e.page.waitForFunction((x: string) => (document.body?.innerText ?? "").includes(x), value, { timeout });
+      return "ok";
+    }
+    if (kind === "url") {
+      const re = value.includes("*") ? new RegExp(`^${value.split("*").map((p) => p.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`) : null;
+      await e.page.waitForURL((u: URL) => (re ? re.test(u.href) : u.href.includes(value)), { timeout });
+      return "ok";
+    }
+    if (kind === "selector") {
+      // Não usa target(): ele recusa o que ainda não existe, e esperar por isso é o ponto do wait
+      if (COORDS.test(value)) throw new ApiError(400, "wait não aceita coordenadas.");
+      const ref = /^@e(\d+)$/.exec(value);
+      try {
+        await e.page.locator(ref ? `[data-maestri-ref="e${ref[1]}"]` : value).first().waitFor({ state: "visible", timeout });
+      } catch (err: any) {
+        if (/Timeout/i.test(String(err?.message))) throw new ApiError(408, `tempo esgotado esperando ${value} (${timeout / 1000}s)`);
+        throw err;
+      }
+      return "ok";
+    }
+    throw new ApiError(400, 'Uso: wait "Portal" (@ref|seletor | --text "t" | --url "padrão" | MS) [--timeout S]');
+  },
+
   async text(_m, e, a) {
     if (!a[0]) return (await e.page.evaluate(() => document.body?.innerText ?? "")) as string;
     const t = await target(e, a[0]);

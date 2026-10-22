@@ -14,7 +14,9 @@ Envia o texto e espera o terminal do alvo ficar 5s quieto; imprime só a saída 
 --raw envia entrada crua, sem Enter automático. Escapes: \\n (Enter), \\t (Tab), \\e (ESC), \\xNN (byte), \\\\ (barra).
 --batch dispara asks em paralelo para agentes conectados distintos e imprime um array JSON de
 {name, output} ou {name, error}. --timeout vale para cada ask (padrão 600s).
-Timeout: imprime o que houver e sai com código 2 (no batch, o item ganha "timedOut": true).`,
+Timeout: imprime o que houver e sai com código 2 (no batch, o item ganha "timedOut": true).
+Se o terminal do alvo estava descarregado (sem sessão), o ask o inicia (cwd e comando do nó) e responde "ainda iniciando;
+pergunte de novo" com código 3, sem digitar. send e check também iniciam o terminal. Alvos de outros workspaces: "Nome @ Workspace".`,
   send: `maestri send "Nome" "texto"
 maestri send "Nome" --raw "\\e[A"
 Escreve o texto e Enter no terminal do agente conectado, sem esperar resposta.
@@ -76,10 +78,18 @@ export function register({ call, need, CliError }) {
   async function askOne(name, text, timeout) {
     try {
       const r = await call("POST", "/ask", { target: name, text, timeout });
+      if (r.starting) return { name, output: "", starting: true, error: STARTING };
       return { name, output: r.output ?? "", ...(r.timedOut && { timedOut: true }) };
     } catch (e) {
       return { name, error: e?.message || String(e) };
     }
+  }
+
+  // O terminal estava descarregado e acabou de ser iniciado: o agente ainda sobe, então não se digita agora
+  const STARTING = "ainda iniciando; pergunte de novo";
+  function starting(name) {
+    console.error(`[maestri] ${name}: ${STARTING}.`);
+    process.exitCode = 3;
   }
 
   async function ask({ pos, flags }) {
@@ -98,13 +108,15 @@ export function register({ call, need, CliError }) {
       if (new Set(lower).size !== names.length) throw new CliError("--batch exige agentes distintos.");
       const results = await Promise.all(names.map((n) => askOne(n, obj[n], timeout)));
       console.log(JSON.stringify(results, null, 2));
-      if (results.some((r) => r.error)) process.exitCode = 1;
+      if (results.some((r) => r.error && !r.starting)) process.exitCode = 1;
       else if (results.some((r) => r.timedOut)) process.exitCode = 2;
+      if (results.some((r) => r.starting) && !process.exitCode) process.exitCode = 3;
       return;
     }
     if (flags.raw !== undefined) {
       need(pos, 1, 'ask "Nome" --raw "texto com escapes"');
       const r = await call("POST", "/raw", { target: pos[0], input: flags.raw, wait: true, timeout });
+      if (r.starting) return starting(pos[0]);
       if (r.output) console.log(r.output);
       if (r.timedOut) {
         console.error(`[maestri] Timeout: ${pos[0]} não ficou quieto a tempo; saída parcial acima.`);
@@ -114,6 +126,7 @@ export function register({ call, need, CliError }) {
     }
     need(pos, 2, 'ask "Nome" "texto" [--timeout S]');
     const r = await call("POST", "/ask", { target: pos[0], text: pos.slice(1).join(" "), timeout });
+    if (r.starting) return starting(pos[0]);
     if (r.output) console.log(r.output);
     if (r.timedOut) {
       console.error(`[maestri] Timeout: ${pos[0]} não ficou quieto a tempo; saída parcial acima.`);
@@ -124,12 +137,12 @@ export function register({ call, need, CliError }) {
   async function send({ pos, flags }) {
     if (flags.raw !== undefined) {
       need(pos, 1, 'send "Nome" --raw "texto com escapes"');
-      await call("POST", "/raw", { target: pos[0], input: flags.raw });
-      return console.log(`Enviado (cru) para ${pos[0]}.`);
+      const r = await call("POST", "/raw", { target: pos[0], input: flags.raw });
+      return console.log(`Enviado (cru) para ${pos[0]}.${r.starting ? " O terminal estava descarregado e foi iniciado." : ""}`);
     }
     need(pos, 2, 'send "Nome" "texto"');
-    await call("POST", "/send", { target: pos[0], text: pos.slice(1).join(" ") });
-    console.log(`Enviado para ${pos[0]}.`);
+    const r = await call("POST", "/send", { target: pos[0], text: pos.slice(1).join(" ") });
+    console.log(`Enviado para ${pos[0]}.${r.starting ? " O terminal estava descarregado e foi iniciado; o agente ainda está subindo." : ""}`);
   }
 
   // Envia um arquivo local ao servidor (armazenamento por projeto) e devolve os metadados com o id estável

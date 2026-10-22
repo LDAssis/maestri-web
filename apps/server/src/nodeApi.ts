@@ -7,6 +7,7 @@ import { ApiError, PRESETS, PRESET_LABELS, SIZES, freePosition, validCmd, withRo
 import { readRole } from "./roles.js";
 import { THREADS, DEFAULT_THREAD, isThread, chatHeader, wantsChatHeader, currentThread } from "./chatThreads.js";
 import type { AttachmentStore } from "./attachments.js";
+import type { CrossLinks } from "./crossLinks.js";
 import { reachNotes } from "./noteGraph.js";
 import { bandReach, isBand, memberIds, myBands, neighbors, sweepBands, teamTree } from "./team.js";
 
@@ -18,6 +19,10 @@ interface Deps {
   canvas: CanvasStore;
   projectRepo: (projectId: string) => string | null;
   attachments?: AttachmentStore; // anexos do chat (POLISH3)
+  // Workspaces cruzados (POLISH5): registro de links, nomes dos projetos e como subir a sessão de um nó
+  links?: CrossLinks;
+  workspaces?: { nameOf: (projectId: string) => string | undefined; idOf: (name: string) => string | undefined };
+  wake?: (projectId: string, node: Obj) => Session;
 }
 
 const ANSI = /\x1b\[[0-?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
@@ -77,7 +82,10 @@ function expandMentions(text: string, connected: Obj[]) {
 
 export type NodeApi = ReturnType<typeof registerNodeApi>;
 
-export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attachments }: Deps) {
+// Sessão recém-acordada por ask/send/check ainda está subindo o agente por alguns segundos
+const startupMs = () => Number(process.env.MAESTRI_WAKE_STARTUP_MS) || 6000;
+
+export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attachments, links, workspaces, wake }: Deps) {
   const base = "/api/projects/:p/nodes/:n";
 
   // Resolve projeto, nó atual e conectados; lança ApiError com a mensagem para o CLI
@@ -98,6 +106,11 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     const reach = reachNotes(nodes, st.edges ?? [], me.id);
     const extra = [...reach.notes.map((r) => r.node), ...reach.stacks].filter((x) => !direct.some((d) => d.id === x.id));
     const connected = [...direct, ...extra];
+    // Agentes de outros workspaces ligados a mim (registro de links): nós "sombra" com o projeto de origem
+    for (const peer of links?.peers(params.p, me.id) ?? []) {
+      const n = canvas.state(peer.project).nodes?.find((x) => x.id === peer.node && x.type === "agentTerminal");
+      if (n) connected.push({ ...n, __project: peer.project, __workspace: workspaces?.nameOf(peer.project) ?? peer.project });
+    }
     // Bandas: o membro alcança os outros membros e o que está ligado à banda
     for (const n of bandReach(nodes, st.edges ?? [], me.id)) if (!connected.some((x) => x.id === n.id)) connected.push(n);
     // ...inclusive as notas/fichários (e cadeias) da banda
@@ -130,13 +143,17 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
         }
       }
     }
-    return { projectId: params.p, nodes, edges: st.edges ?? [], reach, me, connected, title: (n: Obj) => String(n.data?.title ?? n.id) };
+    const wsName = workspaces?.nameOf(params.p) ?? params.p;
+    // Agentes de outro workspace aparecem (e se endereçam) como "Nome @ Workspace"
+    const title = (n: Obj) => (n.__workspace ? `${n.data?.title ?? n.id} @ ${n.__workspace}` : String(n.data?.title ?? n.id));
+    return { projectId: params.p, workspace: wsName, nodes, edges: st.edges ?? [], reach, me, connected, title };
   }
   type Ctx = ReturnType<typeof context>;
 
   function resolveTarget(c: Ctx, name: unknown, type?: string) {
     if (!isText(name, 200) || !name.trim()) throw new ApiError(400, "Informe o nome do alvo.");
-    const matches = (list: Obj[]) => list.filter((n) => lc(n.data?.title) === lc(name) && (!type || n.type === type));
+    const label = (n: Obj) => (n.__workspace ? `${n.data?.title} @ ${n.__workspace}` : n.data?.title);
+    const matches = (list: Obj[]) => list.filter((n) => lc(label(n)) === lc(name) && (!type || n.type === type));
     const hit = matches(c.connected);
     if (hit.length === 1) return hit[0];
     if (hit.length > 1) throw new ApiError(400, `Nome ambíguo: "${name}" corresponde a ${hit.length} nós conectados.`);
@@ -148,6 +165,43 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
 
   function requireMaestro(c: Ctx, what: string) {
     if (c.me.data?.isMaestro !== true) throw new ApiError(403, `Apenas o Maestro pode ${what}.`);
+  }
+
+  // Bandas de outros workspaces com membros ligados a mim ("Banda @ Workspace")
+  function remoteBands(c: Ctx) {
+    const out: { nodeId: string; title: string; mine: boolean; members: string[] }[] = [];
+    for (const pid of new Set((links?.peers(c.projectId, c.me.id) ?? []).map((p) => p.project))) {
+      const mine = new Set(links!.peers(c.projectId, c.me.id).filter((p) => p.project === pid).map((p) => p.node));
+      const nodes = canvas.state(pid).nodes ?? [];
+      const ws = workspaces?.nameOf(pid) ?? pid;
+      for (const b of nodes.filter((x) => isBand(x) && memberIds(x).some((m) => mine.has(m)))) {
+        out.push({ nodeId: b.id, title: `${b.data?.title ?? b.id} @ ${ws}`, mine: false, members: memberIds(b).map((id) => nodes.find((x) => x.id === id)).filter((x): x is Obj => !!x).map((x) => String(x.data?.title ?? x.id)) });
+      }
+    }
+    return out;
+  }
+
+  // Projeto do alvo (um agente de outro workspace carrega __project)
+  const pidOf = (c: Ctx, target: Obj): string => target.__project ?? c.projectId;
+
+  // Acorda o alvo: sem sessão (descarregado, andar com unload, servidor reiniciado) sobe a sessão com o cwd e o
+  // comando do nó, como a UI faria. `starting` = acordada há poucos segundos (o agente ainda está subindo).
+  const woken = new Map<string, { at: number; createdAt: string }>();
+  function awake(c: Ctx, target: Obj): { session: Session; starting: boolean } {
+    const pid = pidOf(c, target);
+    const key = `${pid}:${target.id}`;
+    let session = sessions.get(pid, target.id);
+    if (!session) {
+      if (!wake) throw new ApiError(409, `O terminal "${c.title(target)}" não tem sessão ativa (abra-o no canvas).`);
+      try {
+        session = wake(pid, target);
+      } catch (e: any) {
+        throw new ApiError(500, `Não foi possível iniciar o terminal "${c.title(target)}": ${e?.message || e}`);
+      }
+      woken.set(key, { at: Date.now(), createdAt: session.createdAt });
+    }
+    const w = woken.get(key);
+    return { session, starting: !!w && w.createdAt === session.createdAt && Date.now() - w.at < startupMs() };
   }
 
   function requireSession(c: Ctx, target: Obj) {
@@ -175,7 +229,7 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
   fastify.get(`${base}/context`, wrap((c) => {
     const pick = (type: string) => c.connected.filter((n) => n.type === type);
     return {
-      self: { nodeId: c.me.id, title: c.title(c.me), isMaestro: c.me.data?.isMaestro === true, ...(c.me.data?.account && { account: c.me.data.account }) },
+      self: { nodeId: c.me.id, workspace: c.workspace, title: c.title(c.me), isMaestro: c.me.data?.isMaestro === true, ...(c.me.data?.account && { account: c.me.data.account }) },
       agents: pick("agentTerminal").map((n) => ({ nodeId: n.id, title: c.title(n), isMaestro: n.data?.isMaestro === true, ...(n.data?.account && { account: n.data.account }) })),
       notes: c.reach.notes.map((r) => ({
         nodeId: r.node.id, title: c.title(r.node), locked: r.node.data?.locked === true,
@@ -186,7 +240,7 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
       bands: myBands(c.nodes, c.edges, c.me.id).map((b) => ({
         nodeId: b.id, title: c.title(b), mine: memberIds(b).includes(c.me.id),
         members: memberIds(b).map((id) => c.nodes.find((x) => x.id === id)).filter((x): x is Obj => !!x).map((x) => c.title(x)),
-      })),
+      })).concat(remoteBands(c)),
       // Maestro: as conexões de cada colega direto, aninhadas
       ...(c.me.data?.isMaestro === true && {
         links: Object.fromEntries(
@@ -203,17 +257,17 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     const { target, text } = req.body ?? {};
     if (!isText(text)) throw new ApiError(400, "Informe o texto.");
     const t = resolveTarget(c, target, "agentTerminal");
-    requireSession(c, t);
-    sessions.write(c.projectId, t.id, `${text}\r`);
-    return { ok: true };
+    const { session, starting } = awake(c, t);
+    sessions.write(session.projectId, t.id, `${text}\r`);
+    return { ok: true, ...(starting && { starting: true }) };
   }));
 
   fastify.get(`${base}/check`, wrap((c, req) => {
     const t = resolveTarget(c, req.query?.target, "agentTerminal");
-    requireSession(c, t);
+    const { session, starting } = awake(c, t);
     const lines = Math.min(2000, Math.max(1, Math.floor(Number(req.query?.lines)) || 60));
-    const out = stripAnsi(sessions.get(c.projectId, t.id)!.scrollback).replace(/\s+$/, "").split("\n");
-    return { output: out.slice(-lines).join("\n") };
+    const out = stripAnsi(session.scrollback).replace(/\s+$/, "").split("\n");
+    return { output: out.slice(-lines).join("\n"), ...(starting && { starting: true }) };
   }));
 
   // Envia e espera o PTY do alvo ficar quieto (depois de produzir saída); devolve só a saída nova
@@ -221,19 +275,22 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     let t: Obj;
     let c: Ctx;
     let text: string;
+    let session: Session;
+    let starting: boolean;
     try {
       c = context(req.params);
       const body = req.body ?? {};
       if (!isText(body.text)) throw new ApiError(400, "Informe o texto.");
       text = body.text;
       t = resolveTarget(c, body.target, "agentTerminal");
-      requireSession(c, t);
+      ({ session, starting } = awake(c, t));
     } catch (e: any) {
       if (e instanceof ApiError) return reply.status(e.status).send({ error: e.message });
       return reply.status(500).send({ error: e?.message || "Erro interno." });
     }
     const timeoutS = Math.min(3600, Math.max(1, Number(req.body?.timeout) || 600));
-    const session = sessions.get(c.projectId, t.id)!;
+    // Acabou de ser acordado: o agente ainda está subindo, digitar agora se perderia. O CLI sai com código 3.
+    if (starting) return reply.send({ output: "", starting: true });
 
     // Cabeçalhos já: o cliente (fetch) não estoura headersTimeout; espaços de keepalive precedem o JSON
     reply.hijack();
@@ -262,8 +319,15 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     requireMaestro(c, "dispensar agentes");
     const t = resolveTarget(c, req.body?.target);
     if (isBand(t)) throw new ApiError(400, 'Use "maestri band dissolve" para desfazer uma banda.');
-    canvas.applyAndBroadcast(c.projectId, { kind: "removeNodes", ids: [t.id] }, `cli:${c.me.id}`);
-    sweepBands(canvas, c.projectId, `cli:${c.me.id}`); // banda com 1 membro se dissolve sozinha
+    // Funciona também em outro workspace (agente ligado por link): remove o nó do canvas dele
+    const pid = pidOf(c, t);
+    canvas.applyAndBroadcast(pid, { kind: "removeNodes", ids: [t.id] }, `cli:${c.me.id}`);
+    sweepBands(canvas, pid, `cli:${c.me.id}`); // banda com 1 membro se dissolve sozinha
+    if (links) {
+      links.dropNode(pid, t.id);
+      canvas.notify(pid, { type: "links" });
+      canvas.notify(c.projectId, { type: "links" });
+    }
     return { ok: true };
   }));
 
@@ -351,5 +415,5 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
   }));
 
   // Helpers reaproveitados pelos módulos de extensão da API de nós (registerXxxApi em index.ts)
-  return { base, context, resolveTarget, requireMaestro, requireSession, patch, wrap };
+  return { base, context, resolveTarget, requireMaestro, requireSession, patch, wrap, awake, pidOf };
 }

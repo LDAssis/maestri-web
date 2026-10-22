@@ -15,6 +15,7 @@ import {
   Sparkles,
   RotateCw,
   HelpCircle,
+  ExternalLink,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import DeleteNodeButton from "./DeleteNodeButton";
@@ -23,6 +24,7 @@ import { apiFetch } from "@/lib/api";
 import { ProjectIdContext } from "@/lib/projectContext";
 import { useRoles } from "@/lib/useRoles";
 import { useActiveRoutineCount } from "@/lib/useRoutines";
+import { useExternalLinks } from "@/lib/useExternalLinks";
 import { usePresenceValue } from "@/lib/presence";
 import type { TerminalStatus } from "./TerminalView";
 import { COLOR_HEX, ICON_MAP } from "./palette";
@@ -99,6 +101,7 @@ export default function AgentTerminalNode({
   const isMaestro = Boolean(nodeData.isMaestro);
   const { roles } = useRoles(projectId);
   const routineCount = useActiveRoutineCount(projectId, id);
+  const external = useExternalLinks(projectId, id);
   const arrangeColor = nodeData.color ? COLOR_HEX[nodeData.color] : undefined;
   const roleColor = arrangeColor ?? (nodeData.roleId ? roles.find((r) => r.id === nodeData.roleId)?.color : undefined);
   const chat = nodeData.chat || [];
@@ -279,6 +282,16 @@ export default function AgentTerminalNode({
           </div>
 
           <CrossFloorBadge id={id} floor={(nodeData as any).floor} />
+          {external.length > 0 && (
+            <span
+              className="nodrag flex items-center gap-0.5 rounded-md border border-slate-800 bg-slate-900 px-1 py-0.5 text-[10px] text-sky-300"
+              title={`Ligado a outros workspaces: ${external.map((p) => `${p.name} @ ${p.workspace}`).join(", ")}`}
+              aria-label={`Ligado a outros workspaces: ${external.map((p) => `${p.name} @ ${p.workspace}`).join(", ")}`}
+            >
+              <ExternalLink className="h-3 w-3" />
+              {external.length}
+            </span>
+          )}
           {routineCount > 0 && (
             <button
               onClick={() => window.dispatchEvent(new CustomEvent("maestri:open-routines"))}

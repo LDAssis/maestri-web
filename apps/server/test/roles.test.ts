@@ -234,7 +234,10 @@ test("CLI recruit: --preset e --role-id (e --cmd/--role continuam)", async () =>
   assert.equal(n.data.preset, "claude");
   assert.equal(n.data.roleId, role.id);
   assert.equal(n.data.role, "Cli");
-  assert.match(n.data.defaultCmd, /^claude "\$\(cat '.+\.md'\)"$/);
+  // contrato novo: o prompt vai em .maestri/roles/<id>/CLAUDE.md|AGENTS.md e o terminal começa nessa pasta
+  assert.equal(n.data.defaultCmd, "claude");
+  assert.equal(n.data.worktreePath, path.join(".maestri", "roles", role.id.toLowerCase()));
+  for (const f of ["CLAUDE.md", "AGENTS.md"]) assert.match(fs.readFileSync(path.join(repo, ".maestri", "roles", role.id.toLowerCase(), f), "utf8"), /<your_assigned_role>\nPapel CLI\.\n<\/your_assigned_role>/);
   assert.equal(fs.readFileSync(path.join(repo, ".maestri-roles", `${n.id}.md`), "utf8"), "Papel CLI.");
 
   assert.equal((await maestri("maestro", ["recruit", "Sh", "--preset", "shell"])).code, 0);
@@ -250,6 +253,7 @@ test("CLI recruit: --preset e --role-id (e --cmd/--role continuam)", async () =>
   // compatibilidade: --cmd e --role de texto livre
   assert.equal((await maestri("maestro", ["recruit", "Legacy", "--cmd", "claude", "--role", "Texto livre"])).code, 0);
   n = (await canvasNodes()).find((x) => x.data.title === "Legacy");
-  assert.match(n.data.defaultCmd, /^claude "\$\(cat '.+\.md'\)"$/);
+  assert.equal(n.data.defaultCmd, "claude");
+  assert.match(fs.readFileSync(path.join(repo, ".maestri-roles", n.id, "AGENTS.md"), "utf8"), /Texto livre/);
   assert.equal(fs.readFileSync(path.join(repo, ".maestri-roles", `${n.id}.md`), "utf8"), "Texto livre");
 });

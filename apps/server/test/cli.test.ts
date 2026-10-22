@@ -276,7 +276,11 @@ test("recruit com claude+role passa o papel por arquivo, nunca interpolado no co
   const r = await maestri("maestro", ["recruit", "Seguro", "--cmd", "claude", "--role", role]);
   assert.equal(r.code, 0, r.stderr);
   const n = await nodeByTitle("Seguro");
-  assert.equal(n.data.defaultCmd, `claude "$(cat '${path.join(repo, ".maestri-roles", `${n.id}.md`)}')"`);
+  // O papel vira arquivo de contexto (CLAUDE.md/AGENTS.md) na pasta onde o terminal começa: o comando fica limpo
+  assert.equal(n.data.defaultCmd, "claude");
+  assert.equal(n.data.roleDir, true);
+  assert.equal(n.data.worktreePath, path.join(".maestri-roles", n.id));
+  for (const f of ["CLAUDE.md", "AGENTS.md"]) assert.ok(fs.readFileSync(path.join(repo, ".maestri-roles", n.id, f), "utf-8").includes(role), f);
   assert.equal(n.data.role, role); // curto o bastante para virar o papel exibido
   assert.equal(fs.readFileSync(path.join(repo, ".maestri-roles", `${n.id}.md`), "utf-8"), role);
   await maestri("maestro", ["dismiss", "Seguro"]); // antes dos 600ms do cmd inicial

@@ -103,6 +103,8 @@ export class SessionManager {
       MAESTRI_PROJECT_ID: projectId,
       MAESTRI_NODE_ID: nodeId,
       MAESTRI_TOKEN: this.cli.token,
+      // Caminho absoluto do CLI: o recurso quando `maestri` não é encontrado no PATH ("$MAESTRI_CLI")
+      MAESTRI_CLI: path.join(binDir, isWindows ? "maestri.cmd" : "maestri"),
     };
   }
 
