@@ -14,6 +14,7 @@ import { PresenceHub } from "./presence.js";
 import { registerNodeApi, typeAndWait, chatBusy } from "./nodeApi.js";
 import { registerRoutinesApi } from "./routines.js";
 import { registerFilesApi } from "./files.js";
+import { registerPortalApi } from "./portalApi.js";
 import { createProjectDir, findConflict, isInside, migrateProjects, overlaps, resolveInside } from "./projectDirs.js";
 
 // Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
@@ -143,7 +144,10 @@ const sessions = new SessionManager({
   token: authToken,
 });
 const presence = new PresenceHub();
-const canvas = new CanvasStore(canvasFileFor, writeJsonAtomic, (projectId, ids) => sessions.killNodes(projectId, ids));
+const canvas = new CanvasStore(canvasFileFor, writeJsonAtomic, (projectId, ids) => {
+  sessions.killNodes(projectId, ids);
+  portals.closeNodes(projectId, ids);
+});
 
 fastify.addHook("onClose", async () => {
   canvas.flushAll();
@@ -155,6 +159,7 @@ const idPattern = /^[\w-]+$/;
 
 const nodeApi = registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
 const projectRepo = (id: string) => projects.find((p) => p.id === id)?.repoPath ?? null;
+export const portals = registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAuthorized });
 const { createFloorFor } = registerWorktreeApi({ fastify, sessions, canvas, projectRepo });
 registerRolesApi({ fastify, canvas, projectRepo, createFloorFor });
 const routines = registerRoutinesApi({ fastify, sessions, canvas, projectRepo, dataDir, typeAndWait, isChatBusy: (p, n) => chatBusy.has(`${p}:${n}`) });
@@ -270,6 +275,7 @@ fastify.delete<{ Params: { id: string } }>("/api/projects/:id", async (req, repl
   projects.splice(idx, 1);
   saveProjects();
   sessions.killProject(req.params.id);
+  portals.closeProject(req.params.id);
   canvas.drop(req.params.id);
   if (canvasFile) fs.rmSync(canvasFile, { force: true });
   routines.removeProject(req.params.id);

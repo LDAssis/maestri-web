@@ -26,7 +26,7 @@ maestri note write "Notas" "texto"                       # substitui o conteúdo
 maestri note append "Notas" "mais uma linha"             # acrescenta
 maestri note create "Decisões" "texto"                   # cria uma nota perto de você, já conectada a você
 
-maestri portal navigate "Preview" "http://localhost:3000"   # só http/https
+maestri portal navigate "Preview" "http://localhost:3000"   # só http/https (veja "Portais" abaixo para a automação completa)
 
 maestri notify "Deploy concluído"                        # toast para todos os navegadores no projeto
 
@@ -36,6 +36,31 @@ maestri dismiss "QA"
 ```
 
 `maestri --help` e `maestri <comando> --help` mostram o uso.
+
+## Portais (navegador automatizável)
+Cada portal conectado tem um Chromium headless no servidor, aberto sob demanda no primeiro comando de automação (o nó passa a mostrar a sessão ao vivo; humanos também clicam, digitam e rolam nele). O nome do portal é sempre obrigatório (`maestri list` mostra os conectados). Só URLs http/https (localhost vale).
+
+```bash
+maestri portal create http://localhost:3000 "Preview" [--size 390x844]   # cria à direita de você, conectado
+maestri portal edit "Preview" --url http://localhost:5173
+maestri portal close "Preview"                           # destrutivo: só se o usuário pedir
+
+maestri portal snapshot "Preview"                        # árvore dos elementos interativos visíveis, com refs
+#   viewport: 1280x800  url: http://localhost:3000/  title: App
+#   @e1 a "Home" href=http://localhost:3000/ [10,5 60x20]
+#   @e2 input type=text "Buscar" [200,50 300x32] *focused*
+maestri portal click "Preview" @e1                       # seletor: @eN, CSS (#id) ou x,y
+maestri portal fill "Preview" @e2 "texto"                # substitui; type acrescenta (sem seletor: elemento focado)
+maestri portal key "Preview" "Enter"                     # Tab, Escape, Backspace, setas, Space, ctrl+a, shift+tab...
+maestri portal select "Preview" @e5 "Texto da opção"     # check/uncheck @e6; upload @e4 ./arquivo.pdf
+maestri portal scroll "Preview" down 300 [x,y|@ref]      # scrollintoview @e10
+maestri portal text|html|evaluate|info|screenshot "Preview" ...   # screenshot imprime o caminho do PNG
+maestri portal logs-start "Preview"; maestri portal logs "Preview"   # console (logs devolve e limpa)
+maestri portal back|forward|reload "Preview"
+maestri portal resize "Preview" 390 844                  # viewport exato; ua "Preview" ios|android|chrome|... (sem argumento lista)
+```
+
+Fluxo: `snapshot` → agir com as refs → `snapshot` de novo para conferir. As refs valem até o próximo snapshot ou navegação. Falhas imprimem `maestri: error: <motivo>` no stderr com código ≠ 0. Popups abertos pela página viram portais `[Portal] #2`.
 
 ## Como usar bem
 1. Comece com `maestri list` para saber quem são seus vizinhos.
