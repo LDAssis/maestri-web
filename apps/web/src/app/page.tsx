@@ -21,6 +21,8 @@ import { Peer, PresenceProvider } from "@/lib/presence";
 import RoutinesPanel from "@/components/RoutinesPanel";
 import WorktreesPanel from "@/components/WorktreesPanel";
 import SidebarManager from "@/components/SidebarManager";
+import { ConfirmProvider } from "@/components/ConfirmProvider";
+import { useProjectEvents } from "@/lib/useProjectEvents";
 import { PresenceStack, PresenceToasts } from "@/components/PresenceUI";
 
 interface Project {
@@ -59,6 +61,21 @@ const MaestriCanvas = dynamic(() => import("@/components/MaestriCanvas"), {
   ),
 });
 
+const LAST_PROJECT_KEY = "maestri.lastProject";
+const readLastProject = () => {
+  try {
+    return localStorage.getItem(LAST_PROJECT_KEY);
+  } catch {
+    return null;
+  }
+};
+
+// Recarrega a lista de projetos quando o servidor avisa que a barra lateral mudou (CLI ou outro usuário)
+function SidebarSync({ projectId, onChange }: { projectId: string; onChange: () => void }) {
+  useProjectEvents(projectId, (t) => t === "sidebar" && onChange());
+  return null;
+}
+
 export default function Page() {
   return (
     <EntryGate>
@@ -85,6 +102,7 @@ function App({
   const [isOrganizeOpen, setIsOrganizeOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDesc, setNewProjectDesc] = useState("");
+  const [createError, setCreateError] = useState("");
 
   const [diffFocus, setDiffFocus] = useState<string | null>(null);
   const [projectsError, setProjectsError] = useState("");
@@ -106,13 +124,24 @@ function App({
       if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);
       const data = await res.json();
       setProjects(data);
-      if (!activeProject && data.length > 0) {
-        setActiveProject(data[0]);
-      }
+      // Mantém o projeto aberto (com os dados novos); no começo, o último aberto (ou o primeiro se ele sumiu)
+      setActiveProject((prev) => {
+        if (prev) return data.find((p: Project) => p.id === prev.id) ?? data[0] ?? null;
+        const stored = readLastProject();
+        return data.find((p: Project) => p.id === stored) ?? data[0] ?? null;
+      });
     } catch (err: any) {
       setProjectsError(err?.message || "Falha de rede");
     }
   };
+
+  // Lembra o último projeto aberto
+  useEffect(() => {
+    if (!activeProject) return;
+    try {
+      localStorage.setItem(LAST_PROJECT_KEY, activeProject.id);
+    } catch {}
+  }, [activeProject?.id]);
 
   useEffect(() => {
     fetchProjects();
@@ -136,6 +165,7 @@ function App({
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProjectName.trim()) return;
+    setCreateError("");
 
     try {
       const res = await apiFetch("/api/projects", {
@@ -154,12 +184,14 @@ function App({
         setNewProjectDesc("");
         setIsNewProjectModalOpen(false);
       }
+      else setCreateError((await res.json().catch(() => ({})))?.error || `Servidor respondeu ${res.status}`);
     } catch (e: any) {
-      alert("Erro ao criar projeto: " + e.message);
+      setCreateError("Erro ao criar projeto: " + (e?.message || "servidor indisponível"));
     }
   };
 
   return (
+    <ConfirmProvider>
     <PresenceProvider
       user={user}
       projectId={activeProject?.id ?? null}
@@ -415,7 +447,8 @@ function App({
         </div>
       </div>
 
-      {isOrganizeOpen && <SidebarManager projects={projects} onClose={() => setIsOrganizeOpen(false)} onChanged={fetchProjects} />}
+      {activeProject && <SidebarSync projectId={activeProject.id} onChange={fetchProjects} />}
+      {isOrganizeOpen && activeProject && <SidebarManager projectId={activeProject.id} projects={projects} onClose={() => setIsOrganizeOpen(false)} onChanged={fetchProjects} />}
 
       {/* Modal Criar Novo Projeto */}
       {isNewProjectModalOpen && (
@@ -435,6 +468,7 @@ function App({
             </div>
 
             <form onSubmit={handleCreateProject} className="space-y-4">
+              {createError && <p role="alert" className="text-xs text-rose-300 break-words">{createError}</p>}
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
                   Nome do Projeto
@@ -492,5 +526,6 @@ function App({
       <PresenceToasts />
     </div>
     </PresenceProvider>
+    </ConfirmProvider>
   );
 }

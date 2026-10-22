@@ -46,7 +46,12 @@ export function register({ call, need, CliError }) {
     } else if (sub === "land") {
       need(pos, 2, 'floor land "Nome" [--into BRANCH] [--delete-branch] [--keep-floor]');
       const r = await call("POST", "/floors/land", { name, into: flags.into, deleteBranch: flags["delete-branch"], keepFloor: flags["keep-floor"] });
-      console.log(`Land de "${name}" concluído${r.into ? `: ${r.branch ?? "branch"} mesclada em ${r.into}` : ""}.${r.floorKept ? " Andar mantido." : " Andar removido"}${r.branch ? `; branch ${r.branch} mantida.` : r.floorKept ? "" : "."}`);
+      // Clone: o trabalho volta (fetch + ff/merge) para a branch alvo; worktree: a branch do andar é mesclada em --into
+      const what = r.copy
+        ? `: trabalho do clone trazido para ${r.into}`
+        : r.into ? `: ${r.branch ?? "branch"} mesclada em ${r.into}` : "";
+      const kept = r.copy ? "" : r.branch ? `; branch ${r.branch} mantida` : "";
+      console.log(`Land de "${name}" concluído${what}.${r.floorKept ? " Andar mantido." : " Andar removido"}${kept}${r.floorKept ? "" : "."}`);
     } else if (sub === "delete") {
       need(pos, 2, 'floor delete "Nome" [--keep-branch] [--force]');
       const r = await call("POST", "/floors/delete", { name, keepBranch: flags["keep-branch"], force: flags.force });

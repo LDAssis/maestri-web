@@ -387,7 +387,7 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
       }
       if (!o.keepFloor) await removeFloor(projectId, f, { deleteBranch: o.deleteBranch, force: true });
       else changed(projectId);
-      return { ok: true, branch: o.deleteBranch ? null : f.branch, into: o.into ?? (f.copy ? f.branch : null), merged, floorKept: o.keepFloor };
+      return { ok: true, branch: o.deleteBranch ? null : f.branch, into: o.into ?? (f.copy ? f.branch : null), merged, floorKept: o.keepFloor, copy: f.copy === true };
     });
   };
 

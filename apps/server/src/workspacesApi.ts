@@ -44,7 +44,7 @@ interface Deps {
 
 const NAME_MAX = 80;
 
-export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects, dataDir, writeJson, floors, nodeApi, createFloor }: Deps) {
+export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects: saveProjectsToDisk, dataDir, writeJson, floors, nodeApi, createFloor }: Deps) {
   const { base, requireMaestro, wrap } = nodeApi;
   const sidebarFile = path.join(dataDir, "sidebar.json");
   let sidebar: Sidebar = { groups: [], folders: [] };
@@ -53,7 +53,25 @@ export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects,
     if (Array.isArray(saved.groups)) sidebar.groups = saved.groups;
     if (Array.isArray(saved.folders)) sidebar.folders = saved.folders;
   } catch {}
-  const saveSidebar = () => writeJson(sidebarFile, sidebar);
+  // Qualquer mudança na barra lateral (CLI ou UI) avisa os clientes de todos os projetos: {type:"sidebar"}.
+  // Coalescido (um aviso por rajada de saves) e sem segurar o processo.
+  let broadcastTimer: NodeJS.Timeout | null = null;
+  const broadcast = () => {
+    if (broadcastTimer) return;
+    broadcastTimer = setTimeout(() => {
+      broadcastTimer = null;
+      for (const p of projects) canvas.notify(p.id, { type: "sidebar" });
+    }, 20);
+    broadcastTimer.unref?.();
+  };
+  const saveProjects = () => {
+    saveProjectsToDisk();
+    broadcast();
+  };
+  const saveSidebar = () => {
+    writeJson(sidebarFile, sidebar);
+    broadcast();
+  };
 
   const cleanName = (v: unknown, what: string) => {
     if (!isText(v, 400) || !v.trim()) throw new ApiError(400, `Informe ${what}.`);

@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { apiFetch } from "@/lib/api";
-import { useRoles } from "@/lib/useRoles";
+import { useGlobalRoles, useRoles } from "@/lib/useRoles";
 
 // Presets do servidor (embutidos + cliPresets das configurações); o mesmo que `maestri preset list`
 interface PresetItem {
@@ -33,7 +33,10 @@ export default function NewAgentSheet({
   onClose: () => void;
   onCreated: (node: { id: string }) => void;
 }) {
-  const { roles } = useRoles(projectId);
+  const { roles: allRoles } = useRoles(projectId);
+  const { globalRoles } = useGlobalRoles(projectId);
+  // Cópias de roles globais já no projeto aparecem só na lista de globais
+  const roles = allRoles.filter((r) => r.origin !== "global");
   const [title, setTitle] = useState("");
   const [presets, setPresets] = useState<PresetItem[]>(FALLBACK);
   const [preset, setPreset] = useState("claude");
@@ -89,6 +92,11 @@ export default function NewAgentSheet({
     setBusy(true);
     setError("");
     try {
+      // Role global: o servidor só resolve roles do projeto, então traz uma cópia para o projeto antes de criar o agente
+      if (roleId && globalRoles.some((g) => g.id === roleId)) {
+        const m = await apiFetch(`/api/projects/${projectId}/roles/materialize-global`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roleId }) });
+        if (!m.ok) return setError((await m.json().catch(() => ({})))?.error || `Servidor respondeu ${m.status}`);
+      }
       const res = await apiFetch(`/api/projects/${projectId}/agents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -168,9 +176,20 @@ export default function NewAgentSheet({
             Role
             <select value={roleId} onChange={(e) => setRoleId(e.target.value)} className={`${field} mt-1`}>
               <option value="">Nenhum</option>
-              {roles.map((r) => (
-                <option key={r.id} value={r.id}>{r.name}</option>
-              ))}
+              {roles.length > 0 && (
+                <optgroup label="Deste projeto">
+                  {roles.map((r) => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
+                </optgroup>
+              )}
+              {globalRoles.length > 0 && (
+                <optgroup label="Globais">
+                  {globalRoles.map((r) => (
+                    <option key={r.id} value={r.id}>{r.name} (global)</option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </label>
           <label className="flex items-center gap-2 text-[11px] text-slate-300">

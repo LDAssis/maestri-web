@@ -3,17 +3,22 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Pencil, Plus, Trash2, X } from "lucide-react";
 import { apiFetch } from "@/lib/api";
-import { Role, useRoles } from "@/lib/useRoles";
+import { Role, useGlobalRoles, useRoles } from "@/lib/useRoles";
 
 interface Draft {
   id?: string;
   name: string;
   color: string;
   prompt: string;
+  scope: "project" | "global";
 }
 
 export default function RolesPanel({ projectId, onClose }: { projectId: string; onClose: () => void }) {
-  const { roles, reload } = useRoles(projectId);
+  const { roles: allProject, reload } = useRoles(projectId);
+  const { globalRoles, reloadGlobal } = useGlobalRoles(projectId);
+  // Cópias de roles globais (criadas ao usar um global num agente) aparecem só como global
+  const roles = allProject.filter((r) => r.origin !== "global");
+  const scopeOf = (id: string): "project" | "global" => (globalRoles.some((g) => g.id === id) ? "global" : "project");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -41,16 +46,16 @@ export default function RolesPanel({ projectId, onClose }: { projectId: string; 
     }
   };
 
-  const request = async (path: string, init: RequestInit) => {
+  const request = async (path: string, init: RequestInit, scope: "project" | "global" = "project") => {
     setBusy(true);
     setError("");
     try {
-      const res = await apiFetch(`/api/projects/${projectId}/roles${path}`, init);
+      const res = await apiFetch(scope === "global" ? `/api/global-roles${path}` : `/api/projects/${projectId}/roles${path}`, init);
       if (!res.ok) {
         setError((await res.json().catch(() => ({})))?.error || `Servidor respondeu ${res.status}`);
         return false;
       }
-      await reload();
+      await Promise.all([reload(), reloadGlobal()]);
       return true;
     } catch {
       setError("Servidor indisponível");
@@ -66,18 +71,18 @@ export default function RolesPanel({ projectId, onClose }: { projectId: string; 
     if (!draft.name.trim() || draft.name.trim().length > 60) return setError("Nome: 1 a 60 caracteres.");
     if (draft.prompt.length > 20000) return setError("Prompt: no máximo 20000 caracteres.");
     const body = JSON.stringify({ name: draft.name.trim(), color: draft.color, prompt: draft.prompt });
-    const ok = await request(draft.id ? `/${draft.id}` : "", {
-      method: draft.id ? "PUT" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    });
+    const ok = await request(
+      draft.id ? `/${draft.id}` : "",
+      { method: draft.id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body },
+      draft.scope,
+    );
     if (ok) setDraft(null);
   };
 
   const field = "w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500";
   const edit = (r: Role) => {
     setError("");
-    setDraft({ id: r.id, name: r.name, color: r.color, prompt: r.prompt });
+    setDraft({ id: r.id, name: r.name, color: r.color, prompt: r.prompt, scope: scopeOf(r.id) });
   };
 
   return (
@@ -98,7 +103,7 @@ export default function RolesPanel({ projectId, onClose }: { projectId: string; 
               <button
                 onClick={() => {
                   setError("");
-                  setDraft({ name: "", color: "#6366F1", prompt: "" });
+                  setDraft({ name: "", color: "#6366F1", prompt: "", scope: "project" });
                 }}
                 className="flex items-center gap-1 rounded-md bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-500"
               >
@@ -124,6 +129,16 @@ export default function RolesPanel({ projectId, onClose }: { projectId: string; 
                   <input type="color" value={draft.color.toLowerCase()} onChange={(e) => setDraft({ ...draft, color: e.target.value.toUpperCase() })} className="mt-1 block h-[30px] w-12 cursor-pointer rounded border border-slate-800 bg-slate-900" />
                 </label>
               </div>
+              {!draft.id && (
+                <div role="radiogroup" aria-label="Escopo do role" className="flex items-center gap-3 text-[11px] text-slate-300">
+                  {(["project", "global"] as const).map((sc) => (
+                    <label key={sc} className="flex items-center gap-1">
+                      <input type="radio" name="role-scope" checked={draft.scope === sc} onChange={() => setDraft({ ...draft, scope: sc })} />
+                      {sc === "project" ? "Deste projeto" : "Global (todos os projetos)"}
+                    </label>
+                  ))}
+                </div>
+              )}
               <label className="block text-[11px] text-slate-300">
                 Prompt
                 <textarea value={draft.prompt} rows={6} maxLength={20000} onChange={(e) => setDraft({ ...draft, prompt: e.target.value })} className={`${field} mt-1 font-mono`} />
@@ -140,13 +155,15 @@ export default function RolesPanel({ projectId, onClose }: { projectId: string; 
               {error}
             </div>
           )}
-          {roles.length === 0 && !draft && <div className="py-6 text-center text-xs text-slate-500">Nenhum role. Roles definem o prompt inicial de um agente.</div>}
-          {roles.map((r) => (
+          {roles.length + globalRoles.length === 0 && !draft && <div className="py-6 text-center text-xs text-slate-500">Nenhum role. Roles definem o prompt inicial de um agente.</div>}
+          {[...roles.map((r) => ({ r, global: false })), ...globalRoles.map((r) => ({ r, global: true }))].map(({ r, global }) => (
+            <React.Fragment key={`${global ? "g" : "p"}-${r.id}`}>
             <div key={r.id} className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2 text-xs font-semibold text-slate-100">
                   <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: r.color }} aria-hidden />
                   <span className="truncate">{r.name}</span>
+                  {global && <span className="shrink-0 rounded border border-indigo-700 bg-indigo-950 px-1 text-[9px] font-medium uppercase text-indigo-300">global</span>}
                 </div>
                 <div className="flex items-center gap-1">
                   <button onClick={() => edit(r)} aria-label={`Editar ${r.name}`} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white">
@@ -163,7 +180,7 @@ export default function RolesPanel({ projectId, onClose }: { projectId: string; 
                   Apagar este role? Agentes já criados mantêm o prompt.
                   <button
                     onClick={async () => {
-                      if (await request(`/${r.id}`, { method: "DELETE" })) setConfirmDel(null);
+                      if (await request(`/${r.id}`, { method: "DELETE" }, global ? "global" : "project")) setConfirmDel(null);
                     }}
                     className="rounded-md bg-rose-600 px-2 py-1 font-medium text-white hover:bg-rose-500"
                   >
@@ -173,6 +190,7 @@ export default function RolesPanel({ projectId, onClose }: { projectId: string; 
                 </div>
               )}
             </div>
+            </React.Fragment>
           ))}
         </div>
       </div>

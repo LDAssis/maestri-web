@@ -21,6 +21,7 @@ import { AccountStore } from "./accounts.js";
 import { registerAccountsApi } from "./accountsApi.js";
 import { AttachmentStore } from "./attachments.js";
 import { registerAttachmentsApi } from "./attachmentsApi.js";
+import { registerGlobalRolesApi } from "./globalRolesApi.js";
 import { registerFloorsApi } from "./floorsApi.js";
 import { FloorStore } from "./floors.js";
 import { registerRoutinesApi } from "./routines.js";
@@ -203,6 +204,7 @@ const projectRepo = (id: string) => projects.find((p) => p.id === id)?.repoPath 
 export const portals = registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAuthorized });
 const { createFloorFor } = registerWorktreeApi({ fastify, sessions, canvas, projectRepo });
 registerRolesApi({ fastify, canvas, projectRepo, createFloorFor });
+registerGlobalRolesApi({ fastify, canvas, dataDir, projectRepo, projectIds: () => projects.map((p) => p.id) });
 const routines = registerRoutinesApi({ fastify, sessions, canvas, projectRepo, projectName: (id) => projects.find((p) => p.id === id)?.name, floorCwd: (p, n, nodes) => floors.cwdForNode(p, n, nodes), dataDir, typeAndWait, isChatBusy: (p, n) => chatBusy.has(`${p}:${n}`) });
 registerFilesApi({ fastify, projectRepo });
 registerWorkspacesApi({ fastify, canvas, projects, saveProjects, dataDir, writeJson: writeJsonAtomic, floors, nodeApi, createFloor: floorsApi.createFloor as any });
@@ -326,6 +328,7 @@ fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }
   const newProject: Project = { id, name, description, repoPath: dir, createdAt: new Date().toISOString() };
   projects.push(newProject);
   saveProjects();
+  for (const p of projects) canvas.notify(p.id, { type: "sidebar" });
   return { ok: true, project: newProject };
 });
 
@@ -337,6 +340,7 @@ fastify.delete<{ Params: { id: string } }>("/api/projects/:id", async (req, repl
   const canvasFile = canvasFileFor(req.params.id);
   projects.splice(idx, 1);
   saveProjects();
+  for (const p of projects) canvas.notify(p.id, { type: "sidebar" });
   sessions.killProject(req.params.id);
   portals.closeProject(req.params.id);
   canvas.drop(req.params.id);
