@@ -35,6 +35,10 @@ export interface Floor {
   createdAt: string;
   // Arquivos não rastreados copiados do térreo para a worktree: não contam como trabalho não commitado
   copied?: string[];
+  // Clone completo e isolado (--copy) em vez de worktree
+  copy?: boolean;
+  // Andar de revisão de um pull request (--pull-request)
+  pullRequest?: { number: number; url: string; title: string };
   status?: FloorStatus;
 }
 

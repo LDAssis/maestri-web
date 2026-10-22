@@ -42,12 +42,14 @@ import FileTreeNode, { FileTreeNodeData } from "./FileTreeNode";
 import DiffNode, { DiffNodeData } from "./DiffNode";
 import NewAgentSheet from "./NewAgentSheet";
 import FloorSwitcher from "./FloorSwitcher";
+import DrawingNode from "./DrawingNode";
+import { DrawToolbar, DrawingLayer, type DrawTool } from "./DrawingTools";
 import { useFloors, GROUND } from "@/lib/useFloors";
 import { FloorNavContext } from "@/lib/floorContext";
 import { hitStack, stackOps, uniqueStackTitle } from "@/lib/noteStack";
 import RolesPanel from "./RolesPanel";
 import { CommandPalette, ContextMenu, ShortcutsHelp, MenuState } from "./CanvasOverlays";
-import { Download, Upload, Plus, UserCog, RefreshCw, StickyNote, Globe, FolderTree, FileDiff, Bell } from "lucide-react";
+import { Download, Upload, Plus, UserCog, RefreshCw, StickyNote, Globe, FolderTree, FileDiff, Bell, PenTool } from "lucide-react";
 
 interface MaestriCanvasProps {
   projectId: string;
@@ -239,6 +241,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       stickyNote: StickyNoteNode as any,
       noteStack: NoteStackNode as any,
       band: BandNode as any,
+      drawing: DrawingNode as any,
       portal: PortalNode as any,
       fileTree: FileTreeNode as any,
       diff: DiffNode as any,
@@ -250,6 +253,18 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState<Edge>([]);
   // Andar (nível do canvas) em exibição; nós sem data.floor estão no Ground
   const [floor, setFloor] = useState(GROUND);
+  // Desenho: ferramenta, cor/espessura e pilha local de desfazer
+  const [drawOpen, setDrawOpen] = useState(false);
+  const [tool, setTool] = useState<DrawTool>("pen");
+  const [drawColor, setDrawColor] = useState("#f43f5e");
+  const [drawWidth, setDrawWidth] = useState(4);
+  type UndoItem = { kind: "create"; id: string } | { kind: "erase"; node: Node<any> };
+  const undoRef = useRef<UndoItem[]>([]);
+  const [undoCount, setUndoCount] = useState(0);
+  const pushUndo = (it: UndoItem) => {
+    undoRef.current = [...undoRef.current.slice(-49), it];
+    setUndoCount(undoRef.current.length);
+  };
   const { floors, refresh: refreshFloors } = useFloors(projectId);
   useEffect(() => {
     // Se o andar visto foi apagado, volta ao térreo
@@ -625,6 +640,36 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     if (ops.addEdges.length) sendOp({ kind: "upsertEdges", edges: ops.addEdges as any });
   };
 
+  const createDrawing = (node: Node<any>) => {
+    const n = { ...node, data: withFloor(node.data as Record<string, unknown>) };
+    setNodes((nds) => [...nds.map((x) => (x.selected ? { ...x, selected: false } : x)), n]);
+    sendOp({ kind: "upsertNodes", nodes: [n] });
+    pushUndo({ kind: "create", id: n.id });
+  };
+  const eraseDrawing = (id: string) => {
+    const n = nodesRef.current.find((x) => x.id === id && x.type === "drawing");
+    if (!n) return;
+    setNodes((nds) => nds.filter((x) => x.id !== id));
+    sendOp({ kind: "removeNodes", ids: [id] });
+    pushUndo({ kind: "erase", node: n });
+  };
+  // Ctrl+Z local: desfaz a última criação/borracha deste navegador
+  const undoDraw = () => {
+    const it = undoRef.current.at(-1);
+    if (!it) return;
+    undoRef.current = undoRef.current.slice(0, -1);
+    setUndoCount(undoRef.current.length);
+    if (it.kind === "create") {
+      if (!nodesRef.current.some((x) => x.id === it.id)) return;
+      setNodes((nds) => nds.filter((x) => x.id !== it.id));
+      sendOp({ kind: "removeNodes", ids: [it.id] });
+    } else {
+      const { selected: _s, ...n } = it.node as any;
+      setNodes((nds) => [...nds, n]);
+      sendOp({ kind: "upsertNodes", nodes: [n] });
+    }
+  };
+
   const addPortal = (at?: { x: number; y: number }) => {
     const newId = `portal-${Date.now().toString().slice(-4)}`;
     const newNode: Node<PortalNodeData> = {
@@ -657,7 +702,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     const {
       chat, chatBusy, worktree, branch, worktreePath, ...data
     } = (src.data || {}) as Record<string, unknown>;
-    const prefix = ({ agentTerminal: "agent", stickyNote: "note", noteStack: "stack", band: "band", fileTree: "files", diff: "diff" } as Record<string, string>)[String(src.type)] ?? "portal";
+    const prefix = ({ agentTerminal: "agent", stickyNote: "note", noteStack: "stack", band: "band", drawing: "draw", fileTree: "files", diff: "diff" } as Record<string, string>)[String(src.type)] ?? "portal";
     const copy: Node<any> = {
       id: `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
       type: src.type,
@@ -709,8 +754,10 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
   };
 
   // Atalhos globais (ignorados em campos editáveis e no xterm)
-  const shortcutsRef = useRef({ addAgent, addStickyNote, addPortal, exportPartitura, openImport });
-  shortcutsRef.current = { addAgent, addStickyNote, addPortal, exportPartitura, openImport };
+  const drawOpenRef = useRef(false);
+  drawOpenRef.current = drawOpen;
+  const shortcutsRef = useRef({ addAgent, addStickyNote, addPortal, exportPartitura, openImport, undoDraw });
+  shortcutsRef.current = { addAgent, addStickyNote, addPortal, exportPartitura, openImport, undoDraw };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -723,6 +770,12 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       }
       const editable = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
       const blocked = () => editable || document.querySelector("[role=dialog][aria-modal=true], [role=menu]");
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "z") {
+        if (blocked() || !undoRef.current.length) return;
+        e.preventDefault();
+        shortcutsRef.current.undoDraw();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key.toLowerCase() === "e" || e.key.toLowerCase() === "i")) {
         if (blocked()) return;
         e.preventDefault();
@@ -736,6 +789,8 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       if (k === "a") shortcutsRef.current.addAgent();
       else if (k === "n") shortcutsRef.current.addStickyNote();
       else if (k === "p") shortcutsRef.current.addPortal();
+      else if (k === "d") setDrawOpen((v) => !v);
+      else if (e.key === "Escape" && drawOpenRef.current) setDrawOpen(false);
       else if (k === "f") flowRef.current?.fitView({ duration: 300 });
       else if (e.key === "?") setHelpOpen(true);
       else return;
@@ -819,6 +874,15 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
           Diff
         </button>
 
+        <button
+          onClick={() => setDrawOpen((v) => !v)}
+          aria-pressed={drawOpen}
+          className={`p-1.5 rounded-lg transition ${drawOpen ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}
+          title="Ferramentas de desenho — D"
+          aria-label="Ferramentas de desenho"
+        >
+          <PenTool className="h-4 w-4" />
+        </button>
         <button
           onClick={() => exportPartitura()}
           className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
@@ -925,6 +989,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
             { label: "Nova nota", run: () => addStickyNote() },
             { label: "Novo portal", run: () => addPortal() },
             { label: "Novo fichário", run: () => addNoteStack() },
+            { label: "Ferramentas de desenho", run: () => setDrawOpen(true) },
             { label: "Nova árvore de arquivos", run: () => addFileTree() },
             { label: "Novo diff", run: () => addDiff() },
             { label: "Exportar partitura", run: () => exportPartitura() },
@@ -969,6 +1034,19 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         </div>
       )}
 
+      {drawOpen && (
+        <DrawToolbar
+          tool={tool}
+          color={drawColor}
+          width={drawWidth}
+          canUndo={undoCount > 0}
+          onTool={setTool}
+          onColor={setDrawColor}
+          onWidth={setDrawWidth}
+          onUndo={undoDraw}
+          onClose={() => setDrawOpen(false)}
+        />
+      )}
       <FloorSwitcher projectId={projectId} floors={floors} current={floor} counts={floorCounts} onSelect={setFloor} onChanged={refreshFloors} />
 
       {/* O Canvas Principal com React Flow */}
@@ -1018,6 +1096,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
           size={1.5}
           color="#334155"
         />
+        {drawOpen && tool !== "select" && <DrawingLayer tool={tool} color={drawColor} width={drawWidth} onCreate={createDrawing} onErase={eraseDrawing} />}
         <PresenceLayer nodes={nodes} projectId={projectId} />
         <Controls className="!bg-slate-900 !border-slate-800 !fill-slate-300 !text-slate-300 rounded-lg shadow-xl" />
         <MiniMap
