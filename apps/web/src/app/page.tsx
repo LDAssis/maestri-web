@@ -398,6 +398,7 @@ function App({
       )}
       {isSettingsOpen && (
         <ProjectSettingsModal
+          isOpen={isSettingsOpen}
           projectId={activeProject?.id || ""}
           projectName={activeProject?.name || "Projeto"}
           onClose={() => setIsSettingsOpen(false)}
