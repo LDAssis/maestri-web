@@ -1,10 +1,12 @@
 "use client";
 
 import React from "react";
-import ReactMarkdown, { Components } from "react-markdown";
+import ReactMarkdown, { Components, defaultUrlTransform } from "react-markdown";
+import { AttachmentImage } from "./AttachmentView";
 import remarkGfm from "remark-gfm";
 
-// HTML cru não é renderizado (sem rehype-raw); urls javascript: são descartadas pelo react-markdown; imagens remotas desabilitadas
+// HTML cru não é renderizado (sem rehype-raw); urls javascript: são descartadas pelo react-markdown; imagens remotas desabilitadas.
+// Só imagens de anexo (`![d](attachment:ID)`, geradas por `maestri say`) aparecem, buscadas com autenticação.
 const components: Components = {
   h1: ({ children }) => <h1 className="text-sm font-bold mb-1.5">{children}</h1>,
   h2: ({ children }) => <h2 className="text-[13px] font-bold mb-1.5">{children}</h2>,
@@ -35,9 +37,18 @@ const components: Components = {
   td: ({ children }) => <td className="border border-white/20 px-2 py-1">{children}</td>,
 };
 
-export default function Markdown({ children }: { children: string }) {
+const keepAttachment = (url: string) => (url.startsWith("attachment:") ? url : defaultUrlTransform(url));
+
+export default function Markdown({ children, projectId }: { children: string; projectId?: string }) {
+  const comps: Components = {
+    ...components,
+    img: ({ src, alt }) => {
+      const id = typeof src === "string" ? /^attachment:([0-9a-f]{12})$/.exec(src)?.[1] : undefined;
+      return id && projectId ? <AttachmentImage projectId={projectId} id={id} alt={alt} /> : <span className="opacity-60">[imagem{alt ? `: ${alt}` : ""}]</span>;
+    },
+  };
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} disallowedElements={["img"]} components={components}>
+    <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={keepAttachment} components={comps}>
       {children}
     </ReactMarkdown>
   );

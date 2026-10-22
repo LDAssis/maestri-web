@@ -9,9 +9,12 @@ Apenas o Maestro. Cria um agente conectado a você e inicia o terminal dele.
 --preset: veja "maestri preset list"; sem --preset (nem --command) o recruta é uma cópia sua (mesmo comando).
 --role: nome de um role existente ("maestri role list"); --role-id usa o UUID; um texto que não é nome de role segue
   valendo como papel livre (formato antigo). --cmd é o apelido antigo de --command.
+--account: roda o recruta numa conta do CLI (claude/codex; veja "maestri account list" e "maestri preset list"); vence a
+  conta fixada no preset; sem ele, a do preset ou, numa cópia sua, a sua. "Default" = o login existente do CLI.
 --dir: diretório de partida; precisa estar dentro do projeto (padrão: o seu). --icon/--color: veja "maestri arrange --help".
 --band: coloca o recruta numa banda sua; sem ele, estando numa banda, o recruta entra nela em vez de ganhar uma corda.
 --floor: (aguarda os andares/F16). Nomes repetidos viram "Nome (2)".
+--replace "X" --account "Work" (sozinho) troca só a conta e reinicia o processo.
 --replace troca o processo do agente existente NO MESMO LUGAR (nó, cordas, posição e rotinas ficam; a sessão reinicia e o chat
   é descartado). O nome posicional renomeia. Exige --preset ou --command para trocar de agente; poderes de Maestro só mudam
   com --preset explícito. --floor não vale com --replace.`,
@@ -21,13 +24,14 @@ a você ou a eles). Agente↔agente pode cruzar andares; notas, fichários e por
 liga a agente; nota não liga a portal. Uma corda para uma banda alcança todos os membros.`,
   preset: `maestri preset list
 maestri preset show "Nome"
-maestri preset create "Nome" [--command "claude --model opus"] [--maestro on|off] [--chat on|off] [--quick-start on|off]
-maestri preset set "Nome" [--name Novo] [--command C] [--maestro on|off] [--chat on|off] [--quick-start on|off]
+maestri preset create "Nome" [--command "claude --model opus"] [--account "Work"] [--maestro on|off] [--chat on|off] [--quick-start on|off]
+maestri preset set "Nome" [--name Novo] [--command C] [--account "Work"|""] [--maestro on|off] [--chat on|off] [--quick-start on|off]
 maestri preset delete "Nome"
 Presets = embutidos (claude, codex, opencode, agy, shell) + cliPresets das configurações. Novos presets e overrides de
 embutidos são gravados nas configurações GLOBAIS; um preset que já vive nas configurações do projeto é alterado lá.
 create/set respondem com o preset atualizado. Apagar um preset não muda terminais já criados. Só o Maestro altera.
-Sem --command o preset é um shell puro. (Contas de CLI não existem no Maestri Web.)`,
+Sem --command o preset é um shell puro. --account fixa uma conta do CLI do comando (claude/codex); "" desafixa. O list mostra
+accounts: "Default", "Work" nos presets com mais de uma conta e "; starts on Work" nos fixados.`,
   role: `maestri role list
 maestri role show "Nome"
 maestri role create "Nome" "Prompt" [--scope current|global]
@@ -72,7 +76,7 @@ export function register({ call, need, CliError }) {
       out.push("", `${name}:`, ...items);
     };
     group("Agentes", c.agents.flatMap((n) => [
-      `  - ${n.title}${n.isMaestro ? " (Maestro)" : ""}`,
+      `  - ${n.title}${n.isMaestro ? " (Maestro)" : ""}${n.account ? ` [conta: ${n.account}]` : ""}`,
       // Maestro: as conexões de cada colega, aninhadas
       ...((c.links?.[n.nodeId] ?? []).map((l) => `      ↳ ${l.title} (${TYPE_LABEL[l.type] ?? l.type}${l.members ? `, ${l.members} membros` : ""})`)),
     ]));
@@ -129,6 +133,7 @@ export function register({ call, need, CliError }) {
       `${p.label}  (id ${p.id}${p.builtin ? ", embutido" : ""}; ${p.source})`,
       `  comando: ${p.cmd || "(shell puro)"}`,
       `  maestro: ${onOff(p.maestro)} · chat: ${onOff(p.chat)} · quick-start: ${onOff(p.quickStart)}`,
+      ...(p.account ? [`  conta: ${p.account}${p.accounts ? ` (disponíveis: ${p.accounts.map((a) => `"${a}"`).join(", ")})` : ""}`] : []),
     ].join("\n"));
   const presetBody = (flags) => ({
     command: flags.command, maestro: flags.maestro, chat: flags.chat, quickStart: flags["quick-start"], account: flags.account,
@@ -138,7 +143,7 @@ export function register({ call, need, CliError }) {
     const [sub, name] = pos;
     if (sub === "list") {
       const { presets } = await call("GET", "/presets");
-      for (const p of presets) console.log(`${p.label}  [${p.id}]  ${p.cmd || "(shell)"}${[p.maestro && "maestro", p.chat && "chat", p.quickStart && "quick-start"].filter(Boolean).map((x) => ` +${x}`).join("")}`);
+      for (const p of presets) console.log(`${p.label}  [${p.id}]  ${p.cmd || "(shell)"}${[p.maestro && "maestro", p.chat && "chat", p.quickStart && "quick-start"].filter(Boolean).map((x) => ` +${x}`).join("")}${p.accounts ? `  accounts: ${p.accounts.map((a) => `"${a}"`).join(", ")}` : ""}${p.account ? `; starts on "${p.account}"` : ""}`);
     } else if (sub === "show") {
       need(pos, 2, 'preset show "Nome"');
       showPreset((await call("POST", "/presets/show", { name })).preset);

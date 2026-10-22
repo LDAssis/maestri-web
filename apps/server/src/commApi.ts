@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import type { SessionManager } from "./sessions.js";
 import { ApiError } from "./agents.js";
+import type { AttachmentStore } from "./attachments.js";
 import { isText, typeAndWait, type NodeApi } from "./nodeApi.js";
 import { THREADS, currentThread, isThread, threadOf, type Thread } from "./chatThreads.js";
 
@@ -14,6 +15,7 @@ interface Deps {
   sessions: SessionManager;
   canvas: CanvasStore;
   nodeApi: NodeApi;
+  attachments: AttachmentStore;
 }
 
 const CHAT_MAX = 200; // mesmo limite do chat em nodeApi.ts
@@ -77,7 +79,7 @@ export function recall(chat: Obj[], q: Obj, now = Date.now()) {
   return { thread, messages: out };
 }
 
-export function registerCommApi({ fastify, sessions, canvas, nodeApi }: Deps) {
+export function registerCommApi({ fastify, sessions, canvas, nodeApi, attachments }: Deps) {
   const { base, context, resolveTarget, requireSession, wrap } = nodeApi;
 
   const chatOf = (projectId: string, nodeId: string): Obj[] =>
@@ -125,11 +127,15 @@ export function registerCommApi({ fastify, sessions, canvas, nodeApi }: Deps) {
   // Resposta do agente na thread atual (a da última mensagem do usuário); progress = bolha intermediária
   fastify.post(`${base}/say`, wrap((c, req) => {
     agentOnly(c);
-    const { text, progress } = req.body ?? {};
-    if (!isText(text, 50_000) || !text.trim()) throw new ApiError(400, "Informe o texto.");
+    const { progress } = req.body ?? {};
+    const text: unknown = req.body?.text ?? "";
+    // Anexos já enviados (POST /attachments): só na resposta final, nunca no balão de progresso
+    const files = attachments.resolve(c.projectId, req.body?.attachments);
+    if (files.length && progress === true) throw new ApiError(400, "Anexos só vão na resposta final (não em --progress).");
+    if (!isText(text, 50_000) || (!text.trim() && !files.length)) throw new ApiError(400, "Informe o texto.");
     const chat = chatOf(c.projectId, c.me.id);
     const thread = currentThread(chat);
-    const msg = { id: crypto.randomUUID(), at: new Date().toISOString(), role: "agent", text, thread, ...(progress === true && { progress: true }) };
+    const msg = { id: crypto.randomUUID(), at: new Date().toISOString(), role: "agent", text, thread, ...(progress === true && { progress: true }), ...(files.length && { attachments: files }) };
     // Lê e grava no mesmo tick (como appendChat em nodeApi.ts)
     canvas.applyAndBroadcast(c.projectId, { kind: "patchNodeData", id: c.me.id, data: { chat: [...chat, msg].slice(-CHAT_MAX) } }, `chat:${c.me.id}`);
     return { ok: true, thread };

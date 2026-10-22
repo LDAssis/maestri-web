@@ -6,6 +6,7 @@ import { parseUser } from "./presence.js";
 import { ApiError, PRESETS, PRESET_LABELS, SIZES, freePosition, validCmd, withRolePrompt } from "./agents.js";
 import { readRole } from "./roles.js";
 import { THREADS, DEFAULT_THREAD, isThread, chatHeader, wantsChatHeader, currentThread } from "./chatThreads.js";
+import type { AttachmentStore } from "./attachments.js";
 import { reachNotes } from "./noteGraph.js";
 import { bandReach, isBand, memberIds, myBands, neighbors, sweepBands, teamTree } from "./team.js";
 
@@ -16,6 +17,7 @@ interface Deps {
   sessions: SessionManager;
   canvas: CanvasStore;
   projectRepo: (projectId: string) => string | null;
+  attachments?: AttachmentStore; // anexos do chat (POLISH3)
 }
 
 const ANSI = /\x1b\[[0-?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
@@ -75,7 +77,7 @@ function expandMentions(text: string, connected: Obj[]) {
 
 export type NodeApi = ReturnType<typeof registerNodeApi>;
 
-export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps) {
+export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attachments }: Deps) {
   const base = "/api/projects/:p/nodes/:n";
 
   // Resolve projeto, nó atual e conectados; lança ApiError com a mensagem para o CLI
@@ -173,8 +175,8 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
   fastify.get(`${base}/context`, wrap((c) => {
     const pick = (type: string) => c.connected.filter((n) => n.type === type);
     return {
-      self: { nodeId: c.me.id, title: c.title(c.me), isMaestro: c.me.data?.isMaestro === true },
-      agents: pick("agentTerminal").map((n) => ({ nodeId: n.id, title: c.title(n), isMaestro: n.data?.isMaestro === true })),
+      self: { nodeId: c.me.id, title: c.title(c.me), isMaestro: c.me.data?.isMaestro === true, ...(c.me.data?.account && { account: c.me.data.account }) },
+      agents: pick("agentTerminal").map((n) => ({ nodeId: n.id, title: c.title(n), isMaestro: n.data?.isMaestro === true, ...(n.data?.account && { account: n.data.account }) })),
       notes: c.reach.notes.map((r) => ({
         nodeId: r.node.id, title: c.title(r.node), locked: r.node.data?.locked === true,
         parent: r.parent ? c.title(r.parent) : null, stack: r.stack ? c.title(r.stack) : null,
@@ -310,8 +312,12 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
 
   fastify.post(`${base}/chat`, wrap((c, req, reply) => {
     agentOnly(c);
-    const { text, author, thread = DEFAULT_THREAD } = req.body ?? {};
-    if (!isText(text, 20_000) || !text.trim()) throw new ApiError(400, "Informe o texto.");
+    const { author, thread = DEFAULT_THREAD } = req.body ?? {};
+    const files = attachments ? attachments.resolve(c.projectId, req.body?.attachments) : [];
+    if (req.body?.attachments !== undefined && !attachments) throw new ApiError(400, "Anexos indisponíveis.");
+    const text: unknown = req.body?.text ?? "";
+    // O texto pode faltar quando há anexos
+    if (!isText(text, 20_000) || (!text.trim() && !files.length)) throw new ApiError(400, "Informe o texto.");
     if (!isThread(thread)) throw new ApiError(400, `Thread inválida (${THREADS.join(", ")}).`);
     const user = parseUser(author);
     if (!user) throw new ApiError(400, "Autor inválido (id, name e color #rrggbb).");
@@ -321,11 +327,13 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
     if (chatBusy.has(key)) throw new ApiError(409, "Agente ocupado.");
     chatBusy.add(key);
 
-    appendChat(c.projectId, c.me.id, { role: "user", text, author: user, thread }, { chatBusy: true });
+    appendChat(c.projectId, c.me.id, { role: "user", text, author: user, thread, ...(files.length && { attachments: files }) }, { chatBusy: true });
 
     // Várias linhas vão como bracketed paste para o shell/TUI não executar linha a linha.
     // Com um agente em primeiro plano, a mensagem leva o cabeçalho do Maestri Chat (thread + `maestri say`).
-    const hinted = (wantsChatHeader(session) ? chatHeader(thread) : "") + expandMentions(text, c.connected);
+    // Anexos: uma linha por arquivo com o comando para obtê-lo
+    const attLines = files.map((f) => `[Attachment: ${f.name} (${f.image ? "image" : f.mime}, ${f.size} bytes) — get it with: maestri recall attachment ${f.id}]`);
+    const hinted = (wantsChatHeader(session) ? chatHeader(thread) : "") + [expandMentions(text, c.connected), ...attLines].filter(Boolean).join("\n");
     const input = hinted.includes("\n") ? `\x1b[200~${hinted}\x1b[201~\r` : `${hinted}\r`;
 
     // Captura em segundo plano; a resposta 202 não espera

@@ -12,6 +12,8 @@ import { COLORS, ICONS } from "./notesApi.js";
 import { isInside, resolveInside } from "./projectDirs.js";
 import { BAND_SIZE, bandOf, dissolve, isBand, materialize, memberIds, myBands, neighbors, sameFloorNodes, sweepBands, teamTree } from "./team.js";
 import { FloorStore, GROUND, floorOf } from "./floors.js";
+import { AccountStore, DEFAULT_ACCOUNT } from "./accounts.js";
+import { programOf } from "./resume.js";
 
 type Obj = Record<string, any>;
 
@@ -32,6 +34,7 @@ interface Deps {
   nodeApi: NodeApi;
   settings: SettingsAccess;
   floors: FloorStore;
+  accounts: AccountStore;
 }
 
 export interface Preset {
@@ -44,6 +47,8 @@ export interface Preset {
   builtin: boolean;
   source: "builtin" | "global" | "project";
   color?: string;
+  account?: string; // conta de CLI fixada (claude/codex)
+  accounts?: string[]; // contas disponíveis para o CLI do preset (só quando há mais de uma)
 }
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -76,7 +81,7 @@ const presetIdForCmd = (cmd: string) => {
   return Object.hasOwn(PRESETS, prog) ? prog : "shell";
 };
 
-export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDir, nodeApi, settings, floors }: Deps) {
+export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDir, nodeApi, settings, floors, accounts }: Deps) {
   const { base, context, resolveTarget, requireMaestro, wrap } = nodeApi;
   type Ctx = ReturnType<typeof context>;
   const by = (c: Ctx) => `cli:${c.me.id}`;
@@ -93,12 +98,16 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
       for (const e of list) {
         if (!e || typeof e.id !== "string" || typeof e.label !== "string" || typeof e.cmd !== "string") continue;
         const b = map.get(e.id);
-        map.set(e.id, { id: e.id, label: e.label, cmd: e.cmd, maestro: e.maestro === true, chat: e.chat === true, quickStart: e.quickStart !== false, builtin: !!b?.builtin, source, ...(typeof e.color === "string" && { color: e.color }) });
+        map.set(e.id, { id: e.id, label: e.label, cmd: e.cmd, maestro: e.maestro === true, chat: e.chat === true, quickStart: e.quickStart !== false, builtin: !!b?.builtin, source, ...(typeof e.color === "string" && { color: e.color }), ...(typeof e.account === "string" && e.account && { account: e.account }) });
       }
     };
     overlay(settings.readGlobal()?.cliPresets, "global");
     overlay(settings.readProject(projectId)?.cliPresets, "project");
-    return [...map.values()];
+    // contas do CLI do preset (claude/codex) quando existe alguma além de "Default"
+    return [...map.values()].map((p) => {
+      const prog = programOf(p.cmd);
+      return prog === "claude" || prog === "codex" ? (accounts.names(prog).length > 1 ? { ...p, accounts: accounts.names(prog) } : p) : p;
+    });
   }
 
   function findPreset(projectId: string, name: unknown): Preset {
@@ -109,14 +118,17 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     return hit;
   }
 
-  const entryOf = (p: Preset) => ({ id: p.id, label: p.label, cmd: p.cmd, maestro: p.maestro, chat: p.chat, quickStart: p.quickStart, ...(p.color && { color: p.color }) });
+  const entryOf = (p: Preset) => ({ id: p.id, label: p.label, cmd: p.cmd, maestro: p.maestro, chat: p.chat, quickStart: p.quickStart, ...(p.color && { color: p.color }), ...(p.account && { account: p.account }) });
 
   function writePreset(projectId: string, p: Preset, source: "global" | "project") {
     const holder = source === "project" ? settings.readProject(projectId) ?? {} : clone(settings.readGlobal() ?? {});
     const list: Obj[] = Array.isArray(holder.cliPresets) ? holder.cliPresets : [];
     const i = list.findIndex((e) => e?.id === p.id);
     if (i === -1) list.push(entryOf(p));
-    else list[i] = { ...list[i], ...entryOf(p) };
+    else {
+      const { account: _old, ...kept } = list[i]; // a conta só fica se o preset ainda a fixa
+      list[i] = { ...kept, ...entryOf(p) };
+    }
     holder.cliPresets = list;
     if (source === "project") settings.writeProject(projectId, holder);
     else settings.writeGlobal(holder);
@@ -132,8 +144,12 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     if (loadPresets(projectId).some((p) => p.id !== selfId && lc(p.label) === lc(name))) throw new ApiError(409, `Já existe um preset chamado "${name}".`);
     return name;
   };
-  const noAccount = (b: Obj) => {
-    if (b.account !== undefined) throw new ApiError(400, "Contas de CLI (--account) não existem no Maestri Web.");
+  // --account de preset: precisa existir para o CLI do comando ("Default" vale sempre; vazio desafixa)
+  const presetAccount = (cmd: string, v: unknown): string | undefined => {
+    if (v === undefined || v === null || v === "") return undefined;
+    if (typeof v !== "string") throw new ApiError(400, "Conta inválida.");
+    accounts.resolveFor(cmd, v);
+    return accounts.find(programOf(cmd) as "claude" | "codex", v) ?? undefined;
   };
 
   fastify.get("/api/projects/:p/presets", async (req: any, reply) => {
@@ -146,7 +162,6 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
   fastify.post(`${base}/presets/create`, wrap((c, req) => {
     requireMaestro(c, "criar presets");
     const b = req.body ?? {};
-    noAccount(b);
     const label = checkLabel(c.projectId, b.name);
     const taken = new Set(loadPresets(c.projectId).map((p) => p.id));
     let id = slug(label);
@@ -158,6 +173,8 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
       quickStart: b.quickStart === undefined ? true : onOff(b.quickStart, "quick-start"),
       builtin: false, source: "global",
     };
+    const pinned = presetAccount(preset.cmd, b.account);
+    if (pinned) preset.account = pinned;
     writePreset(c.projectId, preset, "global");
     canvas.notify(c.projectId, { type: "presets" });
     return { preset };
@@ -165,7 +182,6 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
   fastify.post(`${base}/presets/set`, wrap((c, req) => {
     requireMaestro(c, "alterar presets");
     const b = req.body ?? {};
-    noAccount(b);
     const cur = findPreset(c.projectId, b.name);
     const next: Preset = {
       ...cur,
@@ -175,6 +191,12 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
       ...(b.chat !== undefined && { chat: onOff(b.chat, "chat") }),
       ...(b.quickStart !== undefined && { quickStart: onOff(b.quickStart, "quick-start") }),
     };
+    // conta: o novo valor (vazio desafixa) ou a atual, revalidada contra o comando que ficou
+    if (b.account !== undefined || (b.command !== undefined && next.account)) {
+      const pinned = presetAccount(next.cmd, b.account !== undefined ? b.account : next.account);
+      if (pinned) next.account = pinned;
+      else delete next.account;
+    }
     const source = cur.source === "project" ? "project" : "global";
     writePreset(c.projectId, next, source);
     canvas.notify(c.projectId, { type: "presets" });
@@ -325,7 +347,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     if (!had && !force) return;
     sessions.kill(projectId, node.id);
     try {
-      sessions.ensure(projectId, node.id, { cwd: cwdOf(projectId, repo, canvas.state(projectId).nodes?.find((x) => x.id === node.id) ?? node), cmd });
+      sessions.ensure(projectId, node.id, { cwd: cwdOf(projectId, repo, canvas.state(projectId).nodes?.find((x) => x.id === node.id) ?? node), cmd, fresh: true });
     } catch (e: any) {
       throw new ApiError(500, `Nó atualizado, mas a sessão falhou: ${e.message}`);
     }
@@ -372,13 +394,19 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     return { saved: null, text: b.role, note: `Role "${b.role}" não encontrado: usado como texto livre do papel.` };
   }
 
+  const tryAccount = (cmd: string, name: string) => {
+    try {
+      return accounts.resolveFor(cmd, name);
+    } catch {
+      return undefined; // conta do preset que sumiu: o recruta começa no login padrão
+    }
+  };
   const nodeLabel = (n: Obj, fallback = "Agente") => String(n.data?.title ?? fallback);
 
   fastify.post(`${base}/recruit`, wrap((c, req) => {
     requireMaestro(c, "recrutar");
     const repo = projectRepo(c.projectId)!;
     const b = req.body ?? {};
-    noAccount(b);
     checkLook(b.color, b.icon);
     if (b.replace !== undefined) return replaceAgent(c, repo, b);
 
@@ -393,6 +421,11 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     const copy = !preset && command === undefined;
     const baseCmd = (command !== undefined ? command : preset ? preset.cmd : baseCmdOf(c.me)).trim();
     const presetField = preset ? (preset.builtin ? preset.id : presetIdForCmd(baseCmd)) : copy ? c.me.data?.preset ?? presetIdForCmd(baseCmd) : presetIdForCmd(baseCmd);
+
+    // conta: --account vence a do preset; cópia de mim herda a minha (mesmo CLI)
+    const accountName = b.account !== undefined ? accounts.resolveFor(baseCmd, b.account)
+      : preset?.account ? tryAccount(baseCmd, preset.account)
+      : copy && programOf(baseCmd) === programOf(baseCmdOf(c.me)) ? (c.me.data?.account as string | undefined) : undefined;
 
     const { saved, text, note } = roleInput(repo, b);
     const id = `agent-${crypto.randomUUID().slice(0, 8)}`;
@@ -430,6 +463,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
         defaultCmd,
         ...(worktreePath && { worktreePath }),
         ...floorData(floor),
+        ...(accountName && { account: accountName }),
         ...(preset?.maestro && { isMaestro: true }),
         ...(preset?.chat && { chatFirst: true }),
         ...(b.color !== undefined && { color: b.color }),
@@ -454,8 +488,8 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     const command = b.command ?? b.cmd;
     if (command !== undefined && !validCmd(command)) throw new ApiError(400, "Comando inválido.");
     const rename = b.name !== undefined ? (isText(b.name, MAX_TITLE) && b.name.trim() ? b.name.trim() : (() => { throw new ApiError(400, "Nome inválido."); })()) : undefined;
-    if (b.preset === undefined && command === undefined && b.role === undefined && b.roleId === undefined && b.dir === undefined && rename === undefined && b.color === undefined && b.icon === undefined) {
-      throw new ApiError(400, "Nada para trocar: informe --preset, --command, --role, --dir, --color, --icon ou um novo nome.");
+    if (b.preset === undefined && command === undefined && b.role === undefined && b.roleId === undefined && b.dir === undefined && rename === undefined && b.color === undefined && b.icon === undefined && b.account === undefined) {
+      throw new ApiError(400, "Nada para trocar: informe --preset, --command, --role, --dir, --account, --color, --icon ou um novo nome.");
     }
     const preset = b.preset === undefined ? null : findPreset(c.projectId, b.preset);
     const baseCmd = (command !== undefined ? command : preset ? preset.cmd : baseCmdOf(t)).trim();
@@ -473,6 +507,11 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     }
     const real = b.dir !== undefined ? projectDir(repo, cwdOf(c.projectId, repo, t), b.dir) : null;
     const title = rename ? uniqueTitle(c.nodes, rename, t.id) : undefined;
+    // conta: --account vence a do preset; trocar de CLI não herda a conta do anterior; "Default" = sem conta (null limpa)
+    let accountPatch: Obj = {};
+    if (b.account !== undefined) accountPatch = { account: accounts.resolveFor(baseCmd, b.account) ?? null };
+    else if (preset?.account) accountPatch = { account: tryAccount(baseCmd, preset.account) ?? null };
+    else if (programOf(baseCmd) !== programOf(baseCmdOf(t))) accountPatch = { account: null };
     const presetField = preset ? (preset.builtin ? preset.id : presetIdForCmd(baseCmd)) : command !== undefined ? presetIdForCmd(baseCmd) : undefined;
     canvas.applyAndBroadcast(c.projectId, {
       kind: "patchNodeData", id: t.id,
@@ -480,6 +519,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
         ...(title && { title }),
         ...(presetField && { preset: presetField, presetName: preset?.label ?? null }),
         ...roleData,
+        ...accountPatch,
         ...(real && { worktreePath: relDir(repo, real) }),
         ...(preset && { isMaestro: preset.maestro }), // poderes de Maestro só mudam com --preset explícito
         ...(b.color !== undefined && { color: b.color }),

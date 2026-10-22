@@ -1,5 +1,6 @@
 "use client";
 
+import SessionAccountsSettings from "./SessionAccountsSettings";
 import React, { useState, useEffect } from "react";
 import { Settings, Globe, FolderGit2, Plus, Trash2, Check, X, ShieldAlert } from "lucide-react";
 import { apiFetch } from "@/lib/api";
@@ -190,6 +191,7 @@ export default function ProjectSettingsModal({
 
         {/* Conteúdo da Aba */}
         <div className="flex-1 overflow-y-auto pr-1 space-y-4 text-xs">
+          <SessionAccountsSettings projectId={projectId} />
           {activeTab === "project" ? (
             <>
               {/* Checkbox de herança global */}

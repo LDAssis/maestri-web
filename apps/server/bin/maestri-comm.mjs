@@ -1,5 +1,7 @@
 // Comunicação do CLI (F13): ask --batch/--raw, say, recall e debug. Carregado por bin/maestri.
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const THREADS = ["blue", "purple", "pink", "red", "orange", "yellow", "green"];
 
@@ -17,15 +19,20 @@ Timeout: imprime o que houver e sai com código 2 (no batch, o item ganha "timed
 maestri send "Nome" --raw "\\e[A"
 Escreve o texto e Enter no terminal do agente conectado, sem esperar resposta.
 --raw envia entrada crua (escapes \\n \\t \\e \\xNN) sem Enter automático.`,
-  say: `maestri say "texto markdown" [--file caminho] [--progress "texto"]
+  say: `maestri say "texto markdown" [--file caminho] [--attach caminho ...] [--progress "texto"]
 Responde ao usuário na face de chat do SEU nó, na thread atual (a da última mensagem do usuário).
-Sem argumento, lê o texto da entrada padrão (heredoc/pipe). --file lê um arquivo UTF-8.
+Sem argumento, lê o texto da entrada padrão (heredoc/pipe). --file lê um arquivo UTF-8; se for uma imagem
+(PNG, JPEG, GIF, WebP), anexa a imagem (o texto posicional vira a legenda).
+--attach CAMINHO (repetível, até 20MB cada) anexa arquivos à resposta final; o usuário baixa pela ChatFace.
+Uma linha só com ![descrição](/caminho/absoluto/img.png) vira imagem embutida.
 --progress publica um balão intermediário (estilo diferente) — use enquanto ainda trabalha.
 "chat reply" continua funcionando como alias.`,
   recall: `maestri recall [thread] [--turns N | --last day|week|month | --from YYYY-MM-DD [--to YYYY-MM-DD] | --all] [--json]
 maestri recall list
+maestri recall attachment <id>
 Relê a conversa do chat do seu nó. thread = blue|purple|pink|red|orange|yellow|green (padrão: a atual).
-Padrão: últimos 10 turnos. "recall list" mostra as threads com a contagem de mensagens.
+Padrão: últimos 10 turnos. As mensagens com anexos mostram os ids; "recall attachment <id>" salva o anexo em um
+arquivo temporário e imprime o caminho. "recall list" mostra as threads com a contagem de mensagens.
 Só lê o diálogo (mensagens do usuário e respostas do agente): balões de progresso (say --progress) e a saída
 capturada do terminal ficam de fora de propósito; por isso a contagem pode ser menor que a do badge da UI.`,
   debug: `maestri debug
@@ -37,11 +44,24 @@ const SUMMARY = [
   "Comunicação:",
   '  ask --batch \'{"A":"p1","B":"p2"}\'   Vários asks em paralelo; imprime array JSON',
   '  ask|send "Nome" --raw "2\\n"          Entrada crua (\\n Enter, \\t, \\e ESC, \\xNN)',
-  '  say "texto" [--file F] [--progress T] Responde no chat (thread atual); sem texto lê stdin',
+  '  say "texto" [--file F] [--attach F ...] [--progress T] Responde no chat (thread atual); sem texto lê stdin',
   "  recall [thread] [--turns N|--last day|week|month|--from D [--to D]|--all] [--json]",
   "  recall list                          Threads do chat com contagem de mensagens",
+  "  recall attachment <id>               Salva um anexo do chat num arquivo temporário e imprime o caminho",
   "  debug                                Diagnóstico do ambiente do Maestri",
 ];
+
+const ATTACH_MAX = 20 * 1024 * 1024;
+// PNG, JPEG, GIF ou WebP de verdade (primeiros bytes), não só pela extensão
+const isImage = (b) =>
+  (b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) ||
+  (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) ||
+  (b.length > 6 && /^GIF8[79]a$/.test(b.subarray(0, 6).toString("latin1"))) ||
+  (b.length > 12 && b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP");
+// --attach é repetível (o parser do bin/maestri guarda só o último valor)
+const argvValues = (flag) => process.argv.flatMap((a, i, all) => (a === flag && i + 1 < all.length ? [all[i + 1]] : []));
+// Linha própria com imagem de caminho absoluto: ![descrição](/caminho/img.png)
+const INLINE_IMG = /^!\[([^\]]*)\]\((\/[^)\s]+)\)[ \t]*$/gm;
 
 const readStdin = async () => {
   const chunks = [];
@@ -112,19 +132,72 @@ export function register({ call, need, CliError }) {
     console.log(`Enviado para ${pos[0]}.`);
   }
 
+  // Envia um arquivo local ao servidor (armazenamento por projeto) e devolve os metadados com o id estável
+  async function upload(file) {
+    let data;
+    try {
+      data = fs.readFileSync(file);
+    } catch {
+      throw new CliError(`Arquivo não encontrado: ${file}`);
+    }
+    if (data.length > ATTACH_MAX) throw new CliError(`Arquivo grande demais (máximo ${ATTACH_MAX / 1024 / 1024}MB): ${file}`);
+    return (await call("POST", "/attachments", { name: path.basename(file), data: data.toString("base64") })).attachment;
+  }
+
   async function say({ pos, flags }) {
-    let text = flags.progress ?? (flags.file ? fs.readFileSync(flags.file, "utf8") : pos.join(" "));
-    if (flags.progress === undefined && flags.file === undefined && !pos.length) {
-      if (process.stdin.isTTY) throw new CliError('Uso: maestri say "texto" | say --file F | say --progress "texto" | heredoc/pipe');
+    const attach = argvValues("--attach");
+    if (flags.progress !== undefined && (attach.length || flags.file !== undefined)) throw new CliError("--file/--attach só valem na resposta final (não em --progress).");
+    const ids = [];
+    let text = flags.progress ?? pos.join(" ");
+    if (flags.file !== undefined) {
+      let buf;
+      try {
+        buf = fs.readFileSync(flags.file);
+      } catch {
+        throw new CliError(`Arquivo não encontrado: ${flags.file}`);
+      }
+      if (isImage(buf)) ids.push((await upload(flags.file)).id); // imagem: vira anexo; o texto posicional é a legenda
+      else {
+        if (pos.length) throw new CliError("Use texto OU --file, não os dois.");
+        text = buf.toString("utf8");
+      }
+    } else if (flags.progress === undefined && !pos.length && !attach.length) {
+      if (process.stdin.isTTY) throw new CliError('Uso: maestri say "texto" | say --file F | say --attach F "texto" | say --progress "texto" | heredoc/pipe');
       text = await readStdin();
     }
-    if (flags.file !== undefined && flags.progress === undefined && pos.length) throw new CliError("Use texto OU --file, não os dois.");
-    if (!String(text).trim()) throw new CliError("Texto vazio.");
-    const r = await call("POST", "/say", { text, ...(flags.progress !== undefined && { progress: true }) });
-    console.log(flags.progress !== undefined ? `Progresso enviado (thread ${r.thread}).` : `Resposta enviada (thread ${r.thread}).`);
+    for (const f of attach) ids.push((await upload(f)).id);
+    // ![desc](/abs/img.png) em linha própria vira imagem embutida (anexo + referência)
+    const inline = [...String(text).matchAll(INLINE_IMG)];
+    if (inline.length) {
+      const map = new Map();
+      for (const m of inline) {
+        const buf = fs.existsSync(m[2]) ? fs.readFileSync(m[2]) : null;
+        if (!buf) throw new CliError(`Imagem não encontrada: ${m[2]}`);
+        if (!isImage(buf)) throw new CliError(`Não é uma imagem PNG/JPEG/GIF/WebP: ${m[2]}`);
+        if (!map.has(m[2])) map.set(m[2], (await upload(m[2])).id);
+      }
+      text = String(text).replace(INLINE_IMG, (_, desc, file) => `![${desc}](attachment:${map.get(file)})`);
+      ids.push(...new Set(map.values()));
+    }
+    if (!String(text).trim() && !ids.length) throw new CliError("Texto vazio.");
+    const r = await call("POST", "/say", { text, ...(ids.length && { attachments: [...new Set(ids)] }), ...(flags.progress !== undefined && { progress: true }) });
+    const extra = ids.length ? ` com ${new Set(ids).size} anexo(s)` : "";
+    console.log(flags.progress !== undefined ? `Progresso enviado (thread ${r.thread}).` : `Resposta enviada${extra} (thread ${r.thread}).`);
+  }
+
+  // recall attachment <id>: salva o anexo num arquivo temporário e imprime o caminho
+  async function recallAttachment(id) {
+    if (!id) throw new CliError("Uso: maestri recall attachment <id>");
+    const { attachment, data } = await call("GET", `/attachments/${encodeURIComponent(id)}`);
+    const dir = path.join(os.tmpdir(), "maestri-attachments");
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = path.join(dir, `${attachment.id}-${attachment.name}`);
+    fs.writeFileSync(file, Buffer.from(data, "base64"), { mode: 0o600 });
+    console.log(file);
   }
 
   async function recall({ pos, flags }) {
+    if (pos[0] === "attachment") return recallAttachment(pos[1]);
     if (pos[0] === "list") {
       const r = await call("GET", "/recall/threads");
       if (flags.json) return console.log(JSON.stringify(r, null, 2));
@@ -140,7 +213,10 @@ export function register({ call, need, CliError }) {
     if (flags.json) return console.log(JSON.stringify(r, null, 2));
     if (!r.messages.length) return console.log(`Nenhuma mensagem na thread ${r.thread}.`);
     console.log(`# thread ${r.thread}`);
-    for (const m of r.messages) console.log(`[${m.at}] ${m.role === "user" ? m.author?.name || "usuário" : "agente"}: ${m.text}`);
+    for (const m of r.messages) {
+      const files = (m.attachments ?? []).map((a) => `${a.id} ${a.name}`).join(", ");
+      console.log(`[${m.at}] ${m.role === "user" ? m.author?.name || "usuário" : "agente"}: ${m.text}${files ? `\n    [attachments: ${files}]` : ""}`);
+    }
   }
 
   async function debug() {
@@ -182,7 +258,7 @@ export function register({ call, need, CliError }) {
   return {
     commands: { ask, send, say, recall, debug },
     help: HELP,
-    flags: ["--batch", "--raw", "--file", "--progress", "--turns", "--from", "--to"],
+    flags: ["--batch", "--raw", "--file", "--attach", "--progress", "--turns", "--from", "--to"],
     boolFlags: ["--all", "--json"],
     summary: SUMMARY,
   };

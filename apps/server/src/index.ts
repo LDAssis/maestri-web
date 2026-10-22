@@ -16,6 +16,11 @@ import { registerCommApi } from "./commApi.js";
 import { registerTeamApi } from "./teamApi.js";
 import { registerNotesApi } from "./notesApi.js";
 import { registerWorkspacesApi } from "./workspacesApi.js";
+import { SessionHistory } from "./sessionHistory.js";
+import { AccountStore } from "./accounts.js";
+import { registerAccountsApi } from "./accountsApi.js";
+import { AttachmentStore } from "./attachments.js";
+import { registerAttachmentsApi } from "./attachmentsApi.js";
 import { registerFloorsApi } from "./floorsApi.js";
 import { FloorStore } from "./floors.js";
 import { registerRoutinesApi } from "./routines.js";
@@ -149,9 +154,20 @@ function canvasFileFor(id: string) {
 const port = Number(process.env.PORT) || 4000;
 const host = process.env.HOST || "127.0.0.1";
 
+// Retomada de sessão e contas de CLI (POLISH3): `canvas`/`readProjectSettings` são usados só em tempo de execução
+const sessionHistory = new SessionHistory(path.join(dataDir, "session_history.json"));
+const accounts = new AccountStore(dataDir);
+const attachments = new AttachmentStore(dataDir);
 const sessions = new SessionManager({
   apiUrl: () => `http://127.0.0.1:${(fastify.server.address() as { port?: number } | null)?.port ?? port}/api`,
   token: authToken,
+  history: sessionHistory,
+  // Toggle "retomar sessão" do projeto (prefs_<id>.json, separado das configurações de CLI); ligado por padrão
+  resume: (projectId) => readPrefs(projectId).resumeSession !== false,
+  env: (projectId, nodeId) => {
+    const n = canvas.state(projectId).nodes?.find((x) => x.id === nodeId);
+    return accounts.envFor(n?.data?.baseCmd ?? n?.data?.defaultCmd, n?.data?.account);
+  },
 });
 const presence = new PresenceHub();
 const canvas = new CanvasStore(canvasFileFor, writeJsonAtomic, (projectId, ids) => {
@@ -167,13 +183,15 @@ fastify.addHook("onClose", async () => {
 
 const idPattern = /^[\w-]+$/;
 
-const nodeApi = registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
-registerCommApi({ fastify, sessions, canvas, nodeApi });
+const nodeApi = registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, attachments });
+registerAttachmentsApi({ fastify, nodeApi, attachments, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
+registerCommApi({ fastify, sessions, canvas, nodeApi, attachments });
 registerNotesApi({ fastify, canvas, nodeApi });
 const floors = new FloorStore(dataDir, (id) => projects.find((p) => p.id === id)?.repoPath ?? null, writeJsonAtomic);
 registerFloorsApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, floors, nodeApi });
+registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds: () => projects.map((p) => p.id) });
 registerTeamApi({
-  fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, dataDir, nodeApi, floors,
+  fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, dataDir, nodeApi, floors, accounts,
   settings: {
     readGlobal: () => readGlobalSettings(),
     writeGlobal: (s) => writeJsonAtomic(globalSettingsFile, s),
@@ -224,6 +242,27 @@ function readProjectSettings(id: string) {
   }
   return null;
 }
+
+// Preferências do projeto (POLISH3): arquivo próprio para não criar um "settings do projeto" que esconderia o global
+function readPrefs(id: string): { resumeSession?: boolean } {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dataDir, `prefs_${id}.json`), "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+fastify.get<{ Params: { id: string } }>("/api/projects/:id/prefs", async (req, reply) => {
+  if (!idPattern.test(req.params.id) || !projects.some((p) => p.id === req.params.id)) return reply.status(404).send({ error: "Projeto não encontrado." });
+  return { resumeSession: readPrefs(req.params.id).resumeSession !== false };
+});
+
+fastify.put<{ Params: { id: string }; Body: { resumeSession?: unknown } }>("/api/projects/:id/prefs", async (req, reply) => {
+  if (!idPattern.test(req.params.id) || !projects.some((p) => p.id === req.params.id)) return reply.status(404).send({ error: "Projeto não encontrado." });
+  if (typeof req.body?.resumeSession !== "boolean") return reply.status(400).send({ error: "resumeSession deve ser booleano." });
+  writeJsonAtomic(path.join(dataDir, `prefs_${req.params.id}.json`), { ...readPrefs(req.params.id), resumeSession: req.body.resumeSession });
+  return { ok: true, resumeSession: req.body.resumeSession };
+});
 
 fastify.get("/api/settings/global", async () => {
   return readGlobalSettings();
@@ -304,6 +343,9 @@ fastify.delete<{ Params: { id: string } }>("/api/projects/:id", async (req, repl
   if (canvasFile) fs.rmSync(canvasFile, { force: true });
   routines.removeProject(req.params.id);
   floors.drop(req.params.id);
+  sessionHistory.dropProject(req.params.id);
+  fs.rmSync(path.join(dataDir, `prefs_${req.params.id}.json`), { force: true });
+  attachments.dropProject(req.params.id);
   return { ok: true };
 });
 
