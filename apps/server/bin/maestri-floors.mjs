@@ -89,6 +89,8 @@ export function register({ call, need, CliError }) {
       if (!flags.dir) throw new CliError("Informe --dir PATH (o diretório precisa existir).");
       const r = await call("POST", "/workspaces", { name, dir: flags.dir, from: flags.from, group: flags.group, folder: flags.folder, root: flags.root });
       console.log(`Workspace "${r.name}" criado em ${r.dir}${r.from ? ` (layout clonado de "${r.from}")` : ""}${r.group ? `, grupo "${r.group}"` : ""}${r.folder ? `, pasta "${r.folder}"` : ""}.`);
+      // Andares recriados no destino: git de verdade quando deu; senão o motivo
+      for (const f of r.floors ?? []) console.log(`  andar "${f.name}": ${f.git ? `git${f.branch ? `, branch ${f.branch}` : ""}` : f.note ?? "sem git"}`);
     } else if (sub === "rename") {
       need(pos, 3, 'workspace rename "Antigo" "Novo"');
       const r = await call("POST", "/workspaces/rename", { name, to: extra });

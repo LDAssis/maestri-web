@@ -7,6 +7,7 @@ import { isText, lc } from "./nodeApi.js";
 import { ApiError } from "./agents.js";
 import { findConflict, overlaps } from "./projectDirs.js";
 import { FloorStore, cloneCanvas } from "./floors.js";
+import { git } from "./worktrees.js";
 
 type Obj = Record<string, any>;
 
@@ -37,11 +38,13 @@ interface Deps {
   writeJson: (file: string, data: unknown) => void;
   floors: FloorStore;
   nodeApi: NodeApi;
+  // Cria um andar de verdade (worktree/clone) no projeto indicado; vem de registerFloorsApi
+  createFloor: (projectId: string, o: Record<string, unknown>) => Promise<{ floor: { git: boolean }; note: string }>;
 }
 
 const NAME_MAX = 80;
 
-export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects, dataDir, writeJson, floors, nodeApi }: Deps) {
+export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects, dataDir, writeJson, floors, nodeApi, createFloor }: Deps) {
   const { base, requireMaestro, wrap } = nodeApi;
   const sidebarFile = path.join(dataDir, "sidebar.json");
   let sidebar: Sidebar = { groups: [], folders: [] };
@@ -215,7 +218,7 @@ export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects,
     return tree(c.projectId);
   }));
 
-  fastify.post(`${base}/workspaces`, wrap((c, req) => {
+  fastify.post(`${base}/workspaces`, wrap(async (c, req) => {
     requireMaestro(c, "criar workspaces");
     const b = req.body ?? {};
     const name = cleanName(b.name, "o nome do workspace");
@@ -241,12 +244,14 @@ export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects,
     saveProjects();
     saveSidebar();
 
-    if (source) copyCanvas(source, project);
-    return { ok: true, id, name, dir, group: dest.group, folder: dest.folder, from: source?.name ?? null };
+    const floorsCopied = source ? await copyCanvas(source, project) : [];
+    return { ok: true, id, name, dir, group: dest.group, folder: dest.folder, from: source?.name ?? null, floors: floorsCopied };
   }));
 
-  // Clona o layout do canvas (e os andares, como andares sem git) reescrevendo caminhos sob o diretório de origem
-  function copyCanvas(source: WorkspaceProject, target: WorkspaceProject) {
+  // Clona o layout do canvas reescrevendo caminhos sob o diretório de origem e recria os andares: andares git do origem
+  // viram andares git de verdade no destino (branch de mesmo nome, criada se faltar); só caem para andar sem git
+  // quando não dá (destino fora de git, branch em uso no térreo...) e a resposta diz por quê.
+  async function copyCanvas(source: WorkspaceProject, target: WorkspaceProject) {
     const src = source.repoPath.replace(/\/+$/, "");
     const re = new RegExp(`${src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[/'"\\s]|$)`, "g");
     const rewrite = (v: unknown): unknown =>
@@ -254,9 +259,30 @@ export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects,
     const st = canvas.state(source.id);
     const copy = cloneCanvas(st.nodes ?? [], st.edges ?? [], (d) => rewrite(d) as Obj);
     canvas.applyAndBroadcast(target.id, { kind: "replace", nodes: copy.nodes, edges: copy.edges }, "workspace");
-    const file = floors.read(target.id);
-    file.floors = floors.read(source.id).floors.map((f) => ({ name: f.name, git: false, branch: null, path: null, createdAt: new Date().toISOString() }));
-    floors.save(target.id);
+    const dir = target.repoPath;
+    const isGit = await git(dir, ["rev-parse", "--git-dir"]).then(() => true, () => false);
+    const groundBranch = isGit ? (await git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "")).trim() : "";
+    const report: { name: string; git: boolean; branch?: string; note?: string }[] = [];
+    for (const f of floors.read(source.id).floors) {
+      let why = f.git ? "o destino não é um repositório git" : "";
+      if (f.git && f.branch && isGit) {
+        try {
+          // Clone na mesma branch do térreo não precisa de branch própria
+          const own = !(f.copy && f.branch === groundBranch);
+          const exists = await git(dir, ["rev-parse", "-q", "--verify", `refs/heads/${f.branch}`]).then(() => true, () => false);
+          const r = await createFloor(target.id, { name: f.name, ...(own && { branch: f.branch, existingBranch: exists }), copy: f.copy === true });
+          report.push({ name: f.name, git: r.floor.git, branch: (r.floor as any).branch ?? undefined });
+          continue;
+        } catch (e: any) {
+          why = String(e?.message ?? e).split("\n")[0];
+        }
+      }
+      const file = floors.read(target.id);
+      file.floors.push({ name: f.name, git: false, branch: null, path: null, createdAt: new Date().toISOString() });
+      floors.save(target.id);
+      report.push({ name: f.name, git: false, ...(why && { note: `sem git: ${why}` }) });
+    }
+    return report;
   }
 
   fastify.post(`${base}/workspaces/rename`, wrap((c, req) => {

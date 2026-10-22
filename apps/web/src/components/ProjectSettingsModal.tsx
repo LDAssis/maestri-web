@@ -4,6 +4,9 @@ import React, { useState, useEffect } from "react";
 import { Settings, Globe, FolderGit2, Plus, Trash2, Check, X, ShieldAlert } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { CliPreset, DEFAULT_CLI_PRESETS } from "./CliConfigModal";
+import PresetLookFields from "./PresetLookFields";
+import SystemNotifyToggle from "./SystemNotifyToggle";
+import { randomPresetLook } from "./palette";
 
 interface ProjectSettingsModalProps {
   isOpen: boolean;
@@ -126,7 +129,7 @@ export default function ProjectSettingsModal({
     e.preventDefault();
     if (!newLabel.trim() || !newCmd.trim()) return;
     const newId = `cli-${Date.now().toString().slice(-4)}`;
-    const newPreset: CliPreset = { id: newId, label: newLabel.trim(), cmd: newCmd.trim(), color: "indigo" };
+    const newPreset: CliPreset = { id: newId, label: newLabel.trim(), cmd: newCmd.trim(), ...randomPresetLook(newCmd) };
 
     if (activeTab === "project") {
       setProjectPresets((prev) => [...prev, newPreset]);
@@ -161,6 +164,8 @@ export default function ProjectSettingsModal({
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        <div className="mb-3 shrink-0"><SystemNotifyToggle /></div>
 
         {/* Abas: Projeto vs Global */}
         <div className="flex items-center gap-2 bg-slate-900 p-1 rounded-xl border border-slate-800 mb-4 shrink-0 text-xs">
@@ -253,6 +258,7 @@ export default function ProjectSettingsModal({
                             }
                             className="flex-1 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-300 font-mono"
                           />
+                          <PresetLookFields color={preset.color} icon={preset.icon} onChange={(patch) => setProjectPresets((prev) => prev.map((p) => (p.id === preset.id ? { ...p, ...patch } : p)))} />
                           <button
                             type="button"
                             onClick={() => setProjectPresets((prev) => prev.filter((p) => p.id !== preset.id))}
@@ -315,6 +321,7 @@ export default function ProjectSettingsModal({
                         }
                         className="flex-1 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-300 font-mono"
                       />
+                      <PresetLookFields color={preset.color} icon={preset.icon} onChange={(patch) => setGlobalPresets((prev) => prev.map((p) => (p.id === preset.id ? { ...p, ...patch } : p)))} />
                       <button
                         type="button"
                         onClick={() => setGlobalPresets((prev) => prev.filter((p) => p.id !== preset.id))}

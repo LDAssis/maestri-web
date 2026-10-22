@@ -16,7 +16,7 @@ Notas com "locked: true" no list são somente leitura (write/edit/append/delete 
 emerald, rose, sky, violet, orange, slate.`;
 
 const ARRANGE_HELP = (icons, colors) => `maestri arrange                              Mostra nome, ícone e cor atuais
-maestri arrange "Nome" [--name N] [--icon I] [--color C]   Renomeia/estiliza você, uma nota conectada ou (Maestro) um agente conectado
+maestri arrange "Nome" [--name N] [--icon I] [--color C]   Renomeia/estiliza você, uma nota conectada ou (Maestro) um agente ou banda conectado
 Ícones: ${icons.join(", ")}
 Cores: ${colors.join(", ")}`;
 

@@ -20,6 +20,33 @@ function PrInfo({ projectId, floor }: { projectId: string; floor: FloorInfo }) {
   const pr = floor.pullRequest!;
   const [info, setInfo] = useState<PrState | null>(null);
   const [err, setErr] = useState("");
+  const [version, setVersion] = useState(0);
+  const [method, setMethod] = useState<"merge" | "squash" | "rebase">("merge");
+  const [busy, setBusy] = useState(false);
+  const [mergeMsg, setMergeMsg] = useState("");
+  const [confirmForce, setConfirmForce] = useState("");
+  // Mescla com `gh pr merge`; com checks falhando/pendentes o servidor pede confirmação (409 needsConfirm)
+  const merge = async (force = false) => {
+    setBusy(true);
+    setMergeMsg("");
+    try {
+      const res = await apiFetch(`/api/projects/${projectId}/floors/${encodeURIComponent(floor.name)}/pr/merge`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ method, force }) });
+      const b = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setConfirmForce("");
+        setMergeMsg(`PR #${pr.number} mesclado (${method}).`);
+        setVersion((v) => v + 1);
+      } else if (b?.needsConfirm) setConfirmForce(b.error);
+      else {
+        setConfirmForce("");
+        setMergeMsg(b?.error || `Servidor respondeu ${res.status}`);
+      }
+    } catch {
+      setMergeMsg("Servidor indisponível");
+    } finally {
+      setBusy(false);
+    }
+  };
   useEffect(() => {
     let live = true;
     apiFetch(`/api/projects/${projectId}/floors/${encodeURIComponent(floor.name)}/pr`)
@@ -33,7 +60,9 @@ function PrInfo({ projectId, floor }: { projectId: string; floor: FloorInfo }) {
     return () => {
       live = false;
     };
-  }, [projectId, floor.name]);
+  }, [projectId, floor.name, version]);
+  const open = info ? info.state.toUpperCase() === "OPEN" : false;
+  const okChecks = !!info && info.checks.failing === 0 && info.checks.pending === 0;
   return (
     <div className="mt-0.5 text-[10px] flex flex-wrap items-center gap-x-2 gap-y-0.5">
       <a href={pr.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-sky-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 rounded">
@@ -49,6 +78,32 @@ function PrInfo({ projectId, floor }: { projectId: string; floor: FloorInfo }) {
         </>
       )}
       {err && <span className="text-slate-500" title={err}>estado indisponível</span>}
+      {open && (
+        <span className="flex items-center gap-1">
+          <select aria-label={`Método de merge do PR #${pr.number}`} value={method} onChange={(e) => setMethod(e.target.value as any)} className="bg-slate-950 border border-slate-800 rounded px-1 py-0.5 text-[10px] text-slate-300">
+            <option value="merge">merge</option>
+            <option value="squash">squash</option>
+            <option value="rebase">rebase</option>
+          </select>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => merge(false)}
+            title={okChecks ? "Mesclar o PR (gh pr merge)" : "Há checks falhando ou pendentes: pedirá confirmação"}
+            className="px-1.5 py-0.5 rounded border border-emerald-800 text-emerald-300 hover:bg-emerald-950 disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400"
+          >
+            Mesclar PR
+          </button>
+        </span>
+      )}
+      {confirmForce && (
+        <span role="alertdialog" aria-label="Confirmar merge com checks pendentes" className="basis-full rounded border border-amber-800 bg-slate-950 p-1.5 text-amber-300">
+          {confirmForce}{" "}
+          <button type="button" disabled={busy} onClick={() => merge(true)} className="ml-1 px-1.5 py-0.5 rounded border border-amber-700 hover:bg-amber-950">Mesclar mesmo assim</button>
+          <button type="button" onClick={() => setConfirmForce("")} className="ml-1 px-1.5 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800">Cancelar</button>
+        </span>
+      )}
+      {mergeMsg && <span role="status" className="basis-full text-slate-300">{mergeMsg}</span>}
     </div>
   );
 }
@@ -88,6 +143,25 @@ export default function FloorSwitcher({
   const createdNote = useRef("");
   const [notice, setNotice] = useState("");
   const base = `/api/projects/${projectId}/floors`;
+  // Andar cuja branch ganhou um PR (criado por um agente): consulta ao abrir o seletor e a cada 60s enquanto aberto
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    const detect = async () => {
+      try {
+        const res = await apiFetch(`${base}/detect-prs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        const b = await res.json().catch(() => ({}));
+        if (live && res.ok && b?.found > 0) onChanged();
+      } catch {}
+    };
+    detect();
+    const t = setInterval(detect, 60_000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, base]);
   const cur = floors.find((f) => f.name === current) ?? floors[0];
 
   async function run(req: () => Promise<Response>, after?: () => void) {

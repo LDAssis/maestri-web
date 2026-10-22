@@ -38,6 +38,18 @@ function gh(cwd: string, args: string[]): Promise<string> {
   });
 }
 
+// Conta os checks de um PR (statusCheckRollup do gh)
+export function tallyChecks(rollup: unknown) {
+  const checks = { passing: 0, failing: 0, pending: 0 };
+  for (const c of (Array.isArray(rollup) ? rollup : []) as Record<string, any>[]) {
+    const v = String(c.conclusion || c.state || c.status || "").toUpperCase();
+    if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(v)) checks.passing++;
+    else if (["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"].includes(v)) checks.failing++;
+    else checks.pending++;
+  }
+  return checks;
+}
+
 // "42", "#42" ou link do PR → número
 export function parsePrRef(v: unknown): number {
   const s = String(v ?? "").trim();
@@ -485,15 +497,68 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
     const f = getFloor(p, req.params.name);
     if (!f.pullRequest) throw new ApiError(404, `O andar "${f.name}" não é de um pull request.`);
     const raw = JSON.parse(await gh(repoOf(p), ["pr", "view", String(f.pullRequest.number), "--json", "number,title,state,url,reviewDecision,statusCheckRollup"]));
-    const checks = { passing: 0, failing: 0, pending: 0 };
-    for (const c of (raw.statusCheckRollup ?? []) as Obj[]) {
-      const v = String(c.conclusion || c.state || c.status || "").toUpperCase();
-      if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(v)) checks.passing++;
-      else if (["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"].includes(v)) checks.failing++;
-      else checks.pending++;
-    }
+    const checks = tallyChecks(raw.statusCheckRollup);
     return { number: raw.number, title: raw.title, state: raw.state, url: raw.url, review: raw.reviewDecision || null, checks };
   }));
+  // Mescla o PR do andar com `gh pr merge` (merge|squash|rebase); com checks falhando/pendentes só após confirmar (force)
+  fastify.post(`${uiBase}/:name/pr/merge`, async (req: any, reply: any) => {
+    try {
+      const p = req.params.p;
+      const f = getFloor(p, req.params.name);
+      if (!f.pullRequest) throw new ApiError(404, `O andar "${f.name}" não é de um pull request.`);
+      const method = req.body?.method ?? "merge";
+      if (!["merge", "squash", "rebase"].includes(method)) throw new ApiError(400, "Método inválido (merge, squash ou rebase).");
+      const repo = repoOf(p);
+      const n = String(f.pullRequest.number);
+      const raw = JSON.parse(await gh(repo, ["pr", "view", n, "--json", "state,statusCheckRollup"]));
+      if (String(raw.state).toUpperCase() !== "OPEN") throw new ApiError(409, `O pull request #${n} não está aberto (${String(raw.state).toLowerCase()}).`);
+      const checks = tallyChecks(raw.statusCheckRollup);
+      if ((checks.failing || checks.pending) && !flag(req.body?.force)) {
+        return reply.status(409).send({ error: `Checks não estão todos ok (${checks.failing} falhando, ${checks.pending} pendentes); confirme para mesclar mesmo assim.`, needsConfirm: true, checks });
+      }
+      await gh(repo, ["pr", "merge", n, `--${method}`]);
+      changed(p);
+      return { ok: true, method, number: f.pullRequest.number };
+    } catch (e: any) {
+      if (e instanceof ApiError) return reply.status(e.status).send({ error: e.message });
+      req.log.error(e);
+      return reply.status(500).send({ error: e?.message || "Erro interno." });
+    }
+  });
+
+  // Andar cuja branch ganhou um PR aberto (feito por um agente, p.ex.) passa a segui-lo como no --pull-request
+  const lastDetect = new Map<string, number>();
+  async function detectPullRequests(projectId: string, minIntervalMs = 30_000) {
+    const repo = repoOf(projectId);
+    const ground = await currentBranch(repo);
+    let found = 0;
+    let unavailable = "";
+    for (const f of floors.read(projectId).floors) {
+      if (!f.git || !f.branch || f.pullRequest || f.branch === ground) continue;
+      const key = `${projectId}:${f.name}`;
+      if (Date.now() - (lastDetect.get(key) ?? 0) < minIntervalMs) continue;
+      lastDetect.set(key, Date.now());
+      try {
+        const out = JSON.parse(await gh(repo, ["pr", "list", "--head", f.branch, "--state", "open", "--json", "number,url,title", "--limit", "1"]));
+        if (out[0]?.number) {
+          f.pullRequest = { number: Number(out[0].number), url: String(out[0].url ?? ""), title: String(out[0].title ?? "") };
+          found++;
+        }
+      } catch (e: any) {
+        if (e instanceof ApiError) {
+          unavailable = e.message; // gh ausente/sem login: não adianta insistir nos outros andares
+          break;
+        }
+      }
+    }
+    if (found) {
+      floors.save(projectId);
+      changed(projectId);
+    }
+    return { found, unavailable };
+  }
+  fastify.post(`${uiBase}/detect-prs`, guard((p, req) => detectPullRequests(p, flag(req.body?.now) ? 0 : 30_000)));
+
   fastify.post(`${uiBase}/:name/unload`, guard((p, req) => unloadFloor(p, req.params.name)));
 
   // --- rotas do CLI (por nó): tudo exige Maestro, exceto status do próprio andar ---
@@ -543,5 +608,5 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
     return { floor: name, ...r };
   }));
 
-  return { createFloor, listFloors: list, unloadFloor, setStatus };
+  return { createFloor, listFloors: list, unloadFloor, setStatus, detectPullRequests };
 }
