@@ -192,3 +192,6 @@ Com role, o recruta começa em `.maestri/roles/<id>/`, que traz o prompt em `CLA
 
 ## Limites de segurança dos portais
 Por padrão um portal não abre (nem alcança por redirecionamento ou sub-requisição) endereços link-local/metadata de nuvem (169.254.0.0/16, `fd00:ec2::254`, `metadata.google.internal`) nem a API do próprio servidor do Maestri; localhost em outras portas continua livre. `MAESTRI_PORTAL_ALLOW_PRIVATE=1` no servidor libera tudo. `portal upload` só lê arquivos do projeto, dos anexos do chat ou do diretório temporário. Cada portal raiz aceita no máximo 8 popups abertos. Contas: apagar uma conta desafixa (e lista) os presets que a fixavam.
+
+## Avisos e fim do turno
+`maestri notify`, lembretes de rotina e andares que mudam para blocked/review/done também viram notificação do sistema na máquina do servidor (se ligado nas Configurações). `maestri ask` só considera o agente "pronto" quando o terminal fica quieto E a tela dele não mostra um indicador de ocupado (`esc to interrupt`, `Working…`/`Thinking…`); `--timeout` continua valendo. Quando um agente de um andar git termina um turno, o servidor procura o PR da branch (`gh`) e avisa se o andar passou a segui-lo. `routine create --terminal "Nome" --floor "Andar"` desambigua terminais de mesmo nome.

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { directProgramOf } from "./resume.js";
 
 type Obj = Record<string, any>;
 
@@ -55,5 +56,6 @@ export function withRolePrompt(repo: string, nodeId: string, cmd: string, prompt
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${nodeId}.md`);
   fs.writeFileSync(file, prompt);
-  return /^(claude|codex)(\s+[\w.=\/:-]+)*$/.test(cmd) ? `${cmd} "$(cat ${shQuote(file)})"` : cmd;
+  // claude/codex pelo nome do executável (caminho absoluto, variáveis na frente), como a retomada de sessão detecta
+  return directProgramOf(cmd) ? `${cmd} "$(cat ${shQuote(file)})"` : cmd;
 }

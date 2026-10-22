@@ -1,3 +1,4 @@
+import { desktopNotify } from "./desktopNotify.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,6 +7,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import type { Session, SessionManager } from "./sessions.js";
 import { resolveInside } from "./projectDirs.js";
+import { floorOf } from "./floors.js";
 
 type Obj = Record<string, any>;
 
@@ -430,6 +432,7 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, pr
       }
       if (r.reminder) {
         canvas.notify(projectId, { type: "notify", from: { nodeId: "", title: r.name }, text });
+        desktopNotify(projectId, r.name, text); // lembrete: também pelo SO, se ligado
         entry.output = text.slice(-OUTPUT_MAX);
         return;
       }
@@ -496,9 +499,20 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, pr
   // Alvo por título (terminal) ou id (nodeId); qualquer agentTerminal do projeto
   const targetId = (projectId: string, body: Obj): string | undefined => {
     if (body.terminal !== undefined) {
-      const hits = (canvas.state(projectId).nodes ?? []).filter((n) => n.type === "agentTerminal" && lc(n.data?.title) === lc(body.terminal));
+      let hits = (canvas.state(projectId).nodes ?? []).filter((n) => n.type === "agentTerminal" && lc(n.data?.title) === lc(body.terminal));
       if (!hits.length) throw new ApiError(404, `Terminal "${body.terminal}" não encontrado no projeto.`);
-      if (hits.length > 1) throw new ApiError(400, `Nome ambíguo: ${hits.length} terminais chamados "${body.terminal}".`);
+      // --floor "Andar" desambigua terminais de mesmo nome em andares diferentes
+      if (body.floor !== undefined) {
+        const wanted = lc(body.floor);
+        const here = hits.filter((n) => lc(floorOf(n)) === wanted);
+        if (!here.length) throw new ApiError(404, `Nenhum terminal "${body.terminal}" no andar "${body.floor}" (andares: ${[...new Set(hits.map(floorOf))].join(", ")}).`);
+        hits = here;
+      }
+      if (hits.length > 1) {
+        const floorsOf = [...new Set(hits.map(floorOf))];
+        const hint = floorsOf.length > 1 ? `use --floor "Andar" para escolher (andares: ${floorsOf.join(", ")})` : "dê um nome único ao terminal";
+        throw new ApiError(400, `Nome ambíguo: ${hits.length} terminais chamados "${body.terminal}"; ${hint}.`);
+      }
       return hits[0].id;
     }
     if (body.nodeId !== undefined && body.nodeId !== null) return agentNode(projectId, body.nodeId).id;

@@ -24,12 +24,13 @@ import { AttachmentStore } from "./attachments.js";
 import { registerAttachmentsApi } from "./attachmentsApi.js";
 import { registerGlobalRolesApi } from "./globalRolesApi.js";
 import { registerFloorsApi } from "./floorsApi.js";
-import { FloorStore } from "./floors.js";
+import { FloorStore, floorOf } from "./floors.js";
 import { registerRoutinesApi } from "./routines.js";
 import { registerFilesApi } from "./files.js";
 import { sweepBands } from "./team.js";
 import { registerPortalApi } from "./portalApi.js";
 import { setPortalSelfPorts } from "./portals.js";
+import { configureDesktopNotify, desktopNotifyEnabled } from "./desktopNotify.js";
 import { createProjectDir, findConflict, isInside, migrateProjects, overlaps, resolveInside } from "./projectDirs.js";
 
 // Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
@@ -169,6 +170,12 @@ const sessions = new SessionManager({
   history: sessionHistory,
   // Toggle "retomar sessão" do projeto (prefs_<id>.json, separado das configurações de CLI); ligado por padrão
   resume: (projectId) => readPrefs(projectId).resumeSession !== false,
+  // Fim de turno de um agente num andar git: tenta achar o PR dessa branch (a detecção tem o próprio throttle)
+  onIdle: (projectId, nodeId) => {
+    const node = canvas.state(projectId).nodes?.find((n) => n.id === nodeId);
+    const fl = node ? floors.find(projectId, floorOf(node)) : undefined;
+    if (fl?.git && !fl.pullRequest) void floorsApi.detectPullRequests(projectId).catch(() => {});
+  },
   env: (projectId, nodeId) => {
     const n = canvas.state(projectId).nodes?.find((x) => x.id === nodeId);
     return accounts.envFor(n?.data?.baseCmd ?? n?.data?.defaultCmd, n?.data?.account);
@@ -222,6 +229,15 @@ const settingsAccess = {
   readProject: (id: string) => readProjectSettings(id),
   writeProject: (id: string, s: any) => writeJsonAtomic(projectSettingsFile(id), s),
 };
+// Detecção de PRs em segundo plano: a cada 2 min (MAESTRI_PR_POLL_MS) nos projetos com andares git que ainda não seguem um PR.
+// `gh` ausente/sem login só devolve `unavailable` (sem ruído); o throttle por andar fica em detectPullRequests.
+const prPoll = setInterval(() => {
+  for (const p of projects) {
+    if (floors.read(p.id).floors.some((f) => f.git && f.branch && !f.pullRequest)) void floorsApi.detectPullRequests(p.id).catch(() => {});
+  }
+}, Number(process.env.MAESTRI_PR_POLL_MS) || 120_000);
+prPoll.unref();
+fastify.addHook("onClose", async () => clearInterval(prPoll));
 registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds: () => projects.map((p) => p.id), settings: settingsAccess });
 registerTeamApi({
   fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, dataDir, nodeApi, floors, accounts, links: crossLinks, workspaces: { nameOf: (id) => projects.find((p) => p.id === id)?.name, idOf: (name) => projects.find((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase())?.id },
@@ -275,7 +291,7 @@ function readProjectSettings(id: string) {
 }
 
 // Preferências do projeto (POLISH3): arquivo próprio para não criar um "settings do projeto" que esconderia o global
-function readPrefs(id: string): { resumeSession?: boolean } {
+function readPrefs(id: string): { resumeSession?: boolean; desktopNotify?: boolean } {
   try {
     return JSON.parse(fs.readFileSync(path.join(dataDir, `prefs_${id}.json`), "utf-8"));
   } catch {
@@ -283,16 +299,26 @@ function readPrefs(id: string): { resumeSession?: boolean } {
   }
 }
 
+// Notificação do SO: preferência do projeto; sem ela, ligada só quando o servidor escuta em loopback
+const isLoopbackHost = () => ["127.0.0.1", "localhost", "::1"].includes(host);
+configureDesktopNotify({ pref: (id) => readPrefs(id).desktopNotify, defaultOn: isLoopbackHost });
+const desktopNotifyEnabledFor = (id: string) => desktopNotifyEnabled(id);
+
 fastify.get<{ Params: { id: string } }>("/api/projects/:id/prefs", async (req, reply) => {
   if (!idPattern.test(req.params.id) || !projects.some((p) => p.id === req.params.id)) return reply.status(404).send({ error: "Projeto não encontrado." });
-  return { resumeSession: readPrefs(req.params.id).resumeSession !== false };
+  const prefs = readPrefs(req.params.id);
+  return { resumeSession: prefs.resumeSession !== false, desktopNotify: desktopNotifyEnabledFor(req.params.id), desktopNotifyForced: process.env.MAESTRI_DESKTOP_NOTIFY === "0" || process.env.MAESTRI_DESKTOP_NOTIFY === "1" };
 });
 
-fastify.put<{ Params: { id: string }; Body: { resumeSession?: unknown } }>("/api/projects/:id/prefs", async (req, reply) => {
+fastify.put<{ Params: { id: string }; Body: { resumeSession?: unknown; desktopNotify?: unknown } }>("/api/projects/:id/prefs", async (req, reply) => {
   if (!idPattern.test(req.params.id) || !projects.some((p) => p.id === req.params.id)) return reply.status(404).send({ error: "Projeto não encontrado." });
-  if (typeof req.body?.resumeSession !== "boolean") return reply.status(400).send({ error: "resumeSession deve ser booleano." });
-  writeJsonAtomic(path.join(dataDir, `prefs_${req.params.id}.json`), { ...readPrefs(req.params.id), resumeSession: req.body.resumeSession });
-  return { ok: true, resumeSession: req.body.resumeSession };
+  const { resumeSession, desktopNotify } = req.body ?? {};
+  if (resumeSession === undefined && desktopNotify === undefined) return reply.status(400).send({ error: "Informe resumeSession e/ou desktopNotify." });
+  if (resumeSession !== undefined && typeof resumeSession !== "boolean") return reply.status(400).send({ error: "resumeSession deve ser booleano." });
+  if (desktopNotify !== undefined && typeof desktopNotify !== "boolean") return reply.status(400).send({ error: "desktopNotify deve ser booleano." });
+  const next = { ...readPrefs(req.params.id), ...(resumeSession !== undefined && { resumeSession }), ...(desktopNotify !== undefined && { desktopNotify }) };
+  writeJsonAtomic(path.join(dataDir, `prefs_${req.params.id}.json`), next);
+  return { ok: true, resumeSession: next.resumeSession !== false, desktopNotify: desktopNotifyEnabledFor(req.params.id) };
 });
 
 fastify.get("/api/settings/global", async () => {

@@ -14,8 +14,7 @@ Comandos:
   send "Nome" "texto"                Escreve texto + Enter no terminal do agente
   check "Nome" [--lines N]           Últimas N linhas (60) do terminal do agente
   ask "Nome" "texto" [--timeout S]   send + espera o agente ficar quieto e imprime a resposta
-  recruit "Nome" [--preset P] [--role R] [--floor F] [--workspace W] [--band B] [--dir D] [--command C]   (Maestro) cria e inicia um agente
-  recruit ["Novo"] --replace "Antigo" (--preset P | --command C)   (Maestro) troca o agente no mesmo nó (veja "maestri recruit --help")
+  recruit "Nome" [--preset P] [--role R] [--floor F] [--workspace W] [--account A] [--band B] [--dir D] [--command C]   (Maestro) cria e inicia um agente; com --replace "Antigo" troca o agente no mesmo nó ("maestri recruit --help")
   dismiss "Nome"                     (Maestro) remove um agente conectado
   notify "texto"                     Avisa todos os navegadores do projeto
   chat reply "texto markdown"        Responde na face de chat do SEU nó
@@ -23,8 +22,26 @@ Comandos:
 
 Use "maestri <comando> --help" para detalhes. Nomes são os títulos dos nós (sem diferenciar maiúsculas)
 e o alvo precisa estar conectado a você por uma aresta.`,
-  list: `maestri list | context\nMostra "Você: <título> (Maestro)" e os nós conectados: Agentes, Notas (em cadeia, com locked), Fichários e Portais (com URL).`,
-  context: `maestri list | context\nMostra "Você: <título> (Maestro)" e os nós conectados: Agentes, Notas (em cadeia, com locked), Fichários e Portais (com URL).`,
+  list: `maestri list | context
+Mostra quem é você e o que alcança. Formato:
+  Você: <título> (Maestro) — <título> @ <Workspace>     seu nome, "(Maestro)" se for o Maestro e o seu endereço
+  Agentes:   "- Nome", "(Maestro)" nos Maestros, "[conta: X]" no agente que roda numa conta de CLI e "Nome @ Workspace"
+             nos agentes de OUTROS workspaces; o Maestro vê, sob cada colega, as conexões dele ("      ↳ Nome (nota|portal|agente|banda)")
+  Bandas:    "- Banda" (com "(você está nela)" quando for a sua) e os membros ("      · Nome"); "Banda @ Workspace" para as de outros workspaces
+  Notas:     em árvore pelas notas-mãe, com "(locked: true)" nas travadas (somente leitura)
+  Fichários: "- Nome (N páginas)" e as páginas ("      · Nome")
+  Portais:   "- Nome — URL"
+Nomes são os títulos dos nós (sem diferenciar maiúsculas) e os que aparecem aqui são os que ask/send/check/note/portal aceitam.`,
+  context: `maestri list | context
+Mostra quem é você e o que alcança. Formato:
+  Você: <título> (Maestro) — <título> @ <Workspace>     seu nome, "(Maestro)" se for o Maestro e o seu endereço
+  Agentes:   "- Nome", "(Maestro)" nos Maestros, "[conta: X]" no agente que roda numa conta de CLI e "Nome @ Workspace"
+             nos agentes de OUTROS workspaces; o Maestro vê, sob cada colega, as conexões dele ("      ↳ Nome (nota|portal|agente|banda)")
+  Bandas:    "- Banda" (com "(você está nela)" quando for a sua) e os membros ("      · Nome"); "Banda @ Workspace" para as de outros workspaces
+  Notas:     em árvore pelas notas-mãe, com "(locked: true)" nas travadas (somente leitura)
+  Fichários: "- Nome (N páginas)" e as páginas ("      · Nome")
+  Portais:   "- Nome — URL"
+Nomes são os títulos dos nós (sem diferenciar maiúsculas) e os que aparecem aqui são os que ask/send/check/note/portal aceitam.`,
   send: `maestri send "Nome" "texto"\nEscreve o texto e Enter no terminal do agente conectado, sem esperar resposta.`,
   check: `maestri check "Nome" [--lines N]\nImprime as últimas N linhas (padrão 60) do terminal do agente, sem sequências ANSI.`,
   ask: `maestri ask "Nome" "texto" [--timeout S]\nEnvia o texto e espera o terminal do alvo ficar 5s quieto; imprime só a saída nova.\nTimeout (padrão 600s): imprime o que houver e sai com código 2.`,

@@ -1,3 +1,4 @@
+import { desktopNotify } from "./desktopNotify.js";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -477,7 +478,9 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
     put(status);
     floors.save(projectId);
     if (BLOCKING.has(state) && state !== old?.state && from) {
-      canvas.notify(projectId, { type: "notify", from, text: `${floorName}: ${state}${status.text ? ` — ${status.text}` : ""}` });
+      const msg = `${floorName}: ${state}${status.text ? ` — ${status.text}` : ""}`;
+      canvas.notify(projectId, { type: "notify", from, text: msg });
+      desktopNotify(projectId, `Maestri — ${from.title}`, msg);
     }
     changed(projectId);
     return { status };
@@ -543,6 +546,7 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
     const ground = await currentBranch(repo);
     let found = 0;
     let unavailable = "";
+    const followed: { name: string; number: number }[] = [];
     for (const f of floors.read(projectId).floors) {
       if (!f.git || !f.branch || f.pullRequest || f.branch === ground) continue;
       const key = `${projectId}:${f.name}`;
@@ -553,6 +557,7 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
         if (out[0]?.number) {
           f.pullRequest = { number: Number(out[0].number), url: safeHttpUrl(out[0].url), title: String(out[0].title ?? "") };
           found++;
+          followed.push({ name: f.name, number: f.pullRequest.number });
         }
       } catch (e: any) {
         if (e instanceof ApiError) {
@@ -564,6 +569,12 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
     if (found) {
       floors.save(projectId);
       changed(projectId);
+      // Avisa: toast no canvas e notificação do sistema (se ligada)
+      for (const { name, number } of followed) {
+        const text = `Andar ${name} agora segue o PR #${number}`;
+        canvas.notify(projectId, { type: "notify", from: { nodeId: "", title: name }, text });
+        desktopNotify(projectId, "Maestri — pull request", text);
+      }
     }
     return { found, unavailable };
   }

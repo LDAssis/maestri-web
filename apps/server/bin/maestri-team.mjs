@@ -2,8 +2,8 @@
 // Carregado por bin/maestri; sobrescreve `recruit` e `list`/`context`.
 
 const HELP = {
-  recruit: `maestri recruit "Nome" [--preset "Nome do preset"] [--role "Nome do role"] [--floor "Andar"] [--band "Banda"]
-                      [--command "claude --resume"] [--dir "/caminho/no/projeto"] [--icon I] [--color C]
+  recruit: `maestri recruit "Nome" [--preset "Nome do preset"] [--role "Nome do role"] [--floor "Andar"] [--workspace "W"] [--band "Banda"]
+                      [--account "Conta"] [--command "claude --resume"] [--dir "/caminho/no/projeto"] [--icon I] [--color C]
 maestri recruit ["Novo nome"] --replace "Antigo" (--preset P | --command C) [--role R] [--dir D] [--icon I] [--color C]
 Apenas o Maestro. Cria um agente conectado a você e inicia o terminal dele.
 --preset: veja "maestri preset list"; sem --preset (nem --command) o recruta é uma cópia sua (mesmo comando).
@@ -58,7 +58,6 @@ em uma banda por vez. Uma banda com 1 membro se dissolve sozinha. --without-me d
 
 const SUMMARY = [
   "Equipe:",
-  '  recruit "Nome" [--preset P] [--role R] [--band B] [--dir D] | recruit --replace "Antigo" ...   (Maestro)',
   '  connect "De" "Para"                Liga dois nós da sua equipe (Maestro)',
   "  preset list|show|create|set|delete Presets de agente",
   "  role list|show|create|edit|write|assign   Roles do projeto e globais",

@@ -844,13 +844,26 @@ const COMMANDS: Record<string, Handler> = {
       await e.page.waitForTimeout(Math.min(600_000, Math.max(0, Number(value) || 0)));
       return "ok";
     }
+    // Estourar o tempo vira uma mensagem específica do que se esperava (e não o "Timeout 2000ms exceeded" do Playwright)
+    const timedOut = (err: any, what: string) => {
+      if (/Timeout/i.test(String(err?.message))) throw new ApiError(408, `tempo esgotado esperando ${what} (${timeout / 1000}s)`);
+      throw err;
+    };
     if (kind === "text") {
-      await e.page.waitForFunction((x: string) => (document.body?.innerText ?? "").includes(x), value, { timeout });
+      try {
+        await e.page.waitForFunction((x: string) => (document.body?.innerText ?? "").includes(x), value, { timeout });
+      } catch (err) {
+        timedOut(err, `o texto "${value}"`);
+      }
       return "ok";
     }
     if (kind === "url") {
       const re = value.includes("*") ? new RegExp(`^${value.split("*").map((p) => p.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`) : null;
-      await e.page.waitForURL((u: URL) => (re ? re.test(u.href) : u.href.includes(value)), { timeout });
+      try {
+        await e.page.waitForURL((u: URL) => (re ? re.test(u.href) : u.href.includes(value)), { timeout });
+      } catch (err) {
+        timedOut(err, `a URL "${value}"`);
+      }
       return "ok";
     }
     if (kind === "selector") {

@@ -1,3 +1,4 @@
+import { desktopNotify } from "./desktopNotify.js";
 import crypto from "node:crypto";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { CanvasStore } from "./canvas.js";
@@ -35,14 +36,29 @@ export const isText = (v: unknown, max = 100_000): v is string => typeof v === "
 // Chat ocupado (captura em andamento), chave `${projectId}:${nodeId}`; lido pelas rotinas
 export const chatBusy = new Set<string>();
 
-// Escreve no PTY e espera ele ficar quieto (depois de produzir saída); devolve só a saída nova
+// A TUI do agente ainda está trabalhando? Indicadores conhecidos nas últimas linhas da tela (sem ANSI): "esc to interrupt"
+// (Claude Code) / "Esc to interrupt" (Codex) e os spinners "Working…"/"Thinking…" (com "(12s" ou reticências).
+// Recebe o ÚLTIMO TRECHO de saída contínua do terminal (o quadro mais recente): num scrollback bruto os quadros antigos
+// continuam lá, já sem os códigos que os apagavam, e um indicador velho pareceria "ainda ocupado" para sempre.
+const BUSY_RE = /esc to interrupt|\b(?:Working|Thinking)(?:…|\.{3}|\s*\(\d)/i;
+export function busyIndicator(latest: string): boolean {
+  const lines = stripAnsi(latest.slice(-4000)).split("\n").map((l) => l.trim()).filter(Boolean).slice(-6);
+  return lines.some((l) => BUSY_RE.test(l));
+}
+
+// Escreve no PTY e espera ele ficar quieto (depois de produzir saída); devolve só a saída nova.
+// O silêncio só encerra se a tela do alvo NÃO mostrar um indicador de ocupado (o --timeout continua valendo).
 export async function typeAndWait(sessions: SessionManager, session: Session, input: string, timeoutS: number, aborted = () => false) {
   const quietMs = Number(process.env.MAESTRI_ASK_QUIET_MS) || 5000;
   let out = "";
   let last = 0;
+  let burst = ""; // saída contínua mais recente (chunks separados por < 300ms): o "quadro" atual da tela
   const listener = (d: string) => {
+    const now = Date.now();
+    if (now - last > 300) burst = "";
+    burst = (burst + d).slice(-8000);
     out += d;
-    last = Date.now();
+    last = now;
   };
   session.listeners.add(listener);
   const started = Date.now();
@@ -52,7 +68,7 @@ export async function typeAndWait(sessions: SessionManager, session: Session, in
     while (!aborted()) {
       await new Promise((r) => setTimeout(r, 100));
       const now = Date.now();
-      if (last && now - last >= quietMs) break;
+      if (last && now - last >= quietMs && !busyIndicator(burst)) break;
       if (session.dead) break;
       if (now - started >= timeoutS * 1000) {
         timedOut = true;
@@ -339,6 +355,7 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     const { text } = req.body ?? {};
     if (!isText(text, 500) || !text.trim()) throw new ApiError(400, "Informe o texto (até 500 caracteres).");
     canvas.notify(c.projectId, { type: "notify", from: { nodeId: c.me.id, title: c.title(c.me) }, text });
+    desktopNotify(c.projectId, c.title(c.me), text); // também pelo SO, se ligado
     return { ok: true };
   }));
 
