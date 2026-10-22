@@ -24,10 +24,16 @@ maestri ask --batch '{"Backend":"status?","Frontend":"status?"}'   # asks em par
 maestri ask "Backend" --raw "2\n"                          # entrada crua (\n Enter, \t Tab, \e ESC, \xNN) para responder prompts interativos
 maestri debug                                              # diagnostica env, API, nó, sessão e papel de Maestro (sai 0/1)
 
-maestri note read "Notas"                                # lê uma nota conectada
+maestri note read "Notas" [início] [quantidade]          # lê com números de linha (intervalo opcional)
 maestri note write "Notas" "texto"                       # substitui o conteúdo
 maestri note append "Notas" "mais uma linha"             # acrescenta
-maestri note create "Decisões" "texto"                   # cria uma nota perto de você, já conectada a você
+maestri note edit "Notas" "antigo" "novo"                # troca um trecho (precisa aparecer exatamente uma vez)
+maestri note delete "Notas"                              # remove a nota (destrutivo: só se o usuário pedir)
+maestri note create ["conteúdo"] [--name "Nome"] [--stack ["Fichário"]] [--color C]   # nome = 1ª linha, a menos que --name fixe; imprime o nome exato
+maestri note stack "Notas" ["Fichário"]                  # guarda a nota num fichário (cria se preciso)
+maestri note unstack "Notas"                             # tira do fichário
+maestri arrange ["Nome"] [--name N] [--icon I] [--color C]   # renomeia/estiliza você, uma nota ou (Maestro) um agente; sem args mostra; --help lista ícones/cores
+maestri note create "Decisões" "texto"                   # forma antiga: título fixo + texto
 
 maestri portal navigate "Preview" "http://localhost:3000"   # só http/https
 
@@ -59,3 +65,10 @@ maestri recall purple                                          # outra thread: b
 maestri recall list                                            # threads com contagem de mensagens
 maestri chat history --last 10                                 # histórico bruto do chat (todas as threads)
 ```
+
+## Notas avançadas
+- `maestri list` mostra `(locked: true)` em notas travadas (somente leitura: write/edit/append/delete falham), notas encadeadas
+  indentadas sob a nota-mãe e os fichários com suas páginas. Notas ligadas a uma nota conectada a você, e as páginas de
+  fichários conectados a você, também podem ser lidas e escritas.
+- O nome de uma nota sem `--name` acompanha a primeira linha; `write`/`edit` informam o novo nome quando muda. Prefira `--name`
+  se for endereçar a nota de novo.

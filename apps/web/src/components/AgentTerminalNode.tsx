@@ -25,6 +25,7 @@ import { useRoles } from "@/lib/useRoles";
 import { useActiveRoutineCount } from "@/lib/useRoutines";
 import { usePresenceValue } from "@/lib/presence";
 import type { TerminalStatus } from "./TerminalView";
+import { COLOR_HEX, ICON_MAP } from "./palette";
 
 const TerminalView = dynamic(() => import("./TerminalView"), {
   ssr: false,
@@ -50,6 +51,9 @@ export interface AgentNodeData extends Record<string, unknown> {
   preset?: string;
   chat?: ChatMessage[];
   chatBusy?: boolean;
+  // Estilo escolhido por `maestri arrange`
+  icon?: string;
+  color?: string;
 }
 
 export default function AgentTerminalNode({
@@ -94,7 +98,8 @@ export default function AgentTerminalNode({
   const isMaestro = Boolean(nodeData.isMaestro);
   const { roles } = useRoles(projectId);
   const routineCount = useActiveRoutineCount(projectId, id);
-  const roleColor = nodeData.roleId ? roles.find((r) => r.id === nodeData.roleId)?.color : undefined;
+  const arrangeColor = nodeData.color ? COLOR_HEX[nodeData.color] : undefined;
+  const roleColor = arrangeColor ?? (nodeData.roleId ? roles.find((r) => r.id === nodeData.roleId)?.color : undefined);
   const chat = nodeData.chat || [];
   const agentCount = chat.filter((m) => m.role === "agent").length;
   const seenKey = `maestri.chatSeen.${projectId}.${id}`;
@@ -149,6 +154,8 @@ export default function AgentTerminalNode({
   };
 
   const getRoleIcon = () => {
+    const Custom = nodeData.icon ? ICON_MAP[nodeData.icon] : undefined;
+    if (Custom) return <Custom className="h-4 w-4" style={{ color: arrangeColor ?? "#a5b4fc" }} />;
     if (isMaestro) {
       return <Crown className="h-4 w-4 text-amber-400" />;
     }
@@ -163,7 +170,7 @@ export default function AgentTerminalNode({
 
   return (
     <div
-      style={roleColor && !isMaestro ? { borderColor: roleColor } : undefined}
+      style={roleColor && (!isMaestro || arrangeColor) ? { borderColor: roleColor } : undefined}
       className={`w-full h-full min-w-[360px] min-h-[260px] rounded-xl border bg-slate-900/95 shadow-2xl backdrop-blur-md overflow-hidden text-slate-100 font-sans transition flex flex-col ${
         isMaestro
           ? "border-amber-500/90 shadow-amber-500/20 ring-1 ring-amber-400/40"

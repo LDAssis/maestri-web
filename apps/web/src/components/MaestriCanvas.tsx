@@ -26,6 +26,8 @@ import { usePresenceStore } from "@/lib/presence";
 import { PresenceLayer } from "./PresenceUI";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
+import NoteStackNode from "./NoteStackNode";
+import { CanvasOpsContext } from "@/lib/canvasOps";
 import PortalNode, { PortalNodeData } from "./PortalNode";
 import {
   instantiatePartitura,
@@ -230,6 +232,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     () => ({
       agentTerminal: AgentTerminalNode as any,
       stickyNote: StickyNoteNode as any,
+      noteStack: NoteStackNode as any,
       portal: PortalNode as any,
       fileTree: FileTreeNode as any,
       diff: DiffNode as any,
@@ -239,6 +242,11 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
 
   const [nodes, setNodes, onNodesChangeBase] = useNodesState<Node<any>>([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState<Edge>([]);
+  // Notas guardadas em fichário (data.stackId) ficam escondidas no canvas, qualquer que seja o flag hidden
+  const displayNodes = useMemo(
+    () => nodes.map((n) => (Boolean((n.data as any)?.stackId) !== Boolean(n.hidden) ? { ...n, hidden: Boolean((n.data as any)?.stackId) } : n)),
+    [nodes],
+  );
   const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
   const [connState, setConnState] = useState<ConnState>("connecting");
   const [initialViewport] = useState<Viewport | undefined>(() => readViewport(projectId));
@@ -590,7 +598,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     const {
       chat, chatBusy, worktree, branch, worktreePath, ...data
     } = (src.data || {}) as Record<string, unknown>;
-    const prefix = ({ agentTerminal: "agent", stickyNote: "note", fileTree: "files", diff: "diff" } as Record<string, string>)[String(src.type)] ?? "portal";
+    const prefix = ({ agentTerminal: "agent", stickyNote: "note", noteStack: "stack", fileTree: "files", diff: "diff" } as Record<string, string>)[String(src.type)] ?? "portal";
     const copy: Node<any> = {
       id: `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
       type: src.type,
@@ -902,8 +910,9 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       {/* O Canvas Principal com React Flow */}
       {loadState === "ready" && (
       <ProjectIdContext.Provider value={projectId}>
+      <CanvasOpsContext.Provider value={sendOp as any}>
       <ReactFlow
-        nodes={nodes}
+        nodes={displayNodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
@@ -948,7 +957,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         <Controls className="!bg-slate-900 !border-slate-800 !fill-slate-300 !text-slate-300 rounded-lg shadow-xl" />
         <MiniMap
           nodeColor={(n) =>
-            n.type === "stickyNote"
+            n.type === "stickyNote" || n.type === "noteStack"
               ? "#f59e0b"
               : n.type === "portal"
               ? "#06b6d4"
@@ -962,6 +971,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
           maskColor="rgba(15, 23, 42, 0.7)"
         />
       </ReactFlow>
+      </CanvasOpsContext.Provider>
       </ProjectIdContext.Provider>
       )}
     </div>

@@ -6,6 +6,7 @@ import { parseUser } from "./presence.js";
 import { ApiError, PRESETS, PRESET_LABELS, SIZES, freePosition, validCmd, withRolePrompt } from "./agents.js";
 import { readRole } from "./roles.js";
 import { THREADS, DEFAULT_THREAD, isThread, chatHeader, wantsChatHeader, currentThread } from "./chatThreads.js";
+import { reachNotes } from "./noteGraph.js";
 
 type Obj = Record<string, any>;
 
@@ -89,8 +90,12 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
       if (e.source === me.id) ids.add(e.target);
       else if (e.target === me.id) ids.add(e.source);
     }
-    const connected = nodes.filter((x) => ids.has(x.id));
-    return { projectId: params.p, nodes, me, connected, title: (n: Obj) => String(n.data?.title ?? n.id) };
+    const direct = nodes.filter((x) => ids.has(x.id) && !(x.type === "stickyNote" && x.data?.stackId));
+    // Notas encadeadas e páginas de fichários ligados também são alcançáveis
+    const reach = reachNotes(nodes, st.edges ?? [], me.id);
+    const extra = [...reach.notes.map((r) => r.node), ...reach.stacks].filter((x) => !direct.some((d) => d.id === x.id));
+    const connected = [...direct, ...extra];
+    return { projectId: params.p, nodes, edges: st.edges ?? [], reach, me, connected, title: (n: Obj) => String(n.data?.title ?? n.id) };
   }
   type Ctx = ReturnType<typeof context>;
 
@@ -137,7 +142,11 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
     return {
       self: { nodeId: c.me.id, title: c.title(c.me), isMaestro: c.me.data?.isMaestro === true },
       agents: pick("agentTerminal").map((n) => ({ nodeId: n.id, title: c.title(n), isMaestro: n.data?.isMaestro === true })),
-      notes: pick("stickyNote").map((n) => ({ nodeId: n.id, title: c.title(n) })),
+      notes: c.reach.notes.map((r) => ({
+        nodeId: r.node.id, title: c.title(r.node), locked: r.node.data?.locked === true,
+        parent: r.parent ? c.title(r.parent) : null, stack: r.stack ? c.title(r.stack) : null,
+      })),
+      stacks: c.reach.stacks.map((s) => ({ nodeId: s.id, title: c.title(s) })),
       portals: pick("portal").map((n) => ({ nodeId: n.id, title: c.title(n), url: n.data?.url ?? "" })),
     };
   }));
@@ -195,39 +204,7 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
     }
   });
 
-  const noteTarget = (c: Ctx, name: unknown) => resolveTarget(c, name, "stickyNote");
-
-  fastify.get(`${base}/notes/:target`, wrap((c, req) => ({ content: String(noteTarget(c, req.params.target).data?.content ?? "") })));
-
-  fastify.put(`${base}/notes/:target`, wrap((c, req) => {
-    const { text } = req.body ?? {};
-    if (!isText(text)) throw new ApiError(400, "Informe o texto.");
-    patch(c, noteTarget(c, req.params.target).id, { content: text });
-    return { ok: true };
-  }));
-
-  fastify.post(`${base}/notes/:target`, wrap((c, req) => {
-    const { text } = req.body ?? {};
-    if (!isText(text)) throw new ApiError(400, "Informe o texto.");
-    const t = noteTarget(c, req.params.target);
-    const old = String(t.data?.content ?? "");
-    patch(c, t.id, { content: old ? `${old}\n${text}` : text });
-    return { ok: true };
-  }));
-
-  fastify.post(`${base}/notes`, wrap((c, req) => {
-    const { title, text } = req.body ?? {};
-    if (!isText(title, 200) || !title.trim()) throw new ApiError(400, "Informe o título da nota.");
-    if (!isText(text)) throw new ApiError(400, "Informe o texto.");
-    const id = `note-${crypto.randomUUID().slice(0, 8)}`;
-    const node = {
-      id, type: "stickyNote", position: freePosition(c.nodes, c.me, SIZES.stickyNote), style: { width: 280, height: 200 },
-      data: { title: title.trim(), color: "amber", author: `🤖 ${c.title(c.me)}`, content: text },
-    };
-    canvas.applyAndBroadcast(c.projectId, { kind: "upsertNodes", nodes: [node] }, `cli:${c.me.id}`);
-    canvas.applyAndBroadcast(c.projectId, { kind: "upsertEdges", edges: [{ id: `e-${id}-${c.me.id}`, source: id, target: c.me.id }] }, `cli:${c.me.id}`);
-    return { ok: true, nodeId: id };
-  }));
+  // Rotas de nota (read/write/append/edit/delete/create/stack) vivem em notesApi.ts
 
   fastify.post(`${base}/portal-navigate`, wrap((c, req) => {
     const t = resolveTarget(c, req.body?.target, "portal");
