@@ -58,6 +58,19 @@ export class SessionHistory {
     this.save();
   }
 
+  // Nós apagados: esquece o histórico deles (senão o arquivo só cresce)
+  dropNodes(p: string, ids: string[]) {
+    let any = false;
+    for (const id of ids) {
+      const k = this.key(p, id);
+      if (this.data[k]) {
+        delete this.data[k];
+        any = true;
+      }
+    }
+    if (any) this.save();
+  }
+
   dropProject(p: string) {
     for (const k of Object.keys(this.data)) if (k.startsWith(`${p}:`)) delete this.data[k];
     this.save();

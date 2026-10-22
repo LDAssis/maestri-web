@@ -26,6 +26,7 @@ import { registerFloorsApi } from "./floorsApi.js";
 import { FloorStore } from "./floors.js";
 import { registerRoutinesApi } from "./routines.js";
 import { registerFilesApi } from "./files.js";
+import { sweepBands } from "./team.js";
 import { registerPortalApi } from "./portalApi.js";
 import { createProjectDir, findConflict, isInside, migrateProjects, overlaps, resolveInside } from "./projectDirs.js";
 
@@ -174,6 +175,17 @@ const presence = new PresenceHub();
 const canvas = new CanvasStore(canvasFileFor, writeJsonAtomic, (projectId, ids) => {
   sessions.killNodes(projectId, ids);
   portals.closeNodes(projectId, ids);
+  // Apagar um fichário solta as páginas dele (senão elas ficam escondidas para sempre, sem fichário para abri-las)
+  const gone = new Set(ids);
+  for (const n of canvas.state(projectId).nodes ?? []) {
+    if (typeof n.data?.stackId === "string" && gone.has(n.data.stackId)) {
+      canvas.applyAndBroadcast(projectId, { kind: "patchNodeData", id: n.id, data: { stackId: null } }, "stack-removed");
+      canvas.applyAndBroadcast(projectId, { kind: "upsertNodes", nodes: [{ id: n.id, hidden: false }] }, "stack-removed");
+    }
+  }
+  // Agente apagado pela UI: some dos membros das bandas (banda com menos de 2 se dissolve) e do histórico de sessões
+  sweepBands(canvas, projectId, "sweep");
+  sessionHistory.dropNodes(projectId, ids);
 });
 
 fastify.addHook("onClose", async () => {

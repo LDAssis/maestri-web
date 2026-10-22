@@ -133,6 +133,16 @@ export function cloneCanvas(nodes: Obj[], edges: Obj[], mapData: (data: Obj, nod
     const { selected: _s, dragging: _d, measured: _m, ...rest } = structuredClone(n);
     return { ...rest, id, data: mapData(data, n) };
   });
+  // Referências por id dentro do data (páginas de fichário e membros de banda) apontam para os NOVOS ids;
+  // sem isso a cópia escondia as notas como páginas do fichário ORIGINAL e a banda listava os agentes originais
+  for (const n of copies) {
+    const d = n.data as Obj;
+    if (typeof d.stackId === "string") {
+      d.stackId = ids.get(d.stackId) ?? null;
+      if (d.stackId === null) (n as Obj).hidden = false; // o fichário não veio junto: a nota volta a aparecer
+    }
+    if (Array.isArray(d.members)) d.members = d.members.map((m: unknown) => ids.get(String(m))).filter((m: string | undefined): m is string => !!m);
+  }
   const copiedEdges = edges
     .filter((e) => ids.has(e.source) && ids.has(e.target))
     .map((e) => ({ ...structuredClone(e), id: `e-${ids.get(e.source)}-${ids.get(e.target)}`, source: ids.get(e.source)!, target: ids.get(e.target)! }));
