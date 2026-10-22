@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import { StickyNote, Edit3 } from "lucide-react";
 import DeleteNodeButton from "./DeleteNodeButton";
+import { usePresenceStore } from "@/lib/presence";
 
 export interface StickyNoteData extends Record<string, unknown> {
   title: string;
@@ -25,6 +26,11 @@ export default function StickyNoteNode({
   const title = data.title || "Nota Adesiva";
   const [isEditing, setIsEditing] = useState(false);
   const { updateNodeData } = useReactFlow();
+  const presence = usePresenceStore();
+  const editingProps = {
+    onFocus: () => presence.setActive(id, "editing"),
+    onBlur: () => presence.setActive(null, "viewing"),
+  };
 
   const getColorStyles = () => {
     switch (data.color) {
@@ -70,6 +76,7 @@ export default function StickyNoteNode({
               onChange={(e) => {
                 updateNodeData(id, { title: e.target.value });
               }}
+              {...editingProps}
               className="bg-black/40 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
             />
           ) : (
@@ -96,6 +103,7 @@ export default function StickyNoteNode({
             onChange={(e) => {
               updateNodeData(id, { content: e.target.value });
             }}
+            {...editingProps}
             className="w-full h-full bg-black/40 rounded-lg p-2 text-xs font-mono leading-relaxed text-white focus:outline-none resize-none"
           />
         ) : (

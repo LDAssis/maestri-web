@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import EntryGate, { ProfileMenu, MaestriUser } from "@/components/EntryGate";
 import { apiFetch } from "@/lib/api";
+import { Peer, PresenceProvider } from "@/lib/presence";
+import { PresenceStack, PresenceToasts } from "@/components/PresenceUI";
 
 interface Project {
   id: string;
@@ -59,6 +61,16 @@ function App({
   const [newProjectDesc, setNewProjectDesc] = useState("");
 
   const [projectsError, setProjectsError] = useState("");
+  const [focus, setFocus] = useState<{ x?: number; y?: number; nodeId?: string | null; nonce: number } | undefined>();
+
+  // "Ir até": troca para o projeto da pessoa e centraliza no cursor (ou no nó ativo) dela
+  const goToPeer = (peer: Peer) => {
+    const target = projects.find((p) => p.id === peer.projectId);
+    if (!target) return;
+    setActiveTab("canvas");
+    setActiveProject(target);
+    setFocus({ x: peer.cursor?.x, y: peer.cursor?.y, nodeId: peer.activeNodeId, nonce: Date.now() });
+  };
 
   const fetchProjects = async () => {
     setProjectsError("");
@@ -106,6 +118,11 @@ function App({
   };
 
   return (
+    <PresenceProvider
+      user={user}
+      projectId={activeProject?.id ?? null}
+      projectName={(id) => projects.find((p) => p.id === id)?.name || id}
+    >
     <div className="flex h-screen w-screen overflow-hidden bg-[#080d1a] text-slate-100 font-sans">
       {/* Barra de Navegação Esquerda (Mini Dock) */}
       <nav className="w-16 border-r border-slate-800/80 bg-slate-950 flex flex-col items-center justify-between py-4 z-20">
@@ -219,6 +236,7 @@ function App({
           </div>
 
           <div className="flex items-center gap-3">
+            <PresenceStack me={user.id} projects={projects} onGoTo={goToPeer} />
             <ProfileMenu user={user} onChange={setUser} onLogout={logout} />
             <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg p-1 text-xs">
               <button
@@ -254,6 +272,7 @@ function App({
                 projectId={activeProject.id}
                 projectName={activeProject.name}
                 clientId={user.id}
+                focus={focus}
               />
             ) : projectsError ? (
               <div
@@ -359,6 +378,8 @@ function App({
           </div>
         </div>
       )}
+      <PresenceToasts />
     </div>
+    </PresenceProvider>
   );
 }

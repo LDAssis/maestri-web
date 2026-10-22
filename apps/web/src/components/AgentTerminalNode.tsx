@@ -18,6 +18,7 @@ import dynamic from "next/dynamic";
 import DeleteNodeButton from "./DeleteNodeButton";
 import { apiFetch } from "@/lib/api";
 import { ProjectIdContext } from "@/lib/projectContext";
+import { usePresenceValue } from "@/lib/presence";
 import type { TerminalStatus } from "./TerminalView";
 
 const TerminalView = dynamic(() => import("./TerminalView"), {
@@ -53,6 +54,10 @@ export default function AgentTerminalNode({
   const [activeFace, setActiveFace] = useState<"terminal" | "chat">("terminal");
   const { updateNodeData } = useReactFlow();
   const projectId = useContext(ProjectIdContext);
+  const typingLabel = usePresenceValue((s) => {
+    const p = s.peers.find((x) => x.projectId === s.projectId && x.activeNodeId === id && x.activity === "typing");
+    return p ? `${p.user.name} digitando…` : "";
+  });
   const [termStatus, setTermStatus] = useState<TerminalStatus>("conectando");
   const isMaestro = Boolean(nodeData.isMaestro);
   const [chatInput, setChatInput] = useState("");
@@ -277,6 +282,7 @@ export default function AgentTerminalNode({
           {nodeData.branch || "worktree isolado"}
         </span>
         <span className="flex items-center gap-2 text-slate-500">
+          {typingLabel && <span className="text-indigo-300 truncate max-w-[140px]">{typingLabel}</span>}
           {isMaestro && "👑"}
           <span
             className={
