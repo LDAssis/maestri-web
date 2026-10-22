@@ -94,9 +94,10 @@ export function register({ call, need, CliError }) {
       for (const i of r.items) console.log(`${i.title} [${i.type}] — ícone: ${i.icon ?? "(padrão)"}, cor: ${i.color ?? "(padrão)"}`);
       return;
     }
-    need(pos, 1, 'arrange "Nome" [--name N] [--icon I] [--color C]');
+    // Sem nome de alvo, aplica a você mesmo
     const r = await call("POST", "/arrange", { target: pos[0], name: flags.name, icon: flags.icon, color: flags.color });
-    console.log(`"${pos[0]}" atualizado${r.title !== pos[0] ? ` (agora "${r.title}")` : ""}.`);
+    const who = pos[0] ?? "Você";
+    console.log(`"${who}" atualizado${r.title !== who ? ` (agora "${r.title}")` : ""}.`);
   }
 
   async function list() {

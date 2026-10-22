@@ -25,7 +25,9 @@ Sem argumento, lê o texto da entrada padrão (heredoc/pipe). --file lê um arqu
   recall: `maestri recall [thread] [--turns N | --last day|week|month | --from YYYY-MM-DD [--to YYYY-MM-DD] | --all] [--json]
 maestri recall list
 Relê a conversa do chat do seu nó. thread = blue|purple|pink|red|orange|yellow|green (padrão: a atual).
-Padrão: últimos 10 turnos. "recall list" mostra as threads com a contagem de mensagens.`,
+Padrão: últimos 10 turnos. "recall list" mostra as threads com a contagem de mensagens.
+Só lê o diálogo (mensagens do usuário e respostas do agente): balões de progresso (say --progress) e a saída
+capturada do terminal ficam de fora de propósito; por isso a contagem pode ser menor que a do badge da UI.`,
   debug: `maestri debug
 Diagnostica o ambiente: variáveis MAESTRI_*, API (/api/health), nó no canvas, sessão e papel de Maestro.
 Sai com 0 se tudo estiver certo, 1 caso contrário.`,

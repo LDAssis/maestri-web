@@ -208,8 +208,9 @@ export function registerNotesApi({ fastify, canvas, nodeApi }: Deps) {
     if (name !== undefined && (!isText(name, 64) || !name.trim())) throw new ApiError(400, "Nome inválido (até 64 caracteres).");
     checkIcon(icon);
     checkColor(color);
-    if (!isText(target, 200) || !target.trim()) throw new ApiError(400, "Informe o nome do alvo.");
-    const self = lc(target) === lc(nt(c.me));
+    // Sem alvo = o próprio nó
+    if (target !== undefined && (!isText(target, 200) || !target.trim())) throw new ApiError(400, "Informe o nome do alvo.");
+    const self = target === undefined || lc(target) === lc(nt(c.me));
     const t = self ? c.me : resolveTarget(c, target);
     if (!self && t.type === "agentTerminal") requireMaestro(c, "alterar o estilo de outro agente");
     if (!["agentTerminal", "stickyNote", "noteStack"].includes(t.type)) throw new ApiError(400, "Só agentes, notas e fichários aceitam arrange.");

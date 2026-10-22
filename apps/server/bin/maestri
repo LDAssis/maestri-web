@@ -14,9 +14,6 @@ Comandos:
   send "Nome" "texto"                Escreve texto + Enter no terminal do agente
   check "Nome" [--lines N]           Últimas N linhas (60) do terminal do agente
   ask "Nome" "texto" [--timeout S]   send + espera o agente ficar quieto e imprime a resposta
-  note read|write|append "Nome" ["texto"]   Lê/substitui/acrescenta uma nota conectada
-  note create "Título" "texto"       Cria uma nota perto de você, conectada a você
-  portal navigate "Nome" "url"       Muda a URL de um portal conectado
   recruit "Nome" [--preset P] [--role-id ID] [--cmd C] [--role R]   (Maestro) cria e inicia um novo agente
   dismiss "Nome"                     (Maestro) remove um agente conectado
   notify "texto"                     Avisa todos os navegadores do projeto
@@ -25,8 +22,8 @@ Comandos:
 
 Use "maestri <comando> --help" para detalhes. Nomes são os títulos dos nós (sem diferenciar maiúsculas)
 e o alvo precisa estar conectado a você por uma aresta.`,
-  list: `maestri list | context\nMostra "Você: <título> (Maestro)" e os nós conectados: Agentes, Notas e Portais (com URL).`,
-  context: `maestri list | context\nMostra "Você: <título> (Maestro)" e os nós conectados: Agentes, Notas e Portais (com URL).`,
+  list: `maestri list | context\nMostra "Você: <título> (Maestro)" e os nós conectados: Agentes, Notas (em cadeia, com locked), Fichários e Portais (com URL).`,
+  context: `maestri list | context\nMostra "Você: <título> (Maestro)" e os nós conectados: Agentes, Notas (em cadeia, com locked), Fichários e Portais (com URL).`,
   send: `maestri send "Nome" "texto"\nEscreve o texto e Enter no terminal do agente conectado, sem esperar resposta.`,
   check: `maestri check "Nome" [--lines N]\nImprime as últimas N linhas (padrão 60) do terminal do agente, sem sequências ANSI.`,
   ask: `maestri ask "Nome" "texto" [--timeout S]\nEnvia o texto e espera o terminal do alvo ficar 5s quieto; imprime só a saída nova.\nTimeout (padrão 600s): imprime o que houver e sai com código 2.`,

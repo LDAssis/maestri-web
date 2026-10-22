@@ -207,6 +207,10 @@ test("arrange: mostra, renomeia a si, nota e (Maestro) colega; restrições", as
   await ok("maestro", ["arrange", "Maestro", "--name", "Regente"]);
   assert.equal((await byId("maestro")).data.title, "Regente");
   await ok("maestro", ["arrange", "Regente", "--name", "Maestro"]);
+  // sem nome de alvo, vale para você mesmo
+  await ok("maestro", ["arrange", "--name", "Solo", "--color", "sky"]);
+  assert.deepEqual([(await byId("maestro")).data.title, (await byId("maestro")).data.color], ["Solo", "sky"]);
+  await ok("maestro", ["arrange", "Solo", "--name", "Maestro"]);
 
   await ok("maestro", ["arrange", "Raiz", "--name", "Principal", "--color", "rose", "--icon", "book"]);
   const raiz = await byId("root");
