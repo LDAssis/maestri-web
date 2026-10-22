@@ -20,7 +20,7 @@ import {
   ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { wsUrl } from "@/lib/api";
+import { wsUrl, apiFetch } from "@/lib/api";
 import { ProjectIdContext } from "@/lib/projectContext";
 import { usePresenceStore } from "@/lib/presence";
 import { PresenceLayer } from "./PresenceUI";

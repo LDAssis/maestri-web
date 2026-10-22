@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
+import ProjectSettingsModal from "@/components/ProjectSettingsModal";
 import {
   Layers,
   Cpu,
@@ -57,6 +58,7 @@ function App({
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDesc, setNewProjectDesc] = useState("");
 

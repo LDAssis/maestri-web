@@ -145,7 +145,7 @@ export default function AgentTerminalNode({
       <NodeResizer
         minWidth={360}
         minHeight={260}
-        isVisible={selected}
+        isVisible={true}
         lineClassName={isMaestro ? "!border-amber-400" : "!border-indigo-500"}
         handleClassName={
           isMaestro

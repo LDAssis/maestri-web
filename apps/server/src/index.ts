@@ -147,6 +147,66 @@ const idPattern = /^[\w-]+$/;
 registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
 
 // Endpoints de Projetos
+
+// Configurações Globais e por Projeto de Inicialização e CLIs
+const globalSettingsFile = path.join(dataDir, "global_settings.json");
+const defaultGlobalSettings = {
+  defaultCmd: "echo 'Agente inicializado'",
+  cliPresets: [
+    { id: "agy", label: "agy", cmd: "agy", color: "purple" },
+    { id: "claude", label: "claude", cmd: "claude", color: "amber" },
+    { id: "opencode", label: "opencode", cmd: "opencode", color: "emerald" },
+  ],
+};
+
+function readGlobalSettings() {
+  if (fs.existsSync(globalSettingsFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(globalSettingsFile, "utf-8"));
+    } catch {}
+  }
+  return defaultGlobalSettings;
+}
+
+function projectSettingsFile(id: string) {
+  return path.join(dataDir, `settings_${id}.json`);
+}
+
+function readProjectSettings(id: string) {
+  const f = projectSettingsFile(id);
+  if (fs.existsSync(f)) {
+    try {
+      return JSON.parse(fs.readFileSync(f, "utf-8"));
+    } catch {}
+  }
+  return null;
+}
+
+fastify.get("/api/settings/global", async () => {
+  return readGlobalSettings();
+});
+
+fastify.put<{ Body: any }>("/api/settings/global", async (req) => {
+  writeJsonAtomic(globalSettingsFile, req.body);
+  return { ok: true, settings: req.body };
+});
+
+fastify.get<{ Params: { id: string } }>("/api/projects/:id/settings", async (req) => {
+  const proj = readProjectSettings(req.params.id);
+  const global = readGlobalSettings();
+  return {
+    global,
+    project: proj,
+    effective: proj ?? global,
+  };
+});
+
+fastify.put<{ Params: { id: string }; Body: any }>("/api/projects/:id/settings", async (req) => {
+  const f = projectSettingsFile(req.params.id);
+  writeJsonAtomic(f, req.body);
+  return { ok: true, settings: req.body };
+});
+
 fastify.get("/api/projects", async () => {
   return projects;
 });

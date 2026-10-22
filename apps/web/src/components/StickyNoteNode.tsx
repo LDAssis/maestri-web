@@ -53,7 +53,7 @@ export default function StickyNoteNode({
       <NodeResizer
         minWidth={240}
         minHeight={160}
-        isVisible={selected}
+        isVisible={true}
         lineClassName="!border-amber-400"
         handleClassName="!h-3 !w-3 !bg-amber-400 !border-2 !border-slate-900 !rounded"
       />
