@@ -77,18 +77,22 @@ export default function ProjectSettingsModal({
     try {
       if (useGlobalDefault) {
         // Remove configuração específica do projeto, voltando ao global
-        await apiFetch(`/api/projects/${projectId}/settings`, {
+        const res = await apiFetch(`/api/projects/${projectId}/settings`, {
           method: "PUT",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(null),
         });
+        if (!res.ok) throw new Error(`Falha HTTP ${res.status}`);
       } else {
-        await apiFetch(`/api/projects/${projectId}/settings`, {
+        const res = await apiFetch(`/api/projects/${projectId}/settings`, {
           method: "PUT",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             defaultCmd: projectCmd,
             cliPresets: projectPresets,
           }),
         });
+        if (!res.ok) throw new Error(`Falha HTTP ${res.status}`);
       }
       setStatusMsg("Configurações do projeto salvas com sucesso!");
       onSettingsChanged?.();
@@ -101,13 +105,15 @@ export default function ProjectSettingsModal({
   const handleSaveGlobal = async () => {
     setStatusMsg("Salvando global...");
     try {
-      await apiFetch(`/api/settings/global`, {
+      const res = await apiFetch(`/api/settings/global`, {
         method: "PUT",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           defaultCmd: globalCmd,
           cliPresets: globalPresets,
         }),
       });
+      if (!res.ok) throw new Error(`Falha HTTP ${res.status}`);
       setStatusMsg("Configurações globais salvas com sucesso!");
       onSettingsChanged?.();
       setTimeout(() => setStatusMsg(""), 2500);
