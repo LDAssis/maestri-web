@@ -4,6 +4,7 @@ import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import type { SessionManager } from "./sessions.js";
+import { ApiError } from "./agents.js";
 
 type Obj = Record<string, any>;
 
@@ -12,12 +13,6 @@ interface Deps {
   sessions: SessionManager;
   canvas: CanvasStore;
   projectRepo: (projectId: string) => string | null;
-}
-
-class ApiError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
-  }
 }
 
 const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
@@ -141,8 +136,8 @@ export function registerWorktreeApi({ fastify, sessions, canvas, projectRepo }: 
     return { base: baseName, worktrees: (await list(c.repo, baseName, nodesOf(c))).map(publicShape) };
   }));
 
-  fastify.post(base, wrap((c, req, reply) => locked(c.repo, async () => {
-    const { nodeId, name: rawName } = req.body ?? {};
+  // Cria o andar de um nó de agente (também usado por POST /agents com worktree:true)
+  const createFloor = (c: Ctx, nodeId: unknown, rawName?: unknown) => locked(c.repo, async () => {
     if (rawName !== undefined && rawName !== null) validName(rawName);
     const node = typeof nodeId === "string" ? nodesOf(c).find((n) => n.id === nodeId) : undefined;
     if (!node || node.type !== "agentTerminal") throw new ApiError(404, "Nó de agente não encontrado.");
@@ -177,8 +172,13 @@ export function registerWorktreeApi({ fastify, sessions, canvas, projectRepo }: 
     sessions.restart(c.projectId, node.id, wtPath);
     notifyChange(c);
     const worktree = (await list(c.repo, baseName, nodesOf(c))).find((x) => x.name === name)!;
-    return reply.status(201).send({ worktree: publicShape(worktree) });
-  })));
+    return publicShape(worktree);
+  });
+
+  fastify.post(base, wrap(async (c, req, reply) => {
+    const worktree = await createFloor(c, req.body?.nodeId, req.body?.name);
+    return reply.status(201).send({ worktree });
+  }));
 
   fastify.get(`${base}/:name/diff`, wrap(async (c, req) => {
     const name = validName(req.params.name);
@@ -266,4 +266,6 @@ export function registerWorktreeApi({ fastify, sessions, canvas, projectRepo }: 
     }
     return { ok: true };
   })));
+
+  return { createFloorFor: (projectId: string, nodeId: string) => createFloor(context({ p: projectId }), nodeId) };
 }

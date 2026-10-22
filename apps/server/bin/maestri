@@ -13,7 +13,7 @@ Comandos:
   note read|write|append "Nome" ["texto"]   Lê/substitui/acrescenta uma nota conectada
   note create "Título" "texto"       Cria uma nota perto de você, conectada a você
   portal navigate "Nome" "url"       Muda a URL de um portal conectado
-  recruit "Nome" [--cmd C] [--role R]   (Maestro) cria e inicia um novo agente
+  recruit "Nome" [--preset P] [--role-id ID] [--cmd C] [--role R]   (Maestro) cria e inicia um novo agente
   dismiss "Nome"                     (Maestro) remove um agente conectado
   notify "texto"                     Avisa todos os navegadores do projeto
   chat reply "texto markdown"        Responde na face de chat do SEU nó
@@ -28,7 +28,7 @@ e o alvo precisa estar conectado a você por uma aresta.`,
   ask: `maestri ask "Nome" "texto" [--timeout S]\nEnvia o texto e espera o terminal do alvo ficar 5s quieto; imprime só a saída nova.\nTimeout (padrão 600s): imprime o que houver e sai com código 2.`,
   note: `maestri note read "Nome"\nmaestri note write "Nome" "texto"     (substitui o conteúdo)\nmaestri note append "Nome" "texto"\nmaestri note create "Título" "texto" (cria uma nota perto de você, conectada a você)`,
   portal: `maestri portal navigate "Nome" "url"\nMuda a URL do portal conectado (apenas http/https).`,
-  recruit: `maestri recruit "Nome" [--cmd "claude"] [--role "texto do papel"]\nApenas o Maestro. Cria um agente conectado a você e inicia o terminal dele.\n--role grava o texto em .maestri-roles/<id>.md; com --cmd claude/codex o arquivo é passado como prompt.`,
+  recruit: `maestri recruit "Nome" [--preset claude|codex|opencode|agy|shell] [--role-id UUID] [--cmd "claude"] [--role "texto do papel"]\nApenas o Maestro. Cria um agente conectado a você e inicia o terminal dele.\n--preset escolhe o comando (shell = terminal puro); --cmd tem precedência sobre o preset.\n--role-id usa um role do projeto (.maestri/roles); --role grava um texto livre. O papel vai para .maestri-roles/<id>.md; com claude/codex o arquivo é passado como prompt.`,
   dismiss: `maestri dismiss "Nome"\nApenas o Maestro. Remove o nó conectado e encerra o terminal dele.`,
   chat: `maestri chat reply "texto markdown"   Responde ao usuário na face de chat do seu nó (aceita Markdown)\nmaestri chat history [--last N]     Imprime as últimas N mensagens (padrão 20) do chat do seu nó`,
   notify: `maestri notify "texto"\nMostra um aviso (toast) para todos os navegadores no projeto, com o título do seu nó.`,
@@ -41,7 +41,7 @@ class CliError extends Error {
   }
 }
 
-const FLAGS = ["--lines", "--timeout", "--cmd", "--role", "--last"];
+const FLAGS = ["--lines", "--timeout", "--cmd", "--role", "--last", "--preset", "--role-id"];
 
 function parse(argv) {
   const pos = [];
@@ -151,8 +151,8 @@ const COMMANDS = {
   },
 
   async recruit({ pos, flags }) {
-    need(pos, 1, 'recruit "Nome" [--cmd "claude"] [--role "texto"]');
-    await call("POST", "/recruit", { name: pos[0], cmd: flags.cmd, role: flags.role });
+    need(pos, 1, 'recruit "Nome" [--preset P] [--role-id ID] [--cmd "claude"] [--role "texto"]');
+    await call("POST", "/recruit", { name: pos[0], cmd: flags.cmd, role: flags.role, preset: flags.preset, roleId: flags["role-id"] });
     console.log(`Agente "${pos[0]}" recrutado e iniciado.`);
   },
 

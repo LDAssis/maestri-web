@@ -92,8 +92,10 @@ before(async () => {
   agent = await connect(`/ws/terminal?project=${P}&node=agent&token=tok-chat`);
   proj = await connect(`/ws/project/${P}?token=tok-chat&clientId=browser`);
   await until(() => agent.raw.length > 0 && proj.got.length > 0, "sessão e snapshot");
-  // Espera o shell terminar de iniciar: antes disso só o eco do tty chega e a captura (quiet 600ms) encerra sem a saída do comando
-  for (let n = agent.raw.length, quiet = 0; quiet < 1000; ) {
+  // Espera o shell executar um comando de verdade: antes disso só o eco do tty chega e a captura (quiet 600ms) encerra sem a saída
+  agent.send("echo PRONTO$((1+1))\r");
+  await until(() => agent.raw.join("").includes("PRONTO2"), "shell pronto", 20000);
+  for (let n = agent.raw.length, quiet = 0; quiet < 800; ) {
     await sleep(100);
     quiet = agent.raw.length === n ? quiet + 100 : 0;
     n = agent.raw.length;

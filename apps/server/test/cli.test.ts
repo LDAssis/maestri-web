@@ -263,7 +263,7 @@ test("recruit com claude+role passa o papel por arquivo, nunca interpolado no co
   const r = await maestri("maestro", ["recruit", "Seguro", "--cmd", "claude", "--role", role]);
   assert.equal(r.code, 0, r.stderr);
   const n = await nodeByTitle("Seguro");
-  assert.equal(n.data.defaultCmd, `claude "$(cat .maestri-roles/${n.id}.md)"`);
+  assert.equal(n.data.defaultCmd, `claude "$(cat '${path.join(repo, ".maestri-roles", `${n.id}.md`)}')"`);
   assert.equal(n.data.role, role); // curto o bastante para virar o papel exibido
   assert.equal(fs.readFileSync(path.join(repo, ".maestri-roles", `${n.id}.md`), "utf-8"), role);
   await maestri("maestro", ["dismiss", "Seguro"]); // antes dos 600ms do cmd inicial

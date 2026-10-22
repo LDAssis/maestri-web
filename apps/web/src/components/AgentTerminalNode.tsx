@@ -19,6 +19,7 @@ import DeleteNodeButton from "./DeleteNodeButton";
 import ChatFace, { ChatMessage } from "./ChatFace";
 import { apiFetch } from "@/lib/api";
 import { ProjectIdContext } from "@/lib/projectContext";
+import { useRoles } from "@/lib/useRoles";
 import { usePresenceValue } from "@/lib/presence";
 import type { TerminalStatus } from "./TerminalView";
 
@@ -41,6 +42,8 @@ export interface AgentNodeData extends Record<string, unknown> {
   worktreePath?: string;
   defaultCmd?: string;
   isMaestro?: boolean;
+  roleId?: string;
+  preset?: string;
   chat?: ChatMessage[];
   chatBusy?: boolean;
 }
@@ -67,6 +70,8 @@ export default function AgentTerminalNode({
   const [wtBusy, setWtBusy] = useState(false);
   const [wtError, setWtError] = useState("");
   const isMaestro = Boolean(nodeData.isMaestro);
+  const { roles } = useRoles(projectId);
+  const roleColor = nodeData.roleId ? roles.find((r) => r.id === nodeData.roleId)?.color : undefined;
   const chat = nodeData.chat || [];
   const agentCount = chat.filter((m) => m.role === "agent").length;
   const seenKey = `maestri.chatSeen.${projectId}.${id}`;
@@ -135,6 +140,7 @@ export default function AgentTerminalNode({
 
   return (
     <div
+      style={roleColor && !isMaestro ? { borderColor: roleColor } : undefined}
       className={`w-full h-full min-w-[360px] min-h-[260px] rounded-xl border bg-slate-900/95 shadow-2xl backdrop-blur-md overflow-hidden text-slate-100 font-sans transition flex flex-col ${
         isMaestro
           ? "border-amber-500/90 shadow-amber-500/20 ring-1 ring-amber-400/40"
@@ -184,7 +190,10 @@ export default function AgentTerminalNode({
                 </span>
               )}
             </div>
-            <div className="text-[11px] text-slate-400">{nodeData.role}</div>
+            <div className="flex items-center gap-1 text-[11px] text-slate-400">
+              {roleColor && <span className="h-2 w-2 rounded-full" style={{ background: roleColor }} aria-hidden />}
+              {nodeData.role}
+            </div>
           </div>
         </div>
 

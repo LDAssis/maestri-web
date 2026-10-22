@@ -12,7 +12,7 @@ Ordem de execução (cada item = 1 branch + PR). Status: ⬜ a fazer · 🔄 em 
 | F6 | Face de chat real: envia ao PTY, histórico persistido e compartilhado | F2, F3 | ✅ |
 | F7 | Andares (worktrees): criar por agente, listar, diff, land (merge), apagar; aba Worktrees real | F2 | ✅ |
 | F8 | UX do canvas: elevar nó, busca Ctrl+K, atalhos, apagar nó, menu de contexto, nota com Markdown e cor | F3 | ✅ |
-| F9 | Roles e presets: folha de criação de agente (claude/codex/opencode/agy/shell), roles por projeto | F2, F5 | ⬜ |
+| F9 | Roles e presets: folha de criação de agente (claude/codex/opencode/agy/shell), roles por projeto | F2, F5 | ✅ |
 | F10 | Partituras: exportar/importar seleção do canvas como arquivo | F3 | ⬜ |
 | F11 | Rotinas: comando/prompt agendado para um terminal, histórico, liga/desliga | F2 | ⬜ |
 | F12 | Árvore de arquivos e nó de diff | F7 | ⬜ |

@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "./sessions.js";
 import { registerWorktreeApi } from "./worktrees.js";
+import { registerRolesApi } from "./roles.js";
 import { CanvasStore } from "./canvas.js";
 import { PresenceHub } from "./presence.js";
 import { registerNodeApi } from "./nodeApi.js";
@@ -145,7 +146,9 @@ fastify.addHook("onClose", async () => {
 const idPattern = /^[\w-]+$/;
 
 registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
-registerWorktreeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
+const projectRepo = (id: string) => projects.find((p) => p.id === id)?.repoPath ?? null;
+const { createFloorFor } = registerWorktreeApi({ fastify, sessions, canvas, projectRepo });
+registerRolesApi({ fastify, canvas, projectRepo, createFloorFor });
 
 // Endpoints de Projetos
 fastify.get("/api/projects", async () => {

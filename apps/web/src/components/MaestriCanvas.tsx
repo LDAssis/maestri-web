@@ -27,8 +27,10 @@ import { PresenceLayer } from "./PresenceUI";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
 import PortalNode, { PortalNodeData } from "./PortalNode";
+import NewAgentSheet from "./NewAgentSheet";
+import RolesPanel from "./RolesPanel";
 import { CommandPalette, ContextMenu, ShortcutsHelp, MenuState } from "./CanvasOverlays";
-import { Plus, RefreshCw, StickyNote, Globe, Bell } from "lucide-react";
+import { Plus, UserCog, RefreshCw, StickyNote, Globe, Bell } from "lucide-react";
 
 interface MaestriCanvasProps {
   projectId: string;
@@ -517,23 +519,16 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     }
   };
 
+  // Criação de agente passa pela folha (preset/role/andar); a posição vem do clique ou do centro da viewport
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [rolesOpen, setRolesOpen] = useState(false);
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const [agentSheet, setAgentSheet] = useState<{ at: { x: number; y: number } } | null>(null);
+
   const addAgent = (at?: { x: number; y: number }) => {
-    const newId = `agent-${Date.now().toString().slice(-4)}`;
-    const newNode: Node<AgentNodeData> = {
-      id: newId,
-      type: "agentTerminal",
-      position: at ?? getSpawnPosition(460, 330),
-      style: { width: 460, height: 330 },
-      data: {
-        title: `Agente Especialista ${nodes.length + 1}`,
-        role: "DevOps / Worker CLI",
-        model: "Claude 3.5 Sonnet",
-        status: "idle",
-        defaultCmd: `echo 'Agente inicializado'`,
-      },
-    };
-    setNodes((nds) => [...nds, newNode]);
-    sendOp({ kind: "upsertNodes", nodes: [newNode] });
+    setMenu(null);
+    setPaletteOpen(false);
+    setAgentSheet({ at: at ?? getSpawnPosition(460, 330) });
   };
 
   const addStickyNote = (at?: { x: number; y: number }) => {
@@ -570,9 +565,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     sendOp({ kind: "upsertNodes", nodes: [newNode] });
   };
 
-  const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [menu, setMenu] = useState<MenuState | null>(null);
 
   const selectNode = (id: string) => {
     setNodes((nds) => nds.map((n) => (n.selected === (n.id === id) ? n : { ...n, selected: n.id === id })));
@@ -662,6 +655,14 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         </button>
 
         <button
+          onClick={() => setRolesOpen(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-medium transition"
+        >
+          <UserCog className="h-3.5 w-3.5" />
+          Roles
+        </button>
+
+        <button
           onClick={resetToDefault}
           className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
           title="Restaurar Arranjo Padrão"
@@ -721,6 +722,19 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
           ]}
         />
       )}
+      {agentSheet && (
+        <NewAgentSheet
+          projectId={projectId}
+          position={agentSheet.at}
+          onClose={() => setAgentSheet(null)}
+          onCreated={(node) => {
+            setAgentSheet(null);
+            // o nó chega pelo broadcast do servidor; espera ele entrar no estado para selecionar
+            setTimeout(() => nodesRef.current.some((n) => n.id === node.id) && selectNode(node.id), 400);
+          }}
+        />
+      )}
+      {rolesOpen && <RolesPanel projectId={projectId} onClose={() => setRolesOpen(false)} />}
       {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
       {menu && (
         <ContextMenu

@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import type { Session, SessionManager } from "./sessions.js";
 import { parseUser } from "./presence.js";
+import { ApiError, PRESETS, PRESET_LABELS, SIZES, freePosition, validCmd, withRolePrompt } from "./agents.js";
+import { readRole } from "./roles.js";
 
 type Obj = Record<string, any>;
 
@@ -17,37 +17,6 @@ interface Deps {
 
 const ANSI = /\x1b\[[0-?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
 const stripAnsi = (s: string) => s.replace(ANSI, "").replace(/\r\n?/g, "\n");
-
-const SIZES: Record<string, [number, number]> = { agentTerminal: [460, 330], stickyNote: [280, 200], portal: [480, 330] };
-const MARGIN = 40;
-
-const sizeOf = (n: Obj): [number, number] => {
-  const [dw, dh] = SIZES[n.type] ?? [300, 200];
-  return [Number(n.style?.width) || dw, Number(n.style?.height) || dh];
-};
-
-// Primeira posição livre (sem sobrepor), a mais próxima de "logo abaixo" do nó de referência
-function freePosition(nodes: Obj[], ref: Obj, size: [number, number]) {
-  const [, rh] = sizeOf(ref);
-  const rx = ref.position?.x ?? 0;
-  const ry = ref.position?.y ?? 0;
-  const anchor = { x: rx, y: ry + rh + MARGIN };
-  const step = 40;
-  const candidates: { x: number; y: number }[] = [];
-  for (let gx = -30; gx <= 30; gx++) {
-    for (let gy = -30; gy <= 30; gy++) candidates.push({ x: rx + gx * step, y: ry + gy * step });
-  }
-  const dist = (c: { x: number; y: number }) => Math.hypot(c.x - anchor.x, c.y - anchor.y);
-  candidates.sort((a, b) => dist(a) - dist(b));
-  const free = (c: { x: number; y: number }) =>
-    nodes.every((n) => {
-      const [w, h] = sizeOf(n);
-      const nx = n.position?.x ?? 0;
-      const ny = n.position?.y ?? 0;
-      return c.x + size[0] + MARGIN <= nx || nx + w + MARGIN <= c.x || c.y + size[1] + MARGIN <= ny || ny + h + MARGIN <= c.y;
-    });
-  return candidates.find(free) ?? anchor;
-}
 
 const lc = (v: unknown) => String(v ?? "").trim().toLowerCase();
 const isText = (v: unknown, max = 100_000): v is string => typeof v === "string" && v.length <= max;
@@ -96,12 +65,6 @@ function expandMentions(text: string, connected: Obj[]) {
     const q = String(n.data.title).replace(/"/g, '\\"');
     return `${m} (use: ${n.type === "stickyNote" ? `maestri note read "${q}"` : `maestri ask "${q}" ...`})`;
   });
-}
-
-class ApiError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
-  }
 }
 
 export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps) {
@@ -274,26 +237,34 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
 
   fastify.post(`${base}/recruit`, wrap((c, req) => {
     requireMaestro(c, "recrutar");
-    const { name, cmd, role } = req.body ?? {};
+    const { name, cmd, role, preset, roleId } = req.body ?? {};
     if (!isText(name, 64) || !name.trim()) throw new ApiError(400, "Informe o nome do agente.");
-    if (cmd !== undefined && (!isText(cmd, 500) || /[\x00-\x1f]/.test(cmd))) throw new ApiError(400, "Comando inválido.");
+    if (cmd !== undefined && !validCmd(cmd)) throw new ApiError(400, "Comando inválido.");
     if (role !== undefined && !isText(role)) throw new ApiError(400, "Papel inválido.");
+    if (preset !== undefined && (typeof preset !== "string" || !Object.hasOwn(PRESETS, preset))) throw new ApiError(400, `preset inválido (${Object.keys(PRESETS).join(", ")}).`);
     if (c.connected.some((n) => lc(n.data?.title) === lc(name))) throw new ApiError(409, `Já existe um nó conectado chamado "${name}".`);
     const cwd = projectRepo(c.projectId)!;
     const id = `agent-${crypto.randomUUID().slice(0, 8)}`;
 
-    // O texto do papel vai para um arquivo; o shell só lê o arquivo como um único argumento
-    let defaultCmd = (cmd ?? "").trim();
-    if (role?.trim()) {
-      const dir = path.join(cwd, ".maestri-roles");
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, `${id}.md`), role);
-      if (/^(claude|codex)(\s+[\w.=\/:-]+)*$/.test(defaultCmd)) defaultCmd += ` "$(cat .maestri-roles/${id}.md)"`;
+    let savedRole: Obj | null = null;
+    if (roleId !== undefined) {
+      savedRole = typeof roleId === "string" ? readRole(cwd, roleId) : null;
+      if (!savedRole) throw new ApiError(404, "Role não encontrado (use o id do role do projeto).");
     }
+    let defaultCmd = (cmd ?? (preset ? PRESETS[preset] : "")).trim();
+    const prompt = savedRole ? savedRole.prompt : role?.trim() ? role : "";
+    if (prompt) defaultCmd = withRolePrompt(cwd, id, defaultCmd, prompt);
 
     const node = {
       id, type: "agentTerminal", position: freePosition(c.nodes, c.me, SIZES.agentTerminal), style: { width: 460, height: 330 },
-      data: { title: name.trim(), role: role && role.trim().length <= 60 ? role.trim() : "Agente", status: "idle", defaultCmd },
+      data: {
+        title: name.trim(),
+        ...(preset && { preset }),
+        ...(savedRole && { roleId: savedRole.id }),
+        role: savedRole ? savedRole.name : role && role.trim().length <= 60 ? role.trim() : preset ? PRESET_LABELS[preset] : "Agente",
+        status: "idle",
+        defaultCmd,
+      },
     };
     canvas.applyAndBroadcast(c.projectId, { kind: "upsertNodes", nodes: [node] }, `cli:${c.me.id}`);
     canvas.applyAndBroadcast(c.projectId, { kind: "upsertEdges", edges: [{ id: `e-${c.me.id}-${id}`, source: c.me.id, target: id }] }, `cli:${c.me.id}`);
