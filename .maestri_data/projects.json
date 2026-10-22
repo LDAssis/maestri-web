@@ -12,5 +12,19 @@
     "description": "Backend de pagamentos e catálogo com agentes dedicados",
     "repoPath": ".",
     "createdAt": "2026-10-21T19:54:51.375Z"
+  },
+  {
+    "id": "proj-318161",
+    "name": "Portifólio",
+    "description": "",
+    "repoPath": ".",
+    "createdAt": "2026-10-22T11:25:18.161Z"
+  },
+  {
+    "id": "proj-550857",
+    "name": "teste",
+    "description": "",
+    "repoPath": ".",
+    "createdAt": "2026-10-22T11:29:10.857Z"
   }
 ]

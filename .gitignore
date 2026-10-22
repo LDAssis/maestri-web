@@ -7,3 +7,7 @@ dist
 *.tsbuildinfo
 .maestri_data/canvas_*.json
 .maestri-roles/
+
+.maestri_data/settings_*.json
+.playwright-mcp/
+portfolio/

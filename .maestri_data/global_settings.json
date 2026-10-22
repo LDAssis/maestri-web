@@ -1,0 +1,23 @@
+{
+  "defaultCmd": "echo json",
+  "cliPresets": [
+    {
+      "id": "agy",
+      "label": "agy",
+      "cmd": "agy --dangerously-skip-permissions",
+      "color": "purple"
+    },
+    {
+      "id": "claude",
+      "label": "claude",
+      "cmd": "claude",
+      "color": "amber"
+    },
+    {
+      "id": "opencode",
+      "label": "opencode",
+      "cmd": "opencode",
+      "color": "emerald"
+    }
+  ]
+}
