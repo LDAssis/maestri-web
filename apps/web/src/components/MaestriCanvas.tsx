@@ -42,6 +42,8 @@ import DiffNode, { DiffNodeData } from "./DiffNode";
 import NewAgentSheet from "./NewAgentSheet";
 import FloorSwitcher from "./FloorSwitcher";
 import { useFloors, GROUND } from "@/lib/useFloors";
+import { FloorNavContext } from "@/lib/floorContext";
+import { hitStack, stackOps, uniqueStackTitle } from "@/lib/noteStack";
 import RolesPanel from "./RolesPanel";
 import { CommandPalette, ContextMenu, ShortcutsHelp, MenuState } from "./CanvasOverlays";
 import { Download, Upload, Plus, UserCog, RefreshCw, StickyNote, Globe, FolderTree, FileDiff, Bell } from "lucide-react";
@@ -595,6 +597,32 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     sendOp({ kind: "upsertNodes", nodes: [newNode] });
   };
 
+  const addNoteStack = (at?: { x: number; y: number }) => {
+    const newNode: Node<any> = {
+      id: `stack-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+      type: "noteStack",
+      position: at ?? getSpawnPosition(300, 220),
+      style: { width: 300, height: 220 },
+      data: withFloor({ title: uniqueStackTitle(nodesRef.current as any) }),
+    };
+    setNodes((nds) => [...nds, newNode]);
+    sendOp({ kind: "upsertNodes", nodes: [newNode] });
+  };
+
+  // Soltar uma nota sobre um fichário a guarda nele (data.stackId; as arestas da nota passam para o fichário)
+  const onNodeDragStop = (_: unknown, node: Node<any>) => {
+    presence.setActive(null, "viewing");
+    if (node.type !== "stickyNote" || (node.data as any)?.stackId) return;
+    const target = hitStack(node as any, nodesRef.current as any, floorOfNode as any);
+    if (!target) return;
+    const ops = stackOps(node.id, target.id, edgesRef.current);
+    setNodes((nds) => nds.map((n) => (n.id === node.id ? { ...n, data: { ...n.data, ...ops.data } } : n)));
+    setEdges((eds) => [...eds.filter((e) => !ops.removeEdgeIds.includes(e.id)), ...(ops.addEdges as Edge[])]);
+    sendOp({ kind: "patchNodeData", id: node.id, data: ops.data });
+    if (ops.removeEdgeIds.length) sendOp({ kind: "removeEdges", ids: ops.removeEdgeIds });
+    if (ops.addEdges.length) sendOp({ kind: "upsertEdges", edges: ops.addEdges as any });
+  };
+
   const addPortal = (at?: { x: number; y: number }) => {
     const newId = `portal-${Date.now().toString().slice(-4)}`;
     const newNode: Node<PortalNodeData> = {
@@ -894,6 +922,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
             { label: "Novo agente", run: () => addAgent() },
             { label: "Nova nota", run: () => addStickyNote() },
             { label: "Novo portal", run: () => addPortal() },
+            { label: "Novo fichário", run: () => addNoteStack() },
             { label: "Nova árvore de arquivos", run: () => addFileTree() },
             { label: "Novo diff", run: () => addDiff() },
             { label: "Exportar partitura", run: () => exportPartitura() },
@@ -920,7 +949,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         <ContextMenu
           menu={menu}
           onClose={() => setMenu(null)}
-          onAdd={(kind, at) => (kind === "agent" ? addAgent(at) : kind === "note" ? addStickyNote(at) : kind === "fileTree" ? addFileTree(at) : kind === "diff" ? addDiff(at) : addPortal(at))}
+          onAdd={(kind, at) => (kind === "agent" ? addAgent(at) : kind === "note" ? addStickyNote(at) : kind === "fileTree" ? addFileTree(at) : kind === "diff" ? addDiff(at) : kind === "noteStack" ? addNoteStack(at) : addPortal(at))}
           onDuplicate={duplicateNode}
           onExport={exportPartitura}
           onImport={openImport}
@@ -943,6 +972,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       {/* O Canvas Principal com React Flow */}
       {loadState === "ready" && (
       <ProjectIdContext.Provider value={projectId}>
+      <FloorNavContext.Provider value={setFloor}>
       <CanvasOpsContext.Provider value={sendOp as any}>
       <ReactFlow
         nodes={displayNodes}
@@ -969,7 +999,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         }}
         onMouseLeave={() => presence.sendCursor(null)}
         onNodeDragStart={(_, node) => presence.setActive(node.id, "dragging")}
-        onNodeDragStop={() => presence.setActive(null, "viewing")}
+        onNodeDragStop={onNodeDragStop}
         defaultViewport={initialViewport}
         fitView={!initialViewport}
         onMoveEnd={(event, v) => {
@@ -1005,6 +1035,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         />
       </ReactFlow>
       </CanvasOpsContext.Provider>
+      </FloorNavContext.Provider>
       </ProjectIdContext.Provider>
       )}
     </div>

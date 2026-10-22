@@ -1,12 +1,13 @@
 "use client";
 
-import React, { useContext, useState } from "react";
+import React, { useContext, useRef, useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow, useStore } from "@xyflow/react";
 import { Layers, ChevronsUpDown, ArrowUpFromLine, Lock } from "lucide-react";
 import DeleteNodeButton from "./DeleteNodeButton";
 import Markdown from "./Markdown";
 import { NOTE_STYLE, ICON_MAP } from "./palette";
 import { CanvasOpsContext } from "@/lib/canvasOps";
+import { unstackOps } from "@/lib/noteStack";
 
 export interface NoteStackData extends Record<string, unknown> {
   title: string;
@@ -16,7 +17,7 @@ export interface NoteStackData extends Record<string, unknown> {
 
 // Fichário: pilha de páginas (notas com data.stackId === id do fichário, escondidas no canvas)
 export default function NoteStackNode({ id, data }: { id: string; data: NoteStackData }) {
-  const { setNodes, setEdges, getEdges, getNode, updateNodeData } = useReactFlow();
+  const { setNodes, setEdges, getEdges, getNode, updateNodeData, screenToFlowPosition } = useReactFlow();
   const sendOp = useContext(CanvasOpsContext);
   // Seletor estável: só as páginas deste fichário (comparadas por referência dos nós)
   const pages = useStore(
@@ -29,25 +30,32 @@ export default function NoteStackNode({ id, data }: { id: string; data: NoteStac
   const Icon = (data.icon && ICON_MAP[data.icon]) || Layers;
   const colorStyles = NOTE_STYLE[data.color ?? "indigo"] ?? NOTE_STYLE.indigo;
 
-  // Tira a nota do fichário: volta ao canvas ao lado dele e herda as ligações do fichário
-  const unstack = (noteId: string) => {
+  // Tira a nota do fichário: volta ao canvas (ao lado do fichário ou onde foi solta) e herda as ligações dele
+  const unstack = (noteId: string, at?: { x: number; y: number }) => {
     const self = getNode(id);
     if (!self) return;
     const w = Number(self.measured?.width ?? self.width ?? 300);
-    const position = { x: self.position.x + w + 40, y: self.position.y };
-    updateNodeData(noteId, { stackId: null });
-    setNodes((nds) => nds.map((n) => (n.id === noteId ? { ...n, hidden: false, position } : n)));
-    sendOp({ kind: "upsertNodes", nodes: [{ id: noteId, hidden: false, position }] });
-    const links = Array.from(new Set(getEdges().filter((e) => e.source === id || e.target === id).map((e) => (e.source === id ? e.target : e.source))));
-    const edges = links.map((o) => ({ id: `e-${noteId}-${o}`, source: noteId, target: o }));
-    if (edges.length) {
-      setEdges((eds) => [...eds, ...edges.filter((e) => !eds.some((x) => x.id === e.id))]);
-      sendOp({ kind: "upsertEdges", edges });
+    const position = at ?? { x: self.position.x + w + 40, y: self.position.y };
+    const ops = unstackOps(noteId, id, getEdges());
+    updateNodeData(noteId, ops.data);
+    setNodes((nds) => nds.map((n) => (n.id === noteId ? { ...n, position } : n)));
+    sendOp({ kind: "upsertNodes", nodes: [{ id: noteId, position }] });
+    if (ops.addEdges.length) {
+      setEdges((eds) => [...eds, ...ops.addEdges]);
+      sendOp({ kind: "upsertEdges", edges: ops.addEdges });
     }
   };
 
+  // Arrastar uma aba para fora do fichário a tira e a solta onde o ponteiro parou
+  const rootRef = useRef<HTMLDivElement>(null);
+  const onTabDragEnd = (noteId: string, e: React.DragEvent) => {
+    const r = rootRef.current?.getBoundingClientRect();
+    if (!r || (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom)) return;
+    unstack(noteId, screenToFlowPosition({ x: e.clientX, y: e.clientY }));
+  };
+
   return (
-    <div className={`w-full h-full min-w-[240px] min-h-[160px] rounded-2xl border p-3 shadow-2xl backdrop-blur-md font-sans flex flex-col ${colorStyles}`}>
+    <div ref={rootRef} className={`w-full h-full min-w-[240px] min-h-[160px] rounded-2xl border p-3 shadow-2xl backdrop-blur-md font-sans flex flex-col ${colorStyles}`}>
       <NodeResizer minWidth={240} minHeight={160} isVisible lineClassName="!border-amber-400" handleClassName="!h-3 !w-3 !bg-amber-400 !border-2 !border-slate-900 !rounded" />
       <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-amber-400 !border-2 !border-slate-900" />
 
@@ -97,6 +105,9 @@ export default function NoteStackNode({ id, data }: { id: string; data: NoteStac
               <button
                 key={p.id}
                 role="tab"
+                draggable
+                onDragEnd={(e) => onTabDragEnd(p.id, e)}
+                title="Arraste para fora para tirar do fichário"
                 aria-selected={p.id === active?.id}
                 onClick={() => setActiveId(p.id)}
                 className={`px-2 py-0.5 rounded-t text-[11px] whitespace-nowrap max-w-[140px] truncate focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70 ${
