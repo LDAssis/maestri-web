@@ -13,6 +13,8 @@ import {
   Plus,
   X,
 } from "lucide-react";
+import EntryGate, { ProfileMenu, MaestriUser } from "@/components/EntryGate";
+import { apiFetch } from "@/lib/api";
 
 interface Project {
   id: string;
@@ -31,7 +33,23 @@ const MaestriCanvas = dynamic(() => import("@/components/MaestriCanvas"), {
   ),
 });
 
-export default function App() {
+export default function Page() {
+  return (
+    <EntryGate>
+      {({ user, setUser, logout }) => <App user={user} setUser={setUser} logout={logout} />}
+    </EntryGate>
+  );
+}
+
+function App({
+  user,
+  setUser,
+  logout,
+}: {
+  user: MaestriUser;
+  setUser: (u: MaestriUser) => void;
+  logout: () => void;
+}) {
   const [activeTab, setActiveTab] = useState<"canvas" | "worktrees">("canvas");
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
@@ -45,7 +63,7 @@ export default function App() {
   const fetchProjects = async () => {
     setProjectsError("");
     try {
-      const res = await fetch("http://localhost:4000/api/projects");
+      const res = await apiFetch("/api/projects");
       if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);
       const data = await res.json();
       setProjects(data);
@@ -66,7 +84,7 @@ export default function App() {
     if (!newProjectName.trim()) return;
 
     try {
-      const res = await fetch("http://localhost:4000/api/projects", {
+      const res = await apiFetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -201,6 +219,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3">
+            <ProfileMenu user={user} onChange={setUser} onLogout={logout} />
             <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg p-1 text-xs">
               <button
                 onClick={() => setActiveTab("canvas")}
