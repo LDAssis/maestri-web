@@ -4,3 +4,4 @@ dist
 .worktrees
 .env
 .DS_Store
+*.tsbuildinfo

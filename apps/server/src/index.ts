@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import pty from "node-pty";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,14 +17,39 @@ process.on("unhandledRejection", (reason) => {
   console.error("Unhandled Rejection prevenida:", reason);
 });
 
-export const fastify = Fastify({ logger: true });
+// Loga só o pathname: a query do WS carrega ?token= e não pode ir para o log
+export const fastify = Fastify({
+  logger: { serializers: { req: (req) => ({ method: req.method, url: req.url.split("?")[0] }) } },
+});
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
   .split(",")
   .map((o) => o.trim())
   .filter(Boolean);
 
-await fastify.register(cors, { origin: allowedOrigins });
+// Token opcional: com ele, /api/* (exceto health) e WS exigem autenticação e o Origin é dispensado
+const authToken = process.env.MAESTRI_TOKEN || "";
+
+const tokenMatches = (given: unknown) => {
+  if (!authToken || typeof given !== "string") return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(authToken);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
+await fastify.register(cors, { origin: authToken ? true : allowedOrigins });
+
+fastify.get("/api/health", async () => ({ ok: true, authRequired: !!authToken }));
+
+fastify.addHook("onRequest", async (req, reply) => {
+  if (!authToken || req.method === "OPTIONS") return;
+  const pathname = req.url.split("?")[0];
+  if (!pathname.startsWith("/api/") || pathname === "/api/health") return;
+  const match = /^Bearer (.+)$/.exec(req.headers.authorization || "");
+  if (!tokenMatches(match?.[1])) {
+    return reply.code(401).send({ error: "Token ausente ou inválido" });
+  }
+});
 await fastify.register(websocket);
 
 const isWindows = process.platform === "win32";
@@ -185,13 +211,21 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
   });
 
   // Navegadores sempre enviam Origin; clientes sem Origin (CLI/ws) não são alvo de CSRF
-  const origin = req.headers.origin;
-  if (origin && !allowedOrigins.includes(origin)) {
-    socket.close(1008, "Origin não permitido");
-    return;
+  const url = new URL(req.url, "http://localhost");
+
+  if (authToken) {
+    if (!tokenMatches(url.searchParams.get("token"))) {
+      socket.close(4401, "Token inválido");
+      return;
+    }
+  } else {
+    const origin = req.headers.origin;
+    if (origin && !allowedOrigins.includes(origin)) {
+      socket.close(1008, "Origin não permitido");
+      return;
+    }
   }
 
-  const url = new URL(req.url, "http://localhost");
   const rawCwd = url.searchParams.get("cwd")?.trim();
   let cwd = defaultRepo;
   if (rawCwd) {
@@ -307,7 +341,13 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
 const port = Number(process.env.PORT) || 4000;
 const host = process.env.HOST || "127.0.0.1";
 
+const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(host);
+
 const start = async () => {
+  if (!isLoopback && !authToken) {
+    console.error(`Recusando subir em HOST=${host} sem MAESTRI_TOKEN. Defina MAESTRI_TOKEN ou use HOST=127.0.0.1.`);
+    process.exit(1);
+  }
   try {
     await fastify.listen({ port, host });
     console.log(`Maestri Server com ConPTY Blindado rodando em http://${host}:${port}`);

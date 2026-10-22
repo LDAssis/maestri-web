@@ -4,6 +4,7 @@ import React, { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { wsUrl } from "@/lib/api";
 
 interface TerminalViewProps {
   cwd?: string;
@@ -46,10 +47,7 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
     termRef.current = term;
 
     // Conecta via WebSocket ao Fastify Terminal
-    const wsUrl = `ws://localhost:4000/ws/terminal?cwd=${encodeURIComponent(
-      cwd || ""
-    )}&cmd=${encodeURIComponent(initialCmd || "")}`;
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(wsUrl("/ws/terminal", { cwd: cwd || "", cmd: initialCmd || "" }));
     socketRef.current = ws;
 
     ws.onmessage = (event) => {

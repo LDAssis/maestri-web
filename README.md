@@ -69,6 +69,21 @@ npm run dev
 
 Acesse: **[http://localhost:3000](http://localhost:3000)**
 
+### Modo colaborativo
+Para vários usuários na mesma rede usarem o mesmo canvas:
+
+```bash
+# Backend: expõe na rede (HOST não-loopback exige MAESTRI_TOKEN)
+cd apps/server
+HOST=0.0.0.0 MAESTRI_TOKEN=um-segredo-forte npm run dev
+
+# Frontend: escuta em todas as interfaces
+cd apps/web
+npm run dev:lan
+```
+
+Acesse por **http://&lt;ip-da-maquina&gt;:3000**. Cada pessoa informa o token e escolhe nome e cor na primeira visita. Se a API estiver em outro endereço, defina `NEXT_PUBLIC_API_URL`. `GET /api/health` é público; as demais rotas `/api/*` exigem `Authorization: Bearer <token>` e os WebSockets, `?token=<token>`.
+
 ---
 
 ## 📜 Licença

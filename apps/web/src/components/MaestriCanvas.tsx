@@ -18,6 +18,7 @@ import {
   ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { apiFetch } from "@/lib/api";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
 import PortalNode, { PortalNodeData } from "./PortalNode";
@@ -215,7 +216,7 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
     setLoadState("loading");
     setLoadError("");
     try {
-      const res = await fetch(`http://localhost:4000/api/projects/${projectId}/canvas`);
+      const res = await apiFetch(`/api/projects/${projectId}/canvas`);
       if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);
       const data = await res.json();
       const hasNodes = Array.isArray(data?.nodes) && data.nodes.length > 0;
@@ -253,7 +254,7 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
       if (auto && body === lastSavedRef.current) return;
       flashStatus(auto ? "Salvando automaticamente..." : "Salvando...");
       try {
-        const res = await fetch(`http://localhost:4000/api/projects/${projectId}/canvas`, {
+        const res = await apiFetch(`/api/projects/${projectId}/canvas`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body,
