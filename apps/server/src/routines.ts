@@ -4,6 +4,7 @@ import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import type { Session, SessionManager } from "./sessions.js";
+import { resolveInside } from "./projectDirs.js";
 
 type Obj = Record<string, any>;
 
@@ -154,7 +155,7 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, da
       } else {
         try {
           const existing = sessions.get(projectId, node.id);
-          const session = sessions.ensure(projectId, node.id, { cwd: node.data?.worktreePath || projectRepo(projectId)!, cmd: node.data?.defaultCmd || "" });
+          const session = sessions.ensure(projectId, node.id, { cwd: resolveInside(projectRepo(projectId)!, node.data?.worktreePath), cmd: node.data?.defaultCmd || "" });
           if (!existing) await settle(session);
           const input = r.text.includes("\n") ? `\x1b[200~${r.text}\x1b[201~\r` : `${r.text}\r`;
           const res = await typeAndWait(sessions, session, input, 600, () => stopped);

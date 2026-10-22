@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { isInside } from "./projectDirs.js";
 
 interface Deps {
   fastify: FastifyInstance;
@@ -55,7 +56,9 @@ export function registerFilesApi({ fastify, projectRepo }: Deps) {
         if (typeof root !== "string" || (root !== "main" && !NAME_RE.test(root))) throw new ApiError(400, "Raiz inválida (main ou nome de um andar).");
         const dir = root === "main" ? repo : path.join(repo, ".worktrees", root);
         if (root !== "main" && !(fs.existsSync(dir) && fs.statSync(dir).isDirectory())) throw new ApiError(404, `Andar "${root}" não encontrado.`);
-        return await fn({ repo, root, dir: fs.realpathSync(dir) }, req);
+        const real = fs.realpathSync(dir);
+        if (!isInside(fs.realpathSync(repo), real)) throw new ApiError(404, `Andar "${root}" não encontrado.`);
+        return await fn({ repo, root, dir: real }, req);
       } catch (e: any) {
         if (e instanceof ApiError) return reply.status(e.status).send({ error: e.message });
         req.log.error(e);

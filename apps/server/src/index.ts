@@ -14,6 +14,7 @@ import { PresenceHub } from "./presence.js";
 import { registerNodeApi, typeAndWait, chatBusy } from "./nodeApi.js";
 import { registerRoutinesApi } from "./routines.js";
 import { registerFilesApi } from "./files.js";
+import { createProjectDir, findConflict, isInside, migrateProjects, overlaps, resolveInside } from "./projectDirs.js";
 
 // Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
 process.on("uncaughtException", (err) => {
@@ -109,6 +110,15 @@ if (projects.length === 0) {
 // repoPath relativo (ex.: ".") é resolvido a partir de defaultRepo, para o projects.json ser portátil
 projects = projects.map((p) => ({ ...p, repoPath: path.resolve(defaultRepo, p.repoPath) }));
 
+// Isolamento: dois projetos nunca compartilham diretório (igual/aninhado). O primeiro mantém o dele; os demais ganham pasta própria.
+{
+  const migrated = await migrateProjects(projects);
+  if (migrated.changed) {
+    projects = migrated.projects;
+    saveProjects();
+  }
+}
+
 function writeJsonAtomic(file: string, data: unknown) {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
@@ -116,13 +126,9 @@ function writeJsonAtomic(file: string, data: unknown) {
 }
 
 function saveProjects() {
-  // Grava repoPath relativo a defaultRepo para o projects.json continuar portátil
-  writeJsonAtomic(projectsFile, projects.map((p) => ({ ...p, repoPath: path.relative(defaultRepo, p.repoPath) || "." })));
-}
-
-function isInside(parent: string, child: string) {
-  const rel = path.relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  // Dentro de defaultRepo grava relativo (portátil); fora dele, absoluto
+  const stored = (repoPath: string) => (isInside(defaultRepo, repoPath) ? path.relative(defaultRepo, repoPath) || "." : repoPath);
+  writeJsonAtomic(projectsFile, projects.map((p) => ({ ...p, repoPath: stored(p.repoPath) })));
 }
 
 function canvasFileFor(id: string) {
@@ -160,20 +166,36 @@ fastify.get("/api/projects", async () => {
 });
 
 fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }>("/api/projects", async (req, reply) => {
-  const { name, description = "", repoPath = defaultRepo } = req.body ?? {};
-  if (!name || typeof name !== "string") {
+  const { name, description = "", repoPath } = req.body ?? {};
+  if (!name || typeof name !== "string" || !name.trim()) {
     return reply.status(400).send({ error: "Nome do projeto é obrigatório." });
   }
 
-  const id = `proj-${Date.now().toString().slice(-6)}`;
-  const newProject: Project = {
-    id,
-    name,
-    description,
-    repoPath: path.resolve(repoPath),
-    createdAt: new Date().toISOString(),
-  };
+  let id = `proj-${Date.now().toString().slice(-6)}`;
+  while (projects.some((p) => p.id === id)) id = `proj-${Math.random().toString(36).slice(2, 8)}`;
 
+  let dir: string;
+  if (repoPath === undefined || repoPath === null || repoPath === "") {
+    // Sem repoPath: pasta nova só deste projeto (com git)
+    dir = await createProjectDir(name, id);
+  } else {
+    if (typeof repoPath !== "string") return reply.status(400).send({ error: "repoPath deve ser texto." });
+    try {
+      dir = fs.realpathSync(path.resolve(repoPath));
+      if (!fs.statSync(dir).isDirectory()) throw new Error("não é diretório");
+    } catch {
+      return reply.status(400).send({ error: `repoPath não existe ou não é um diretório: ${repoPath}` });
+    }
+    const other = findConflict(dir, projects);
+    if (other) {
+      return reply.status(409).send({ error: `O diretório conflita com o projeto "${other.name}" (${other.repoPath}): projetos não podem compartilhar pastas.` });
+    }
+    if (overlaps(dir, dataDir)) {
+      return reply.status(409).send({ error: "O diretório contém os dados internos do Maestri (.maestri_data); escolha outra pasta." });
+    }
+  }
+
+  const newProject: Project = { id, name, description, repoPath: dir, createdAt: new Date().toISOString() };
   projects.push(newProject);
   saveProjects();
   return { ok: true, project: newProject };
@@ -184,10 +206,12 @@ fastify.delete<{ Params: { id: string } }>("/api/projects/:id", async (req, repl
   if (idx === -1) {
     return reply.status(404).send({ error: "Projeto não encontrado." });
   }
+  const canvasFile = canvasFileFor(req.params.id);
   projects.splice(idx, 1);
   saveProjects();
   sessions.killProject(req.params.id);
   canvas.drop(req.params.id);
+  if (canvasFile) fs.rmSync(canvasFile, { force: true });
   routines.removeProject(req.params.id);
   return { ok: true };
 });
@@ -272,21 +296,8 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
     return;
   }
 
-  const rawCwd = url.searchParams.get("cwd")?.trim();
-  let cwd = projects.find((p) => p.id === projectId)?.repoPath ?? defaultRepo;
-  if (rawCwd) {
-    try {
-      const real = fs.realpathSync(path.resolve(rawCwd));
-      const allowed = [defaultRepo, ...projects.map((p) => p.repoPath)].some((root) => {
-        try {
-          return isInside(fs.realpathSync(root), real);
-        } catch {
-          return false;
-        }
-      });
-      if (allowed && fs.statSync(real).isDirectory()) cwd = real;
-    } catch {}
-  }
+  // O cwd só vale dentro do repoPath do PRÓPRIO projeto (andares ficam em <repo>/.worktrees); senão cai no repoPath
+  const cwd = resolveInside(projects.find((p) => p.id === projectId)!.repoPath, url.searchParams.get("cwd"));
 
   sessions.attach(socket, projectId, nodeId, { cwd, cmd: url.searchParams.get("cmd") || "" });
 });
