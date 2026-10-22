@@ -242,10 +242,11 @@ export class SessionManager {
     for (const s of [...this.sessions.values()]) this.end(s, "killed");
   }
 
-  // Recria o PTY com o mesmo cwd/cmd; os clientes continuam anexados
-  restart(projectId: string, nodeId: string) {
+  // Recria o PTY com o mesmo cmd (e o mesmo cwd, salvo se informado); os clientes continuam anexados
+  restart(projectId: string, nodeId: string, cwd?: string) {
     const s = this.sessions.get(this.key(projectId, nodeId));
     if (!s) return false;
+    if (cwd) s.cwd = cwd;
     const old = s.pty;
     const p = spawnPty(s.cwd, s.cols, s.rows, this.env(projectId, nodeId));
     s.pty = p;

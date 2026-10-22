@@ -6,8 +6,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { WorktreeManager, WorktreeSession } from "./worktree.js";
 import { SessionManager } from "./sessions.js";
+import { registerWorktreeApi } from "./worktrees.js";
 import { CanvasStore } from "./canvas.js";
 import { PresenceHub } from "./presence.js";
 import { registerNodeApi } from "./nodeApi.js";
@@ -145,6 +145,7 @@ fastify.addHook("onClose", async () => {
 const idPattern = /^[\w-]+$/;
 
 registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
+registerWorktreeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
 
 // Endpoints de Projetos
 fastify.get("/api/projects", async () => {
@@ -264,7 +265,7 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
   }
 
   const rawCwd = url.searchParams.get("cwd")?.trim();
-  let cwd = defaultRepo;
+  let cwd = projects.find((p) => p.id === projectId)?.repoPath ?? defaultRepo;
   if (rawCwd) {
     try {
       const real = fs.realpathSync(path.resolve(rawCwd));

@@ -528,7 +528,6 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         role: "DevOps / Worker CLI",
         model: "Claude 3.5 Sonnet",
         status: "idle",
-        branch: `agent/${newId}`,
         defaultCmd: `echo 'Agente inicializado'`,
       },
     };

@@ -4,6 +4,7 @@ import React, { useContext, useEffect, useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import {
   Terminal,
+  GitBranch,
   ShieldCheck,
   Cpu,
   Code2,
@@ -36,6 +37,7 @@ export interface AgentNodeData extends Record<string, unknown> {
   model: string;
   status: "idle" | "running" | "done" | "waiting";
   branch?: string;
+  worktree?: string;
   worktreePath?: string;
   defaultCmd?: string;
   isMaestro?: boolean;
@@ -62,6 +64,8 @@ export default function AgentTerminalNode({
   });
   const [showCli, setShowCli] = useState(false);
   const [termStatus, setTermStatus] = useState<TerminalStatus>("conectando");
+  const [wtBusy, setWtBusy] = useState(false);
+  const [wtError, setWtError] = useState("");
   const isMaestro = Boolean(nodeData.isMaestro);
   const chat = nodeData.chat || [];
   const agentCount = chat.filter((m) => m.role === "agent").length;
@@ -85,6 +89,23 @@ export default function AgentTerminalNode({
     } catch {}
   }, [activeFace, agentCount, seen, seenKey]);
   const unread = activeFace === "chat" || seen === null ? 0 : Math.max(0, agentCount - seen);
+
+  const createWorktree = async () => {
+    setWtBusy(true);
+    setWtError("");
+    try {
+      const res = await apiFetch(`/api/projects/${projectId}/worktrees`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodeId: id }),
+      });
+      if (!res.ok) setWtError((await res.json().catch(() => ({})))?.error || `Servidor respondeu ${res.status}`);
+    } catch {
+      setWtError("Servidor indisponível");
+    } finally {
+      setWtBusy(false);
+    }
+  };
 
   const getStatusColor = () => {
     switch (nodeData.status) {
@@ -245,10 +266,37 @@ export default function AgentTerminalNode({
 
       {/* Footer bar */}
       <div className="relative px-3 py-1 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 font-mono shrink-0">
-        <span className="flex items-center gap-1 text-indigo-400 truncate max-w-[200px]">
-          <Terminal className="h-3 w-3" />
-          {nodeData.branch || "worktree isolado"}
-        </span>
+        {nodeData.worktree ? (
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent("maestri:open-diff", { detail: nodeData.worktree }))}
+            className="nodrag flex items-center gap-1 text-indigo-400 hover:text-indigo-300 truncate max-w-[200px]"
+            title="Ver diff do andar"
+            aria-label={`Ver diff do andar ${nodeData.branch}`}
+          >
+            <GitBranch className="h-3 w-3" />
+            {nodeData.branch}
+          </button>
+        ) : (
+          <span className="flex items-center gap-2 truncate">
+            <span className="flex items-center gap-1 text-slate-500">
+              <Terminal className="h-3 w-3" />
+              repo principal
+            </span>
+            <button
+              onClick={createWorktree}
+              disabled={wtBusy}
+              className="nodrag rounded border border-slate-700 px-1.5 text-indigo-300 hover:border-indigo-500 disabled:opacity-40"
+              title="Isolar este agente num git worktree próprio"
+            >
+              {wtBusy ? "Criando…" : "Criar andar"}
+            </button>
+            {wtError && (
+              <span role="alert" className="text-amber-300 truncate" title={wtError}>
+                {wtError}
+              </span>
+            )}
+          </span>
+        )}
         {showCli && (
           <div
             role="dialog"

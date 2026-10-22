@@ -16,6 +16,7 @@ import {
 import EntryGate, { ProfileMenu, MaestriUser } from "@/components/EntryGate";
 import { apiFetch } from "@/lib/api";
 import { Peer, PresenceProvider } from "@/lib/presence";
+import WorktreesPanel from "@/components/WorktreesPanel";
 import { PresenceStack, PresenceToasts } from "@/components/PresenceUI";
 
 interface Project {
@@ -60,6 +61,7 @@ function App({
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDesc, setNewProjectDesc] = useState("");
 
+  const [diffFocus, setDiffFocus] = useState<string | null>(null);
   const [projectsError, setProjectsError] = useState("");
   const [focus, setFocus] = useState<{ x?: number; y?: number; nodeId?: string | null; nonce: number } | undefined>();
 
@@ -89,6 +91,16 @@ function App({
 
   useEffect(() => {
     fetchProjects();
+  }, []);
+
+  // Atalho 'ver diff' dos nós de agente no canvas
+  useEffect(() => {
+    const h = (e: Event) => {
+      setDiffFocus((e as CustomEvent<string>).detail);
+      setActiveTab("worktrees");
+    };
+    window.addEventListener("maestri:open-diff", h);
+    return () => window.removeEventListener("maestri:open-diff", h);
   }, []);
 
   const handleCreateProject = async (e: React.FormEvent) => {
@@ -292,23 +304,17 @@ function App({
                 Selecione um projeto para abrir o canvas.
               </div>
             )
+          ) : activeProject ? (
+            <WorktreesPanel
+              key={activeProject.id}
+              projectId={activeProject.id}
+              repoPath={activeProject.repoPath}
+              clientId={user.id}
+              focusName={diffFocus}
+            />
           ) : (
-            <div className="h-full flex items-center justify-center p-8 text-center bg-[#080d1a]">
-              <div className="max-w-md p-6 rounded-2xl border border-slate-800 bg-slate-900/60">
-                <FolderGit2 className="h-10 w-10 text-indigo-400 mx-auto mb-3" />
-                <h3 className="text-base font-semibold text-white mb-2">
-                  Worktrees de {activeProject?.name}
-                </h3>
-                <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-                  Repositório: <span className="font-mono text-indigo-300">{activeProject?.repoPath}</span>
-                </p>
-                <div className="text-xs font-mono bg-black/60 p-3 rounded-lg border border-slate-800 text-left text-slate-300">
-                  <div>$ git worktree list</div>
-                  <div className="text-emerald-400">&gt; main (ambiente base)</div>
-                  <div className="text-indigo-400">&gt; agent/{activeProject?.id}-backend</div>
-                  <div className="text-purple-400">&gt; agent/{activeProject?.id}-frontend</div>
-                </div>
-              </div>
+            <div className="flex h-full items-center justify-center text-xs text-slate-500 font-mono">
+              Selecione um projeto para ver os andares.
             </div>
           )}
         </div>
