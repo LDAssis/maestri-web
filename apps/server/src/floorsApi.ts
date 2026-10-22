@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -24,6 +25,27 @@ const STATUS_MAX = 120;
 const NAME_MAX = 60;
 // Não vão para a worktree nova: dependências e saída de build (mesmo sem estarem no .gitignore)
 const SKIP_COPY = /(^|\/)(node_modules|\.next|dist|build|out|target|\.turbo|\.cache|__pycache__|\.venv|\.worktrees|\.maestri_data|\.git)(\/|$)/;
+// GitHub CLI (gh): erros viram mensagens claras; o JSON de `gh pr view` vem em stdout
+function gh(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("gh", args, { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 30_000 }, (err, stdout, stderr) => {
+      if (!err) return resolve(stdout);
+      if ((err as any).code === "ENOENT") return reject(new ApiError(409, "O GitHub CLI (gh) não está instalado ou não está no PATH."));
+      const msg = (stderr || stdout || err.message).trim();
+      if (/gh auth login|not logged in|authentication|GH_TOKEN/i.test(msg)) return reject(new ApiError(409, "O gh não está autenticado (rode `gh auth login`)."));
+      reject(new ApiError(409, `gh falhou: ${msg}`));
+    });
+  });
+}
+
+// "42", "#42" ou link do PR → número
+export function parsePrRef(v: unknown): number {
+  const s = String(v ?? "").trim();
+  const m = /^#?(\d+)$/.exec(s) ?? /\/(?:pull|pulls)\/(\d+)(?:[/?#].*)?$/.exec(s);
+  if (!m || Number(m[1]) < 1) throw new ApiError(400, "Pull request inválido (use o número, #número ou o link).");
+  return Number(m[1]);
+}
+
 const BLOCKING = new Set<FloorState>(["blocked", "review", "done"]);
 
 // "2/5", "40%" ou "0.4" → 0..1
@@ -108,46 +130,124 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
     const f = floors.read(projectId);
     return [
       { name: GROUND, ground: true, git: true, branch: await currentBranch(repo), path: repo, nodes: count(GROUND), status: f.ground ?? null },
-      ...f.floors.map((x) => ({ name: x.name, ground: false, git: x.git, branch: x.branch, path: x.path ?? repo, nodes: count(x.name), status: x.status ?? null })),
+      ...f.floors.map((x) => ({ name: x.name, ground: false, git: x.git, branch: x.branch, path: x.path ?? repo, nodes: count(x.name), status: x.status ?? null, copy: x.copy === true, pullRequest: x.pullRequest ?? null })),
     ];
   }
 
   // --- criar ---
-  interface CreateOpts { name: unknown; branch?: unknown; existingBranch?: boolean; noGit?: boolean; copyGround?: boolean }
+  interface CreateOpts { name?: unknown; branch?: unknown; existingBranch?: boolean; noGit?: boolean; copyGround?: boolean; copy?: boolean; pullRequest?: unknown }
+
+  const branchExists = (repo: string, b: string) => git(repo, ["rev-parse", "-q", "--verify", `refs/heads/${b}`]).then(() => true, () => false);
+
+  // Pull request: valida com o gh, traz a branch para o repositório e devolve a branch do andar
+  async function resolvePullRequest(repo: string, ref: unknown) {
+    const n = parsePrRef(ref);
+    let pr: Obj;
+    try {
+      pr = JSON.parse(await gh(repo, ["pr", "view", String(n), "--json", "number,title,state,url,headRefName,headRepositoryOwner,isCrossRepository"]));
+    } catch (e: any) {
+      if (e instanceof ApiError) throw e;
+      throw new ApiError(409, "Resposta inesperada do gh.");
+    }
+    if (String(pr.state).toUpperCase() !== "OPEN") throw new ApiError(409, `O pull request #${n} não está aberto (${String(pr.state).toLowerCase()}).`);
+    return { number: n, title: String(pr.title ?? ""), url: String(pr.url ?? ""), head: String(pr.headRefName ?? ""), fork: pr.isCrossRepository === true };
+  }
+
+  async function fetchPrBranch(repo: string, pr: { number: number; head: string; fork: boolean }) {
+    if (pr.fork) {
+      const branch = `pr-${pr.number}`;
+      try {
+        await git(repo, ["fetch", "origin", `pull/${pr.number}/head:${branch}`]);
+      } catch (e: any) {
+        throw new ApiError(409, `Não foi possível trazer o pull request #${pr.number} (a branch local ${branch} divergiu ou está em uso?): ${e.message}`);
+      }
+      return { branch, note: `Pull request de fork: o andar tem uma cópia dos commits em ${branch}; commits feitos aqui não chegam ao PR.` };
+    }
+    const branch = pr.head;
+    if (!(await git(repo, ["check-ref-format", "--branch", branch]).then(() => true, () => false))) throw new ApiError(409, `Branch do PR inválida: ${branch}`);
+    try {
+      await git(repo, ["fetch", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+    } catch (e: any) {
+      throw new ApiError(409, `Não foi possível trazer a branch ${branch} do PR: ${e.message}`);
+    }
+    const remote = (await git(repo, ["rev-parse", `refs/remotes/origin/${branch}`])).trim();
+    if (await branchExists(repo, branch)) {
+      if ((await git(repo, ["rev-parse", `refs/heads/${branch}`])).trim() !== remote) throw new ApiError(409, `A branch local ${branch} divergiu da do pull request; alinhe-a antes de criar o andar.`);
+    } else await git(repo, ["branch", "--track", branch, `refs/remotes/origin/${branch}`]);
+    return { branch, note: `Andar na branch ${branch} do pull request; commits enviados dela vão para o PR.` };
+  }
+
+  // Clone completo e isolado (--copy): pode estar na mesma branch do térreo
+  async function cloneFloor(repo: string, dest: string, branch: string | undefined, existing: boolean) {
+    try {
+      await git(repo, ["clone", "--local", "-q", repo, dest]);
+      if (branch !== undefined) await git(dest, existing ? ["checkout", "-q", branch] : ["checkout", "-q", "-b", branch]);
+    } catch (e: any) {
+      fs.rmSync(dest, { recursive: true, force: true });
+      throw new ApiError(409, `Falha ao clonar o andar: ${e.message}`);
+    }
+    return (await git(dest, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+  }
 
   const createFloor = (projectId: string, o: CreateOpts) => {
     const repo = repoOf(projectId);
     return locked(repo, async () => {
-      if (!isText(o.name, 200) || !o.name.trim()) throw new ApiError(400, "Informe o nome do andar.");
-      const name = o.name.trim();
+      const gitOk = await isGitRepo(repo);
+      let pr: Awaited<ReturnType<typeof resolvePullRequest>> | null = null;
+      if (o.pullRequest !== undefined) {
+        if (o.noGit || o.branch !== undefined || o.existingBranch) throw new ApiError(400, "--pull-request não combina com --branch, --existing-branch nem --no-git.");
+        if (!gitOk) throw new ApiError(409, "O projeto não é um repositório git; não há como revisar um pull request.");
+        pr = await resolvePullRequest(repo, o.pullRequest);
+        if (floors.read(projectId).floors.some((f) => f.pullRequest?.number === pr!.number)) throw new ApiError(409, `O pull request #${pr.number} já tem um andar.`);
+      }
+      const rawName = o.name !== undefined && o.name !== null && o.name !== "" ? o.name : pr ? `#${pr.number} ${pr.title}`.slice(0, NAME_MAX).trim() : undefined;
+      if (!isText(rawName, 400) || !rawName.trim()) throw new ApiError(400, "Informe o nome do andar.");
+      const name = rawName.trim();
       if (name.length > NAME_MAX || /[\x00-\x1f]/.test(name)) throw new ApiError(400, `Nome inválido (até ${NAME_MAX} caracteres, sem controle).`);
       if (sameFloor(name, GROUND) || floors.find(projectId, name)) throw new ApiError(409, `Já existe um andar chamado "${name}".`);
       if (o.branch !== undefined && (!isText(o.branch, 200) || !o.branch.trim())) throw new ApiError(400, "Branch inválida.");
       if (o.noGit && (o.branch !== undefined || o.existingBranch)) throw new ApiError(400, "--no-git não combina com --branch/--existing-branch.");
+      if (o.noGit && o.copy) throw new ApiError(400, "--no-git não combina com --copy.");
 
       let floor: Floor = { name, git: false, branch: null, path: null, createdAt: new Date().toISOString() };
       let note = "";
-      const gitOk = await isGitRepo(repo);
       if (o.noGit) note = "Andar sem git: compartilha o diretório do térreo.";
       else if (!gitOk) note = "O projeto não é um repositório git: andar sem isolamento (compartilha o diretório do térreo).";
       else {
-        const branch = (typeof o.branch === "string" ? o.branch.trim() : slug(name));
-        if (!(await git(repo, ["check-ref-format", "--branch", branch]).then(() => true, () => false))) throw new ApiError(400, `Nome de branch inválido: ${branch}`);
-        const exists = (await git(repo, ["branch", "--list", branch])).trim() !== "";
-        if (o.existingBranch && !exists) throw new ApiError(404, `A branch "${branch}" não existe.`);
-        if (!o.existingBranch && exists) throw new ApiError(409, `A branch "${branch}" já existe (use --existing-branch para usá-la).`);
+        let branch: string | undefined;
+        let existing = !!o.existingBranch;
+        if (pr) {
+          const r = await fetchPrBranch(repo, pr);
+          branch = r.branch;
+          existing = true;
+          note = r.note;
+        } else if (typeof o.branch === "string") branch = o.branch.trim();
+        else if (!o.copy) branch = slug(name);
+        // --copy sem --branch: o clone fica na mesma branch do térreo
+        if (branch !== undefined && !pr) {
+          if (!(await git(repo, ["check-ref-format", "--branch", branch]).then(() => true, () => false))) throw new ApiError(400, `Nome de branch inválido: ${branch}`);
+          const exists = await branchExists(repo, branch);
+          if (existing && !exists) throw new ApiError(404, `A branch "${branch}" não existe.`);
+          if (!existing && exists) throw new ApiError(409, `A branch "${branch}" já existe (use --existing-branch para usá-la).`);
+        }
         let dir = slug(name);
         for (let n = 2; fs.existsSync(path.join(repo, ".worktrees", dir)); n++) dir = `${slug(name)}-${n}`;
-        const wtPath = path.join(repo, ".worktrees", dir);
-        fs.mkdirSync(path.dirname(wtPath), { recursive: true });
-        try {
-          await git(repo, o.existingBranch ? ["worktree", "add", wtPath, branch] : ["worktree", "add", "-b", branch, wtPath, "HEAD"]);
-        } catch (e: any) {
-          throw new ApiError(409, `Falha ao criar o andar: ${e.message}`);
-        }
+        const dest = path.join(repo, ".worktrees", dir);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
         await hideWorktrees(repo);
-        const copied = await copyUntracked(repo, wtPath);
-        floor = { ...floor, git: true, branch, path: fs.realpathSync(wtPath), copied };
+        let finalBranch: string;
+        if (o.copy) {
+          finalBranch = await cloneFloor(repo, dest, branch, existing);
+        } else {
+          try {
+            await git(repo, existing ? ["worktree", "add", dest, branch!] : ["worktree", "add", "-b", branch!, dest, "HEAD"]);
+          } catch (e: any) {
+            throw new ApiError(409, `Falha ao criar o andar: ${e.message}`);
+          }
+          finalBranch = branch!;
+        }
+        const copied = await copyUntracked(repo, dest);
+        floor = { ...floor, git: true, branch: finalBranch, path: fs.realpathSync(dest), copied, ...(o.copy && { copy: true }), ...(pr && { pullRequest: { number: pr.number, url: pr.url, title: pr.title } }) };
       }
 
       floors.read(projectId).floors.push(floor);
@@ -167,7 +267,10 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
   // Remove o andar (worktree, nós, metadados). Sem force, uma falha ao remover a worktree deixa tudo intacto.
   async function removeFloor(projectId: string, f: Floor, o: { deleteBranch: boolean; force: boolean }) {
     const repo = repoOf(projectId);
-    if (f.git && f.path) {
+    if (f.copy && f.path) {
+      // Clone isolado: é só apagar o diretório (a branch dele não existe no repositório)
+      fs.rmSync(f.path, { recursive: true, force: true });
+    } else if (f.git && f.path) {
       try {
         await git(repo, ["worktree", "remove", "--force", f.path]);
       } catch (e: any) {
@@ -191,17 +294,51 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
     return Number((await git(repo, ["rev-list", "--count", `${base}..${f.branch}`]).catch(() => "0")).trim()) || 0;
   };
 
+  // Traz a branch do clone para um ref temporário do repositório; devolve o ref
+  async function fetchClone(repo: string, f: Floor) {
+    const ref = `refs/maestri/land/${slug(f.name)}`;
+    await git(repo, ["fetch", "-q", f.path!, `+refs/heads/${f.branch}:${ref}`]);
+    return ref;
+  }
+  const dropRef = (repo: string, ref: string) => git(repo, ["update-ref", "-d", ref]).catch(() => {});
+
+  // Commits do clone que ainda não estão na branch atual do térreo
+  async function copyAhead(repo: string, f: Floor) {
+    if (!f.path || !fs.existsSync(f.path)) return 0;
+    const ref = await fetchClone(repo, f);
+    try {
+      return Number((await git(repo, ["rev-list", "--count", `HEAD..${ref}`]).catch(() => "0")).trim()) || 0;
+    } finally {
+      await dropRef(repo, ref);
+    }
+  }
+
+  // Guarda o trabalho do clone numa branch do repositório (nome do andar se livre, senão maestri/<slug>)
+  async function preserveClone(repo: string, f: Floor) {
+    const ref = await fetchClone(repo, f);
+    try {
+      const name = !(await branchExists(repo, f.branch!)) ? f.branch! : `maestri/${slug(f.name)}`;
+      await git(repo, ["branch", "-f", name, ref]);
+      return name;
+    } finally {
+      await dropRef(repo, ref);
+    }
+  }
+
   const deleteFloor = (projectId: string, name: unknown, o: { keepBranch: boolean; force: boolean }) => {
     const repo = repoOf(projectId);
     return locked(repo, async () => {
       const f = getFloor(projectId, name);
       if (f.git && f.path && !o.force) {
         if (fs.existsSync(f.path) && (await dirty(f.path, false, f.copied))) throw new ApiError(409, `O andar "${f.name}" tem alterações não commitadas; commite/descarte ou use --force.`);
-        const ahead = await unmerged(repo, f);
+        const ahead = f.copy ? await copyAhead(repo, f) : await unmerged(repo, f);
         if (!o.keepBranch && ahead > 0) throw new ApiError(409, `A branch ${f.branch} tem ${ahead} commit(s) fora de ${await currentBranch(repo)}; use --keep-branch para preservá-la ou --force.`);
       }
+      let kept: string | null = f.git && !f.copy && o.keepBranch ? f.branch : null;
+      // Clone: --keep-branch traz os commits para o repositório numa branch antes de apagar o clone
+      if (f.copy && o.keepBranch && f.path && fs.existsSync(f.path)) kept = await preserveClone(repo, f);
       await removeFloor(projectId, f, { deleteBranch: !o.keepBranch, force: o.force });
-      return { ok: true, branch: f.git && o.keepBranch ? f.branch : null };
+      return { ok: true, branch: kept };
     });
   };
 
@@ -211,25 +348,41 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
     return locked(repo, async () => {
       const f = getFloor(projectId, name);
       if (!f.git || !f.path || !f.branch) throw new ApiError(409, `O andar "${f.name}" não tem isolamento git; não há o que landar (use delete).`);
+      if (f.copy && o.deleteBranch) throw new ApiError(400, "--delete-branch não se aplica a andares --copy (a branch vive no clone).");
       if (o.deleteBranch && !o.into) throw new ApiError(400, "--delete-branch só vale junto com --into.");
       if (o.deleteBranch && o.keepFloor) throw new ApiError(400, "--delete-branch não combina com --keep-floor (a branch está em uso pelo andar).");
       if (fs.existsSync(f.path) && (await dirty(f.path, false, f.copied))) throw new ApiError(409, `O andar "${f.name}" tem trabalho não commitado; peça ao agente para commitar e tente de novo.`);
       if (await dirty(repo, true)) throw new ApiError(409, "O térreo tem alterações não commitadas; commite ou descarte antes de fazer land.");
 
       let merged: string | null = null;
-      if (o.into) {
+      if (f.copy) {
+        // Clone: traz o trabalho de volta (fetch) e faz fast-forward/merge na branch alvo; sem --into, na branch do andar
+        const ref = await fetchClone(repo, f);
+        try {
+          const target = o.into ?? ((await branchExists(repo, f.branch)) ? f.branch : null);
+          if (o.into && !(await branchExists(repo, o.into))) throw new ApiError(404, `A branch "${o.into}" não existe.`);
+          if (target === null) {
+            await git(repo, ["branch", f.branch, ref]);
+            merged = (await git(repo, ["rev-parse", f.branch])).trim();
+          } else merged = await mergeInto(repo, ref, target, f.branch, true);
+        } finally {
+          await dropRef(repo, ref);
+        }
+      } else if (o.into) {
         if (!(await git(repo, ["rev-parse", "--verify", "-q", `refs/heads/${o.into}`]).then(() => true, () => false))) throw new ApiError(404, `A branch "${o.into}" não existe.`);
         if (o.into === f.branch) throw new ApiError(400, "--into não pode ser a própria branch do andar.");
-        merged = await mergeInto(repo, f.branch, o.into);
+        merged = await mergeInto(repo, f.branch, o.into, f.branch);
       }
       if (!o.keepFloor) await removeFloor(projectId, f, { deleteBranch: o.deleteBranch, force: true });
       else changed(projectId);
-      return { ok: true, branch: o.deleteBranch ? null : f.branch, into: o.into ?? null, merged, floorKept: o.keepFloor };
+      return { ok: true, branch: o.deleteBranch ? null : f.branch, into: o.into ?? (f.copy ? f.branch : null), merged, floorKept: o.keepFloor };
     });
   };
 
   // Merge de `branch` em `into`; se `into` não é a branch do térreo, usa uma worktree temporária
-  async function mergeInto(repo: string, branch: string, into: string) {
+  // `ref` pode ser branch ou ref qualquer; `label` aparece na mensagem; `ff` tenta fast-forward antes do merge
+  async function mergeInto(repo: string, ref: string, into: string, label = ref, ff = false) {
+    const branch = ref;
     const env = { GIT_AUTHOR_NAME: "Maestri", GIT_AUTHOR_EMAIL: "maestri@localhost", GIT_COMMITTER_NAME: "Maestri", GIT_COMMITTER_EMAIL: "maestri@localhost" };
     const identity = async (cwd: string) => {
       const has = async (k: string) => (await git(cwd, ["config", k]).catch(() => "")).trim() !== "";
@@ -237,11 +390,12 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
     };
     const attempt = async (cwd: string) => {
       try {
-        await git(cwd, ["merge", "--no-ff", "-m", `Merge ${branch}`, branch], await identity(cwd));
+        const fastForward = ff && (await git(cwd, ["merge-base", "--is-ancestor", "HEAD", branch]).then(() => true, () => false));
+        await git(cwd, fastForward ? ["merge", "--ff-only", branch] : ["merge", "--no-ff", "-m", `Merge ${label}`, branch], await identity(cwd));
       } catch (e: any) {
         const files = (await git(cwd, ["diff", "--name-only", "--diff-filter=U"]).catch(() => "")).split("\n").filter(Boolean);
         await git(cwd, ["merge", "--abort"]).catch(() => {});
-        throw new ApiError(409, files.length ? `Conflito ao fazer merge de ${branch} em ${into} (${files.join(", ")}); nada foi alterado.` : `Falha no merge: ${e.message}`);
+        throw new ApiError(409, files.length ? `Conflito ao fazer merge de ${label} em ${into} (${files.join(", ")}); nada foi alterado.` : `Falha no merge: ${e.message}`);
       }
       return (await git(cwd, ["rev-parse", "HEAD"])).trim();
     };
@@ -322,10 +476,24 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
   fastify.get(uiBase, guard(async (p) => ({ floors: await list(p) })));
   fastify.post(uiBase, guard(async (p, req) => {
     const b = req.body ?? {};
-    return createFloor(p, { name: b.name, branch: b.branch, existingBranch: flag(b.existingBranch), noGit: flag(b.noGit), copyGround: flag(b.copyGround) });
+    return createFloor(p, { name: b.name, branch: b.branch, existingBranch: flag(b.existingBranch), noGit: flag(b.noGit), copyGround: flag(b.copyGround), copy: flag(b.copy), pullRequest: b.pullRequest }); 
   }));
   fastify.post(`${uiBase}/:name/land`, guard((p, req) => landFloor(p, req.params.name, { into: req.body?.into || undefined, deleteBranch: flag(req.body?.deleteBranch), keepFloor: flag(req.body?.keepFloor) })));
   fastify.delete(`${uiBase}/:name`, guard((p, req) => deleteFloor(p, req.params.name, { keepBranch: flag(req.query?.keepBranch), force: flag(req.query?.force) })));
+  // Estado do pull request do andar (gh pr view): review e checks
+  fastify.get(`${uiBase}/:name/pr`, guard(async (p, req) => {
+    const f = getFloor(p, req.params.name);
+    if (!f.pullRequest) throw new ApiError(404, `O andar "${f.name}" não é de um pull request.`);
+    const raw = JSON.parse(await gh(repoOf(p), ["pr", "view", String(f.pullRequest.number), "--json", "number,title,state,url,reviewDecision,statusCheckRollup"]));
+    const checks = { passing: 0, failing: 0, pending: 0 };
+    for (const c of (raw.statusCheckRollup ?? []) as Obj[]) {
+      const v = String(c.conclusion || c.state || c.status || "").toUpperCase();
+      if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(v)) checks.passing++;
+      else if (["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"].includes(v)) checks.failing++;
+      else checks.pending++;
+    }
+    return { number: raw.number, title: raw.title, state: raw.state, url: raw.url, review: raw.reviewDecision || null, checks };
+  }));
   fastify.post(`${uiBase}/:name/unload`, guard((p, req) => unloadFloor(p, req.params.name)));
 
   // --- rotas do CLI (por nó): tudo exige Maestro, exceto status do próprio andar ---
@@ -340,7 +508,7 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
   fastify.post(`${base}/floors`, wrap(async (c, req) => {
     requireMaestro(c, "criar andares");
     const b = req.body ?? {};
-    return createFloor(c.projectId, { name: b.name, branch: b.branch, existingBranch: flag(b.existingBranch), noGit: flag(b.noGit), copyGround: flag(b.copyGround) });
+    return createFloor(c.projectId, { name: b.name, branch: b.branch, existingBranch: flag(b.existingBranch), noGit: flag(b.noGit), copyGround: flag(b.copyGround), copy: flag(b.copy), pullRequest: b.pullRequest }); 
   }));
   fastify.post(`${base}/floors/land`, wrap((c, req) => {
     requireMaestro(c, "fazer land de andares");

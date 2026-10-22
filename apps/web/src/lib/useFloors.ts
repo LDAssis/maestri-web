@@ -12,6 +12,8 @@ export interface FloorInfo {
   git: boolean;
   branch: string | null;
   path: string;
+  copy?: boolean;
+  pullRequest?: { number: number; url: string; title: string } | null;
   status: { text: string; state: FloorState; progress: number | null; updatedAt: string } | null;
 }
 

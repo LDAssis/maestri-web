@@ -118,7 +118,8 @@ própria branch em `<repo>/.worktrees/<slug>` (terminais dele começam nesse che
 maestri floor list
 maestri floor status "Testes verdes" --progress 3/5          # qualquer agente, para o PRÓPRIO andar
 maestri floor status "Preciso de decisão" --state blocked    # blocked/review/done também avisam o usuário (toast)
-maestri floor create "Nome" [--branch B] [--existing-branch] [--no-git] [--copy-ground]   # só Maestro
+maestri floor create "Nome" [--branch B] [--existing-branch] [--copy] [--no-git] [--copy-ground]   # só Maestro
+maestri floor create ["Nome"] --pull-request N|URL [--copy] [--copy-ground]              # só Maestro; usa o gh (autenticado)
 maestri floor land "Nome" [--into BRANCH] [--delete-branch] [--keep-floor]                # só Maestro, do térreo; só se o usuário pedir
 maestri floor delete "Nome" [--keep-branch] [--force]                                      # só Maestro, do térreo; só se o usuário pedir
 maestri floor unload "Nome"                                                                # só Maestro; não o seu andar
@@ -126,3 +127,9 @@ maestri workspace list | create "Nome" --dir PATH [--from "Origem"] [--group G] 
 ```
 `floor land` recusa (sem alterar nada) se houver trabalho não commitado no andar ou no térreo, ou conflito de merge; peça ao
 agente do andar para commitar antes. Workspaces não têm delete pela CLI.
+
+`--copy` cria um clone completo e isolado em `.worktrees/<slug>` (pode ficar na mesma branch do térreo); `floor land` de um clone
+traz o trabalho de volta (fetch + fast-forward/merge na branch do andar ou em `--into`), `floor delete` apaga o clone
+(`--keep-branch` guarda os commits numa branch do repositório). `--pull-request` abre um andar na branch do PR aberto (de fork:
+branch `pr-N`, commits não chegam ao PR); o seletor de andar mostra o link e o estado do PR.
+Desenhos (caneta, formas, setas, texto) são nós `drawing` do canvas, por andar; `floor delete` apaga os do andar.

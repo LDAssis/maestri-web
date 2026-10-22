@@ -2,14 +2,18 @@
 // Carregado automaticamente por bin/maestri.
 
 const FLOOR_HELP = `maestri floor list
-maestri floor create "Nome" [--branch NOME] [--existing-branch] [--no-git] [--copy-ground]      (Maestro)
+maestri floor create "Nome" [--branch NOME] [--existing-branch] [--copy] [--no-git] [--copy-ground]   (Maestro)
+maestri floor create ["Nome"] --pull-request NUMERO|URL [--copy] [--copy-ground]                (Maestro; usa o gh)
 maestri floor land "Nome" [--into BRANCH] [--delete-branch] [--keep-floor]                     (Maestro, só do térreo)
 maestri floor delete "Nome" [--keep-branch] [--force]                                          (Maestro, só do térreo)
 maestri floor status ["Texto"] [--state working|blocked|review|done] [--progress 2/5|40%|0.4] [--floor "Nome"] [--clear]
 maestri floor unload "Nome"                                                                    (Maestro)
 Andares são níveis do canvas ("Ground" = térreo). Com git, o andar é uma worktree na própria branch em
 <repo>/.worktrees/<slug>; --no-git compartilha o diretório do térreo. land recusa se houver trabalho não commitado ou
-conflito e remove o andar (mantendo a branch) salvo --keep-floor. status é de qualquer agente para o próprio andar
+conflito e remove o andar (mantendo a branch) salvo --keep-floor.
+--copy cria um clone completo e isolado (pode ficar na mesma branch do térreo); land de um clone traz o trabalho de volta
+(fetch + fast-forward/merge) e delete remove o clone (--keep-branch guarda os commits numa branch do repositório).
+--pull-request abre um andar na branch do PR (fork: branch pr-N, commits não chegam ao PR). status é de qualquer agente para o próprio andar
 (só o Maestro usa --floor); blocked/review/done avisam os navegadores; texto cortado em 120 caracteres.`;
 
 const WORKSPACE_HELP = `maestri workspace list
@@ -28,16 +32,17 @@ export function register({ call, need, CliError }) {
     if (sub === "list") {
       const r = await call("GET", "/floors");
       for (const f of r.floors) {
-        const where = f.ground ? "térreo" : f.git ? "git" : "sem git";
-        console.log(`${f.name}${f.name === r.you ? " ← você" : ""} (${where}${f.branch ? `, branch ${f.branch}` : ""}) — ${f.nodes} nó(s) — ${f.path}${statusLine(f.status)}`);
+        const where = f.ground ? "térreo" : f.copy ? "clone" : f.git ? "git" : "sem git";
+        console.log(`${f.name}${f.name === r.you ? " ← você" : ""} (${where}${f.branch ? `, branch ${f.branch}` : ""}) — ${f.nodes} nó(s) — ${f.path}${f.pullRequest ? ` — PR #${f.pullRequest.number} ${f.pullRequest.url}` : ""}${statusLine(f.status)}`);
       }
     } else if (sub === "create") {
-      need(pos, 2, 'floor create "Nome" [--branch NOME] [--existing-branch] [--no-git] [--copy-ground]');
+      if (flags["pull-request"] === undefined) need(pos, 2, 'floor create "Nome" [--branch NOME] [--existing-branch] [--copy] [--no-git] [--copy-ground]');
       const r = await call("POST", "/floors", {
         name, branch: flags.branch, existingBranch: flags["existing-branch"], noGit: flags["no-git"], copyGround: flags["copy-ground"],
+        copy: flags.copy, pullRequest: flags["pull-request"],
       });
       const f = r.floor;
-      console.log(`Andar "${f.name}" criado${f.git ? ` na branch ${f.branch} (${f.path})` : ""}; ${f.nodes} nó(s).${r.note ? ` ${r.note}` : ""}`);
+      console.log(`Andar "${f.name}" criado${f.git ? ` ${f.copy ? "(clone isolado) " : ""}na branch ${f.branch} (${f.path})` : ""}; ${f.nodes} nó(s).${r.note ? ` ${r.note}` : ""}`);
     } else if (sub === "land") {
       need(pos, 2, 'floor land "Nome" [--into BRANCH] [--delete-branch] [--keep-floor]');
       const r = await call("POST", "/floors/land", { name, into: flags.into, deleteBranch: flags["delete-branch"], keepFloor: flags["keep-floor"] });
@@ -98,8 +103,8 @@ export function register({ call, need, CliError }) {
   return {
     commands: { floor, workspace },
     help: { floor: FLOOR_HELP, workspace: WORKSPACE_HELP },
-    flags: ["--branch", "--into", "--dir", "--from", "--group", "--folder", "--state", "--progress", "--floor"],
-    boolFlags: ["--existing-branch", "--no-git", "--copy-ground", "--delete-branch", "--keep-floor", "--keep-branch", "--force", "--clear", "--root"],
+    flags: ["--branch", "--into", "--dir", "--from", "--group", "--folder", "--state", "--progress", "--floor", "--pull-request"],
+    boolFlags: ["--existing-branch", "--copy", "--no-git", "--copy-ground", "--delete-branch", "--keep-floor", "--keep-branch", "--force", "--clear", "--root"],
     summary: [
       "Andares e workspaces:",
       '  floor list|create|land|delete|status|unload   Andares do canvas (veja "maestri floor --help"); status é de qualquer agente',

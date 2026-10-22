@@ -11,6 +11,16 @@ export interface CanvasState {
 
 const TRANSIENT = ["selected", "dragging", "measured", "resizing"];
 
+// Desenhos do canvas (nós type "drawing"): forma conhecida e pontos numéricos em quantidade limitada
+const DRAWING_SHAPES = ["pen", "rect", "ellipse", "arrow", "text"];
+function drawingError(n: Obj): string | null {
+  const d = n.data;
+  if (!d || typeof d !== "object" || !DRAWING_SHAPES.includes(d.shape)) return "drawing: data.shape inválido (pen, rect, ellipse, arrow, text).";
+  if (d.points !== undefined && (!Array.isArray(d.points) || d.points.length > 8000 || !d.points.every((v: unknown) => typeof v === "number" && Number.isFinite(v)))) return "drawing: data.points deve ser até 8000 números.";
+  if (d.text !== undefined && (typeof d.text !== "string" || d.text.length > 2000)) return "drawing: data.text inválido.";
+  return null;
+}
+
 const isObj = (v: unknown): v is Obj => !!v && typeof v === "object" && !Array.isArray(v);
 const isObjWithId = (v: unknown) => isObj(v) && typeof v.id === "string";
 const isIdList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
@@ -73,6 +83,10 @@ export class CanvasStore {
     switch (op.kind) {
       case "upsertNodes":
         if (!Array.isArray(op.nodes) || !op.nodes.every(isObjWithId)) return { error: "upsertNodes: nodes deve ser array de objetos com id." };
+        for (const n of op.nodes) {
+          const bad = n.type === "drawing" ? drawingError(n) : null;
+          if (bad) return { error: bad };
+        }
         normalized = { kind: op.kind, nodes: op.nodes.map(cleanNode) };
         st.nodes = upsert(nodes, normalized.nodes);
         break;

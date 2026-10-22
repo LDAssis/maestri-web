@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
-import { Layers, GitBranch, Plus, GitMerge, Trash2, PowerOff, ChevronDown, ChevronUp } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { Layers, GitBranch, Plus, GitMerge, Trash2, PowerOff, ChevronDown, ChevronUp, GitPullRequest } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { FloorInfo, FloorState, GROUND } from "@/lib/useFloors";
 
@@ -12,6 +12,46 @@ const BADGE: Record<FloorState, string> = {
   done: "bg-emerald-950 text-emerald-300 border-emerald-800",
 };
 const BAR: Record<FloorState, string> = { working: "bg-sky-500", blocked: "bg-rose-500", review: "bg-amber-500", done: "bg-emerald-500" };
+
+interface PrState { state: string; review: string | null; checks: { passing: number; failing: number; pending: number } }
+
+// Link do PR do andar + estado (gh pr view) carregado ao abrir o seletor
+function PrInfo({ projectId, floor }: { projectId: string; floor: FloorInfo }) {
+  const pr = floor.pullRequest!;
+  const [info, setInfo] = useState<PrState | null>(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let live = true;
+    apiFetch(`/api/projects/${projectId}/floors/${encodeURIComponent(floor.name)}/pr`)
+      .then(async (r) => {
+        const b = await r.json().catch(() => ({}));
+        if (!live) return;
+        if (r.ok) setInfo(b);
+        else setErr(b?.error || `Servidor respondeu ${r.status}`);
+      })
+      .catch(() => live && setErr("Servidor indisponível"));
+    return () => {
+      live = false;
+    };
+  }, [projectId, floor.name]);
+  return (
+    <div className="mt-0.5 text-[10px] flex flex-wrap items-center gap-x-2 gap-y-0.5">
+      <a href={pr.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-sky-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 rounded">
+        <GitPullRequest className="h-2.5 w-2.5" />PR #{pr.number}
+      </a>
+      {info && (
+        <>
+          <span className="text-slate-400">{info.state.toLowerCase()}</span>
+          {info.review && <span className="text-slate-400">review: {info.review.toLowerCase().replace(/_/g, " ")}</span>}
+          <span className="text-slate-400">
+            checks: <span className="text-emerald-400">{info.checks.passing}✓</span> <span className="text-rose-400">{info.checks.failing}✗</span> <span className="text-amber-400">{info.checks.pending}…</span>
+          </span>
+        </>
+      )}
+      {err && <span className="text-slate-500" title={err}>estado indisponível</span>}
+    </div>
+  );
+}
 
 type Pending = { name: string; kind: "land" | "delete" | "unload" } | null;
 
@@ -36,12 +76,17 @@ export default function FloorSwitcher({
   const [name, setName] = useState("");
   const [noGit, setNoGit] = useState(false);
   const [copyGround, setCopyGround] = useState(false);
+  const [clone, setClone] = useState(false);
+  const [prRef, setPrRef] = useState("");
   const [pending, setPending] = useState<Pending>(null);
   const [into, setInto] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [canForce, setCanForce] = useState(false);
 
+  const createdName = useRef("");
+  const createdNote = useRef("");
+  const [notice, setNotice] = useState("");
   const base = `/api/projects/${projectId}/floors`;
   const cur = floors.find((f) => f.name === current) ?? floors[0];
 
@@ -70,13 +115,23 @@ export default function FloorSwitcher({
   const create = (e: React.FormEvent) => {
     e.preventDefault();
     const n = name.trim();
-    if (!n) return setError("Informe o nome do andar.");
+    const pr = prRef.trim();
+    if (!n && !pr) return setError("Informe o nome do andar (ou um pull request).");
     run(
-      () => apiFetch(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n, noGit, copyGround }) }),
+      async () => {
+        const res = await apiFetch(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n || undefined, noGit, copyGround, copy: clone, pullRequest: pr || undefined }) });
+        // Seleciona o andar criado (o nome padrão de PR vem do servidor)
+        const body = await res.clone().json().catch(() => ({}));
+        createdName.current = body?.floor?.name ?? n;
+        createdNote.current = body?.note ?? "";
+        return res;
+      },
       () => {
         setName("");
+        setPrRef("");
         setCreating(false);
-        onSelect(n);
+        setNotice(createdNote.current);
+        onSelect(createdName.current);
       },
     );
   };
@@ -126,6 +181,7 @@ export default function FloorSwitcher({
                     <div className="flex items-center gap-1 text-[10px] text-slate-500 mt-0.5">
                       <GitBranch className="h-2.5 w-2.5" />
                       {f.git ? f.branch ?? "—" : "sem git (diretório do térreo)"}
+                      {f.copy && <span className="ml-1 px-1 rounded border border-slate-700 text-slate-400">clone</span>}
                     </div>
                     {st?.text && <div className="text-[11px] text-slate-300 mt-0.5 break-words">{st.text}</div>}
                     {st?.progress != null && (
@@ -142,6 +198,7 @@ export default function FloorSwitcher({
                     )}
                   </button>
 
+                  {f.pullRequest && <PrInfo projectId={projectId} floor={f} />}
                   <div className="flex items-center gap-1 mt-1.5">
                     {!f.ground && f.git && (
                       <button className={`${btn} border-slate-700 text-slate-300 hover:bg-slate-800`} onClick={() => { setPending({ name: f.name, kind: "land" }); setError(""); }}>
@@ -196,12 +253,22 @@ export default function FloorSwitcher({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   aria-label="Nome do novo andar"
-                  placeholder="Nome do andar"
+                  placeholder={prRef.trim() ? "Nome (opcional com PR)" : "Nome do andar"}
                   maxLength={60}
                   className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-white focus:outline-none focus:border-indigo-500"
                 />
+                <input
+                  value={prRef}
+                  onChange={(e) => setPrRef(e.target.value)}
+                  aria-label="Pull request (número ou link, opcional)"
+                  placeholder="Pull request: nº ou link (opcional, usa o gh)"
+                  className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-white focus:outline-none focus:border-indigo-500"
+                />
                 <label className="flex items-center gap-1.5 text-[11px] text-slate-400">
-                  <input type="checkbox" checked={noGit} onChange={(e) => setNoGit(e.target.checked)} /> Sem git (compartilha o diretório do térreo)
+                  <input type="checkbox" checked={clone} disabled={noGit} onChange={(e) => setClone(e.target.checked)} /> Clone isolado (--copy; pode usar a mesma branch do térreo)
+                </label>
+                <label className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                  <input type="checkbox" checked={noGit} disabled={clone || !!prRef.trim()} onChange={(e) => setNoGit(e.target.checked)} /> Sem git (compartilha o diretório do térreo)
                 </label>
                 <label className="flex items-center gap-1.5 text-[11px] text-slate-400">
                   <input type="checkbox" checked={copyGround} onChange={(e) => setCopyGround(e.target.checked)} /> Copiar o layout do térreo
@@ -216,6 +283,7 @@ export default function FloorSwitcher({
                 <Plus className="h-3 w-3" /> Novo andar
               </button>
             )}
+            {notice && <p role="status" className="mt-1.5 text-[11px] text-amber-300 break-words">{notice}</p>}
             {error && <p role="alert" className="mt-1.5 text-[11px] text-rose-300 break-words">{error}</p>}
           </div>
         </div>
