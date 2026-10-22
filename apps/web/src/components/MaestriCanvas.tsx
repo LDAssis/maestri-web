@@ -370,10 +370,10 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         }
         if (msg.type === "snapshot") {
           if (msg.nodes == null) {
-            // Projeto sem canvas salvo: o primeiro cliente semeia o arranjo padrão
-            setNodes(defaultPartituraFullstack.nodes);
-            setEdges(defaultPartituraFullstack.edges);
-            sendOp({ kind: "replace", nodes: defaultPartituraFullstack.nodes, edges: defaultPartituraFullstack.edges });
+            // Projeto novo ou sem canvas salvo: inicia 100% zerado
+            setNodes([]);
+            setEdges([]);
+            sendOp({ kind: "replace", nodes: [], edges: [] });
           } else {
             setNodes(msg.nodes);
             setEdges(msg.edges || []);

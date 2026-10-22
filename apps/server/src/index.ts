@@ -161,6 +161,66 @@ const routines = registerRoutinesApi({ fastify, sessions, canvas, projectRepo, d
 registerFilesApi({ fastify, projectRepo });
 
 // Endpoints de Projetos
+
+// Configurações Globais e por Projeto de Inicialização e CLIs
+const globalSettingsFile = path.join(dataDir, "global_settings.json");
+const defaultGlobalSettings = {
+  defaultCmd: "echo 'Agente inicializado'",
+  cliPresets: [
+    { id: "agy", label: "agy", cmd: "agy", color: "purple" },
+    { id: "claude", label: "claude", cmd: "claude", color: "amber" },
+    { id: "opencode", label: "opencode", cmd: "opencode", color: "emerald" },
+  ],
+};
+
+function readGlobalSettings() {
+  if (fs.existsSync(globalSettingsFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(globalSettingsFile, "utf-8"));
+    } catch {}
+  }
+  return defaultGlobalSettings;
+}
+
+function projectSettingsFile(id: string) {
+  return path.join(dataDir, `settings_${id}.json`);
+}
+
+function readProjectSettings(id: string) {
+  const f = projectSettingsFile(id);
+  if (fs.existsSync(f)) {
+    try {
+      return JSON.parse(fs.readFileSync(f, "utf-8"));
+    } catch {}
+  }
+  return null;
+}
+
+fastify.get("/api/settings/global", async () => {
+  return readGlobalSettings();
+});
+
+fastify.put<{ Body: any }>("/api/settings/global", async (req) => {
+  writeJsonAtomic(globalSettingsFile, req.body);
+  return { ok: true, settings: req.body };
+});
+
+fastify.get<{ Params: { id: string } }>("/api/projects/:id/settings", async (req) => {
+  const proj = readProjectSettings(req.params.id);
+  const global = readGlobalSettings();
+  return {
+    global,
+    project: proj,
+    effective: proj ?? global,
+  };
+});
+
+fastify.put<{ Params: { id: string }; Body: any }>("/api/projects/:id/settings", async (req) => {
+  const f = projectSettingsFile(req.params.id);
+  writeJsonAtomic(f, req.body);
+  return { ok: true, settings: req.body };
+});
+
 fastify.get("/api/projects", async () => {
   return projects;
 });
@@ -299,7 +359,13 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
   // O cwd só vale dentro do repoPath do PRÓPRIO projeto (andares ficam em <repo>/.worktrees); senão cai no repoPath
   const cwd = resolveInside(projects.find((p) => p.id === projectId)!.repoPath, url.searchParams.get("cwd"));
 
-  sessions.attach(socket, projectId, nodeId, { cwd, cmd: url.searchParams.get("cmd") || "" });
+  let cmd = url.searchParams.get("cmd") || "";
+  if (!cmd) {
+    const projSettings = readProjectSettings(projectId);
+    const globalSettings = readGlobalSettings();
+    cmd = projSettings?.defaultCmd || globalSettings?.defaultCmd || "";
+  }
+  sessions.attach(socket, projectId, nodeId, { cwd, cmd });
 });
 
 // WebSocket do canvas: snapshot ao conectar, depois ops em tempo real

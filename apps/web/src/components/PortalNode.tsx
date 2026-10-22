@@ -68,7 +68,7 @@ export default function PortalNode({
       <NodeResizer
         minWidth={380}
         minHeight={260}
-        isVisible={selected}
+        isVisible={true}
         lineClassName="!border-cyan-500"
         handleClassName="!h-3 !w-3 !bg-cyan-500 !border-2 !border-slate-900 !rounded"
       />

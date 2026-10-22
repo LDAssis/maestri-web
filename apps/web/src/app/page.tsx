@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
+import ProjectSettingsModal from "@/components/ProjectSettingsModal";
 import {
   Layers,
   Cpu,
@@ -60,6 +61,7 @@ function App({
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDesc, setNewProjectDesc] = useState("");
 
@@ -187,6 +189,14 @@ function App({
             >
               <AlarmClock className="h-5 w-5" />
             </button>
+
+            <button
+              onClick={() => setIsSettingsOpen(true)}
+              className="p-3 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/50 transition"
+              title="Configurações (Globais e do Projeto)"
+            >
+              <Settings className="h-5 w-5" />
+            </button>
           </div>
         </div>
 
@@ -270,6 +280,15 @@ function App({
           <div className="flex items-center gap-3">
             <PresenceStack me={user.id} projects={projects} onGoTo={goToPeer} />
             <ProfileMenu user={user} onChange={setUser} onLogout={logout} />
+            <button
+              onClick={() => setIsSettingsOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-xs font-medium text-slate-300 hover:text-white transition"
+              title="Configurações de inicialização dos agentes"
+            >
+              <Settings className="h-3.5 w-3.5 text-indigo-400" />
+              <span>Configurações</span>
+            </button>
+
             <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg p-1 text-xs">
               <button
                 onClick={() => setActiveTab("canvas")}
@@ -421,6 +440,14 @@ function App({
             </form>
           </div>
         </div>
+      )}
+      {isSettingsOpen && (
+        <ProjectSettingsModal
+          isOpen={isSettingsOpen}
+          projectId={activeProject?.id || ""}
+          projectName={activeProject?.name || "Projeto"}
+          onClose={() => setIsSettingsOpen(false)}
+        />
       )}
       <PresenceToasts />
     </div>

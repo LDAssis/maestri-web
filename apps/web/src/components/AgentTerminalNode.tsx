@@ -2,6 +2,7 @@
 
 import React, { useContext, useEffect, useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
+import type { CliPreset } from "./CliConfigModal";
 import {
   Terminal,
   GitBranch,
@@ -43,6 +44,7 @@ export interface AgentNodeData extends Record<string, unknown> {
   worktree?: string;
   worktreePath?: string;
   defaultCmd?: string;
+  cliPresets?: CliPreset[];
   isMaestro?: boolean;
   roleId?: string;
   preset?: string;
@@ -61,6 +63,24 @@ export default function AgentTerminalNode({
 }) {
   const nodeData = data;
   const [activeFace, setActiveFace] = useState<"terminal" | "chat">("terminal");
+  const { setNodes } = useReactFlow();
+
+  const handleUpdateConfig = (newDefaultCmd: string, newPresets: CliPreset[]) => {
+    setNodes((nds) =>
+      nds.map((n) =>
+        n.id === id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                defaultCmd: newDefaultCmd,
+                cliPresets: newPresets,
+              },
+            }
+          : n
+      )
+    );
+  };
   const { updateNodeData } = useReactFlow();
   const projectId = useContext(ProjectIdContext);
   const typingLabel = usePresenceValue((s) => {
@@ -154,7 +174,7 @@ export default function AgentTerminalNode({
       <NodeResizer
         minWidth={360}
         minHeight={260}
-        isVisible={selected}
+        isVisible={true}
         lineClassName={isMaestro ? "!border-amber-400" : "!border-indigo-500"}
         handleClassName={
           isMaestro
@@ -271,7 +291,7 @@ export default function AgentTerminalNode({
         {/* Terminal sempre montado (só escondido) para não matar o PTY ao ir para o Chat */}
         <div
           className={`w-full h-full flex-col min-h-0 ${
-            activeFace === "terminal" ? "flex" : "hidden"
+            activeFace === "terminal" ? "flex nodrag nopan" : "hidden"
           }`}
         >
           <TerminalView
@@ -280,6 +300,8 @@ export default function AgentTerminalNode({
             onStatusChange={setTermStatus}
             cwd={nodeData.worktreePath}
             initialCmd={nodeData.defaultCmd}
+            cliPresets={nodeData.cliPresets}
+            onUpdateConfig={handleUpdateConfig}
           />
         </div>
         {activeFace === "chat" && (
