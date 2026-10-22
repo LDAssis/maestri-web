@@ -84,6 +84,10 @@ Os usuários também conversam com você pela **face de chat** do seu nó: a men
 ```bash
 maestri say "Pronto! Veja o resumo:\n\n- item 1\n- item 2"   # aceita Markdown; sem argumento lê stdin (heredoc)
 maestri say --file resposta.md                                 # texto UTF-8 de um arquivo
+maestri say --file grafico.png "legenda"                         # imagem (PNG/JPEG/GIF/WebP) anexada à resposta
+maestri say --attach relatorio.pdf --attach dados.zip "pronto"   # arquivos (até 20MB, repetível, só na resposta final)
+maestri say "Resultado:\n![gráfico](/caminho/absoluto/img.png)\nfim"  # imagem embutida: linha própria, caminho absoluto
+maestri recall attachment <id>                                 # baixa um anexo do chat (o recall mostra os ids) e imprime o caminho
 maestri say --progress "rodando os testes..."                  # balão intermediário (estilo diferente), antes da resposta final
 maestri recall --turns 5                                       # releia a thread atual (--last day|week|month, --from/--to YYYY-MM-DD, --all, --json)
 maestri recall purple                                          # outra thread: blue purple pink red orange yellow green
@@ -146,3 +150,13 @@ traz o trabalho de volta (fetch + fast-forward/merge na branch do andar ou em `-
 (`--keep-branch` guarda os commits numa branch do repositório). `--pull-request` abre um andar na branch do PR aberto (de fork:
 branch `pr-N`, commits não chegam ao PR); o seletor de andar mostra o link e o estado do PR.
 Desenhos (caneta, formas, setas, texto) são nós `drawing` do canvas, por andar; `floor delete` apaga os do andar.
+
+## Retomada de sessão e contas
+Se o terminal de um agente reiniciar (servidor reiniciado, nó reaberto), `claude`/`codex`/`opencode` voltam em modo de retomada (`claude --continue` ou `--resume <id>` da linha que o agente imprimiu ao sair, `codex resume --last`, `opencode --continue`); o programa é detectado pelo executável do comando (com variáveis na frente, caminho completo ou `sh -c`/`fish -c "..."`). `recruit --replace` e `role assign` começam do zero. O toggle fica em Configurações → Retomar sessão (ligado por padrão).
+```
+maestri account list | create "Work" --cli claude|codex | delete "Work" --cli claude     # só Maestro; delete só a pedido do usuário
+maestri recruit "Hawk" --preset "Claude Code" --account "Work"                            # CLAUDE_CONFIG_DIR / CODEX_HOME isolados
+maestri recruit --replace "Hawk" --account "Default"                                       # troca só a conta e reinicia
+maestri preset create "Claude Work" --command claude --account "Work"                      # preset que já nasce na conta
+```
+Depois de recrutar numa conta nova, o login é feito rodando o CLI naquele terminal. `maestri preset list` mostra `accounts: "Default", "Work"`; `maestri list` mostra `[conta: Work]`.

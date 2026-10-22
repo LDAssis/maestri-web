@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WebSocket } from "ws";
+import { captureResume, resumeCommand } from "./resume.js";
+import type { SessionHistory } from "./sessionHistory.js";
 
 const isWindows = process.platform === "win32";
 const gitBashPath = "C:\\Program Files\\Git\\bin\\bash.exe";
@@ -40,6 +42,8 @@ export interface Session {
   listeners: Set<(data: string) => void>;
   // Última saída do PTY (epoch ms); as rotinas usam para saber se o terminal está ocupado
   lastOutputAt: number;
+  // Cauda da saída (sem tratamento) para achar a linha de retomada que o agente imprime ao sair
+  tail: string;
 }
 
 function spawnPty(cwd: string, cols: number, rows: number, extraEnv: Record<string, string>) {
@@ -83,7 +87,15 @@ export class SessionManager {
   private sessions = new Map<string, Session>();
 
   // apiUrl é avaliado a cada spawn (a porta real só é conhecida depois do listen)
-  constructor(private cli: { apiUrl: () => string; token: string }) {}
+  constructor(
+    private cli: {
+      apiUrl: () => string;
+      token: string;
+      history?: SessionHistory; // terminais já iniciados / linha de retomada capturada
+      resume?: (projectId: string) => boolean; // retomar sessão ao relançar (padrão: ligado)
+      env?: (projectId: string, nodeId: string) => Record<string, string>; // ex.: conta de CLI do nó
+    },
+  ) {}
 
   private env(projectId: string, nodeId: string) {
     return {
@@ -111,6 +123,11 @@ export class SessionManager {
   private push(s: Session, data: string) {
     s.scrollback += data;
     s.lastOutputAt = Date.now();
+    if (this.cli.history) {
+      s.tail = (s.tail + data).slice(-1500);
+      const found = captureResume(s.tail);
+      if (found) this.cli.history.setResume(s.projectId, s.nodeId, found);
+    }
     if (s.scrollback.length > SCROLLBACK_MAX) s.scrollback = s.scrollback.slice(-SCROLLBACK_MAX);
     this.broadcast(s, data);
     for (const fn of s.listeners) fn(data);
@@ -151,16 +168,25 @@ export class SessionManager {
   }
 
   // Cria a sessão se ainda não existir (sem precisar de cliente); lança se o PTY falhar
-  ensure(projectId: string, nodeId: string, opts: { cwd: string; cmd: string }) {
+  // fresh: recomeço do zero (recruit --replace, role assign); senão, um terminal que já rodou antes é relançado em
+  // modo de retomada (claude --continue etc.) quando a retomada está ligada no projeto
+  ensure(projectId: string, nodeId: string, opts: { cwd: string; cmd: string; fresh?: boolean }) {
     const k = this.key(projectId, nodeId);
     let s = this.sessions.get(k);
     if (s) return s;
     const cols = 80;
     const rows = 24;
-    const p = spawnPty(opts.cwd, cols, rows, this.env(projectId, nodeId));
+    const h = this.cli.history;
+    let cmd = opts.cmd;
+    if (h) {
+      if (opts.fresh) h.reset(projectId, nodeId);
+      else if (h.started(projectId, nodeId) && this.cli.resume?.(projectId) !== false) cmd = resumeCommand(cmd, h.resume(projectId, nodeId));
+      h.markStarted(projectId, nodeId);
+    }
+    const p = spawnPty(opts.cwd, cols, rows, { ...this.env(projectId, nodeId), ...(this.cli.env?.(projectId, nodeId) ?? {}) });
     s = {
-      projectId, nodeId, pty: p, clients: new Set(), cwd: opts.cwd, cmd: opts.cmd,
-      createdAt: new Date().toISOString(), cols, rows, dead: false, listeners: new Set(), lastOutputAt: 0,
+      projectId, nodeId, pty: p, clients: new Set(), cwd: opts.cwd, cmd,
+      createdAt: new Date().toISOString(), cols, rows, dead: false, listeners: new Set(), lastOutputAt: 0, tail: "",
       scrollback: `\r\n\x1b[32m[Maestri Web - ConPTY Ativo]\x1b[0m Terminal pronto em: ${opts.cwd}\r\n`,
     };
     this.sessions.set(k, s);
@@ -181,7 +207,7 @@ export class SessionManager {
     return true;
   }
 
-  attach(socket: WebSocket, projectId: string, nodeId: string, opts: { cwd: string; cmd: string }) {
+  attach(socket: WebSocket, projectId: string, nodeId: string, opts: { cwd: string; cmd: string; fresh?: boolean }) {
     let s: Session;
     try {
       s = this.ensure(projectId, nodeId, opts);
@@ -251,7 +277,9 @@ export class SessionManager {
     if (!s) return false;
     if (cwd) s.cwd = cwd;
     const old = s.pty;
-    const p = spawnPty(s.cwd, s.cols, s.rows, this.env(projectId, nodeId));
+    // reiniciar o agente também retoma a conversa (se ligado no projeto)
+    if (this.cli.history && this.cli.resume?.(projectId) !== false) s.cmd = resumeCommand(s.cmd, this.cli.history.resume(projectId, nodeId));
+    const p = spawnPty(s.cwd, s.cols, s.rows, { ...this.env(projectId, nodeId), ...(this.cli.env?.(projectId, nodeId) ?? {}) });
     s.pty = p;
     killGroup(old);
     this.push(s, "\r\n\x1b[33m[Sessão reiniciada]\x1b[0m\r\n");

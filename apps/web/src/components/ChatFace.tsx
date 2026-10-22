@@ -2,10 +2,11 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useReactFlow } from "@xyflow/react";
-import { Send, AtSign, Trash2, AlertTriangle } from "lucide-react";
+import { Send, AtSign, Trash2, AlertTriangle, Paperclip, X } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { Avatar, readUser } from "./EntryGate";
 import Markdown from "./Markdown";
+import { Attachments, type ChatAttachment } from "./AttachmentView";
 
 export interface ChatMessage {
   id: string;
@@ -16,6 +17,7 @@ export interface ChatMessage {
   // Thread (cor) da conversa; ausente = blue. progress = balão intermediário (`maestri say --progress`)
   thread?: string;
   progress?: boolean;
+  attachments?: ChatAttachment[];
 }
 
 // As 7 threads do chat de cada agente (mesmos nomes do servidor)
@@ -36,6 +38,16 @@ interface Mention {
 
 const KIND_LABEL: Record<string, string> = { agentTerminal: "agente", stickyNote: "nota", portal: "portal" };
 const MAX_INPUT_HEIGHT = 6 * 16;
+const ATTACH_MAX = 20 * 1024 * 1024;
+const ATTACH_PER_MESSAGE = 10;
+
+const toBase64 = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1] ?? "");
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
 
 function TerminalOutput({ text }: { text: string }) {
   const lines = text.split("\n").length;
@@ -146,15 +158,53 @@ export default function ChatFace({
     });
   };
 
+  // Anexos pendentes (já enviados ao servidor) que irão na próxima mensagem
+  const [pending, setPending] = useState<ChatAttachment[]>([]);
+  const [uploading, setUploading] = useState(0);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const addFiles = async (files: File[]) => {
+    for (const file of files) {
+      if (pending.length + uploading >= ATTACH_PER_MESSAGE) return setWarning(`No máximo ${ATTACH_PER_MESSAGE} anexos por mensagem.`);
+      if (file.size > ATTACH_MAX) {
+        setWarning(`"${file.name}" passa de ${ATTACH_MAX / 1024 / 1024}MB.`);
+        continue;
+      }
+      setUploading((n) => n + 1);
+      try {
+        const res = await apiFetch(`/api/projects/${projectId}/attachments`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: file.name || "imagem.png", data: await toBase64(file) }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) setWarning(body?.error || `Servidor respondeu ${res.status}`);
+        else setPending((list) => [...list, body.attachment]);
+      } catch {
+        setWarning("Não foi possível enviar o anexo");
+      } finally {
+        setUploading((n) => n - 1);
+      }
+    }
+  };
+
+  // Colar uma imagem (print) no campo anexa a imagem
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    addFiles(files);
+  };
+
   const send = async () => {
     const text = input.trim();
-    if (!text || busy) return;
+    if ((!text && !pending.length) || busy || uploading) return;
     setWarning("");
     try {
       const res = await apiFetch(`/api/projects/${projectId}/nodes/${nodeId}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, author: readUser(), thread }),
+        body: JSON.stringify({ text, author: readUser(), thread, ...(pending.length && { attachments: pending.map((a) => a.id) }) }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -162,6 +212,7 @@ export default function ChatFace({
         return;
       }
       setInput("");
+      setPending([]);
       setMentions([]);
       stickRef.current = true;
     } catch {
@@ -245,6 +296,7 @@ export default function ChatFace({
               </div>
               <div className="p-2.5 rounded-xl bg-indigo-600 text-white leading-relaxed whitespace-pre-wrap">
                 {m.text}
+                <Attachments projectId={projectId} items={m.attachments} text={m.text} />
               </div>
             </div>
           ) : m.role === "agent" ? (
@@ -254,7 +306,8 @@ export default function ChatFace({
                 m.progress ? "bg-transparent border border-dashed border-slate-700 text-slate-400 italic" : "bg-slate-900 border border-slate-800"
               }`}
             >
-              <Markdown>{m.text}</Markdown>
+              {m.text && <Markdown projectId={projectId}>{m.text}</Markdown>}
+              <Attachments projectId={projectId} items={m.attachments} text={m.text} />
             </div>
           ) : (
             <TerminalOutput key={m.id} text={m.text} />
@@ -267,6 +320,20 @@ export default function ChatFace({
         <div role="alert" className="mt-2 flex items-center gap-1.5 rounded-lg border border-amber-700/60 bg-amber-950/60 px-2 py-1 text-[11px] text-amber-300">
           <AlertTriangle className="h-3 w-3 shrink-0" />
           {warning}
+        </div>
+      )}
+
+      {(pending.length > 0 || uploading > 0) && (
+        <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Anexos pendentes">
+          {pending.map((a) => (
+            <span key={a.id} className="inline-flex max-w-[12rem] items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-0.5 text-[11px] text-slate-300">
+              <span className="truncate">{a.name}</span>
+              <button onClick={() => setPending((l) => l.filter((x) => x.id !== a.id))} aria-label={`Remover ${a.name}`} className="text-slate-500 hover:text-rose-400">
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+          {uploading > 0 && <span className="text-[11px] text-slate-500 animate-pulse">Enviando…</span>}
         </div>
       )}
 
@@ -307,6 +374,24 @@ export default function ChatFace({
         >
           <AtSign className="h-3.5 w-3.5" />
         </button>
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            addFiles(Array.from(e.target.files ?? []));
+            e.target.value = "";
+          }}
+        />
+        <button
+          onClick={() => fileRef.current?.click()}
+          className="p-1 rounded text-slate-400 hover:text-indigo-400 hover:bg-slate-800"
+          title="Anexar arquivo ou imagem (ou cole uma imagem)"
+          aria-label="Anexar arquivo"
+        >
+          <Paperclip className="h-3.5 w-3.5" />
+        </button>
         <textarea
           ref={inputRef}
           rows={1}
@@ -316,6 +401,7 @@ export default function ChatFace({
             updateMentions(e.target.value, e.target.selectionStart);
           }}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           aria-label="Instrução para o agente"
           aria-autocomplete="list"
           aria-expanded={mentions.length > 0}
@@ -333,7 +419,7 @@ export default function ChatFace({
         </button>
         <button
           onClick={send}
-          disabled={busy || !input.trim()}
+          disabled={busy || uploading > 0 || (!input.trim() && !pending.length)}
           className="p-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
           title="Enviar"
           aria-label="Enviar"
