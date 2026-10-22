@@ -27,6 +27,7 @@ import { PresenceLayer } from "./PresenceUI";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
 import PortalNode, { PortalNodeData } from "./PortalNode";
+import { CommandPalette, ContextMenu, ShortcutsHelp, MenuState } from "./CanvasOverlays";
 import { Plus, RefreshCw, StickyNote, Globe, Bell } from "lucide-react";
 
 interface MaestriCanvasProps {
@@ -516,12 +517,12 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     }
   };
 
-  const addAgent = () => {
+  const addAgent = (at?: { x: number; y: number }) => {
     const newId = `agent-${Date.now().toString().slice(-4)}`;
     const newNode: Node<AgentNodeData> = {
       id: newId,
       type: "agentTerminal",
-      position: getSpawnPosition(460, 330),
+      position: at ?? getSpawnPosition(460, 330),
       style: { width: 460, height: 330 },
       data: {
         title: `Agente Especialista ${nodes.length + 1}`,
@@ -535,12 +536,12 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     sendOp({ kind: "upsertNodes", nodes: [newNode] });
   };
 
-  const addStickyNote = () => {
+  const addStickyNote = (at?: { x: number; y: number }) => {
     const newId = `note-${Date.now().toString().slice(-4)}`;
     const newNode: Node<StickyNoteData> = {
       id: newId,
       type: "stickyNote",
-      position: getSpawnPosition(280, 200),
+      position: at ?? getSpawnPosition(280, 200),
       style: { width: 280, height: 200 },
       data: {
         title: `Nota: ${projectName}`,
@@ -553,12 +554,12 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     sendOp({ kind: "upsertNodes", nodes: [newNode] });
   };
 
-  const addPortal = () => {
+  const addPortal = (at?: { x: number; y: number }) => {
     const newId = `portal-${Date.now().toString().slice(-4)}`;
     const newNode: Node<PortalNodeData> = {
       id: newId,
       type: "portal",
-      position: getSpawnPosition(480, 330),
+      position: at ?? getSpawnPosition(480, 330),
       style: { width: 480, height: 330 },
       data: {
         title: `Portal: ${projectName}`,
@@ -568,6 +569,63 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     setNodes((nds) => [...nds, newNode]);
     sendOp({ kind: "upsertNodes", nodes: [newNode] });
   };
+
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [menu, setMenu] = useState<MenuState | null>(null);
+
+  const selectNode = (id: string) => {
+    setNodes((nds) => nds.map((n) => (n.selected === (n.id === id) ? n : { ...n, selected: n.id === id })));
+    centerOnNode(id);
+  };
+
+  const duplicateNode = (id: string) => {
+    const src = nodesRef.current.find((n) => n.id === id);
+    if (!src) return;
+    const {
+      chat, chatBusy, worktree, branch, worktreePath, ...data
+    } = (src.data || {}) as Record<string, unknown>;
+    const prefix = String(src.type === "agentTerminal" ? "agent" : src.type === "stickyNote" ? "note" : "portal");
+    const copy: Node<any> = {
+      id: `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+      type: src.type,
+      position: { x: src.position.x + 40, y: src.position.y + 40 },
+      style: src.style,
+      data,
+      selected: true,
+    };
+    setNodes((nds) => [...nds.map((n) => (n.selected ? { ...n, selected: false } : n)), copy]);
+    sendOp({ kind: "upsertNodes", nodes: [{ ...copy, selected: undefined }] });
+  };
+
+  // Atalhos globais (ignorados em campos editáveis e no xterm)
+  const shortcutsRef = useRef({ addAgent, addStickyNote, addPortal });
+  shortcutsRef.current = { addAgent, addStickyNote, addPortal };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.(".xterm")) return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setMenu(null);
+        setPaletteOpen(true);
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (document.querySelector("[role=dialog][aria-modal=true], [role=menu]")) return;
+      const k = e.key.toLowerCase();
+      if (k === "a") shortcutsRef.current.addAgent();
+      else if (k === "n") shortcutsRef.current.addStickyNote();
+      else if (k === "p") shortcutsRef.current.addPortal();
+      else if (k === "f") flowRef.current?.fitView({ duration: 300 });
+      else if (e.key === "?") setHelpOpen(true);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const resetToDefault = () => {
     if (!window.confirm("Restaurar o arranjo padrão? Isso substitui o canvas para todos os usuários.")) return;
@@ -580,7 +638,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       {/* Floating Toolbar do Canvas */}
       <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-slate-900/90 border border-slate-800 rounded-xl p-2 backdrop-blur-md shadow-xl flex-wrap max-w-[calc(100vw-350px)]">
         <button
-          onClick={addAgent}
+          onClick={() => addAgent()}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition"
         >
           <Plus className="h-3.5 w-3.5" />
@@ -588,7 +646,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         </button>
 
         <button
-          onClick={addStickyNote}
+          onClick={() => addStickyNote()}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium transition"
         >
           <StickyNote className="h-3.5 w-3.5" />
@@ -596,7 +654,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         </button>
 
         <button
-          onClick={addPortal}
+          onClick={() => addPortal()}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium transition"
         >
           <Globe className="h-3.5 w-3.5" />
@@ -623,7 +681,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
 
       {/* Dica de interação */}
       <div className="absolute bottom-4 left-4 z-10 bg-slate-900/80 border border-slate-800/80 rounded-lg px-3 py-1.5 text-[11px] text-slate-400 backdrop-blur-sm pointer-events-none">
-        💡 Cada projeto tem seus próprios agentes, terminais PTY, notas e portais web salvos de forma independente
+        Ctrl+K buscar · ? atalhos
       </div>
 
       {loadState === "loading" && (
@@ -651,6 +709,30 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         </div>
       )}
 
+      {paletteOpen && (
+        <CommandPalette
+          nodes={nodes}
+          onClose={() => setPaletteOpen(false)}
+          onPickNode={selectNode}
+          actions={[
+            { label: "Novo agente", run: () => addAgent() },
+            { label: "Nova nota", run: () => addStickyNote() },
+            { label: "Novo portal", run: () => addPortal() },
+          ]}
+        />
+      )}
+      {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
+      {menu && (
+        <ContextMenu
+          menu={menu}
+          onClose={() => setMenu(null)}
+          onAdd={(kind, at) => (kind === "agent" ? addAgent(at) : kind === "note" ? addStickyNote(at) : addPortal(at))}
+          onDuplicate={duplicateNode}
+          onDelete={(id) => flowRef.current?.deleteElements({ nodes: [{ id }] })}
+          onColor={(id, color) => flowRef.current?.updateNodeData(id, { color })}
+        />
+      )}
+
       {connState !== "online" && (
         <div
           role="status"
@@ -672,6 +754,16 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         onInit={(instance) => (flowRef.current = instance)}
         nodeTypes={nodeTypes}
         deleteKeyCode={["Backspace", "Delete"]}
+        elevateNodesOnSelect
+        onPaneContextMenu={(e) => {
+          e.preventDefault();
+          const flow = flowRef.current?.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+          if (flow) setMenu({ x: e.clientX, y: e.clientY, flow });
+        }}
+        onNodeContextMenu={(e, node) => {
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY, nodeId: node.id, nodeType: node.type, flow: node.position });
+        }}
         onMouseMove={(e) => {
           const pos = flowRef.current?.screenToFlowPosition({ x: e.clientX, y: e.clientY });
           if (pos) presence.sendCursor(pos);

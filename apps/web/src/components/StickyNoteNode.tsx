@@ -5,6 +5,7 @@ import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import { StickyNote, Edit3 } from "lucide-react";
 import DeleteNodeButton from "./DeleteNodeButton";
 import Markdown from "./Markdown";
+import { NOTE_COLORS, NOTE_DOT } from "./CanvasOverlays";
 import { usePresenceStore } from "@/lib/presence";
 
 export interface StickyNoteData extends Record<string, unknown> {
@@ -85,6 +86,21 @@ export default function StickyNoteNode({
           )}
         </div>
         <div className="flex items-center gap-1">
+          <div role="radiogroup" aria-label="Cor da nota" className="nodrag flex items-center gap-1 mr-1">
+            {NOTE_COLORS.map((c) => (
+              <button
+                key={c}
+                role="radio"
+                aria-checked={(data.color || "amber") === c}
+                aria-label={c}
+                title={c}
+                onClick={() => updateNodeData(id, { color: c })}
+                className={`h-3 w-3 rounded-full ${NOTE_DOT[c]} ${
+                  (data.color || "amber") === c ? "ring-2 ring-white/80" : "opacity-60 hover:opacity-100"
+                }`}
+              />
+            ))}
+          </div>
           <button
             onClick={() => setIsEditing(!isEditing)}
             className="p-1 hover:bg-white/10 rounded transition"
