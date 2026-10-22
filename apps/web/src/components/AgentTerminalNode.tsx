@@ -220,7 +220,7 @@ export default function AgentTerminalNode({
         {/* Terminal sempre montado (só escondido) para não matar o PTY ao ir para o Chat */}
         <div
           className={`w-full h-full flex-col min-h-0 ${
-            activeFace === "terminal" ? "flex" : "hidden"
+            activeFace === "terminal" ? "flex nodrag nopan" : "hidden"
           }`}
         >
           <TerminalView
@@ -232,7 +232,7 @@ export default function AgentTerminalNode({
           />
         </div>
         {activeFace === "chat" && (
-          <div className="w-full h-full bg-[#070b16] flex flex-col justify-between p-3 min-h-0">
+          <div className="w-full h-full bg-[#070b16] flex flex-col justify-between p-3 min-h-0 nodrag nopan">
             {/* Mensagens formatadas */}
             <div className="overflow-y-auto space-y-2 pr-1 flex-1 text-xs">
               {messages.map((m, i) => (

@@ -182,7 +182,7 @@ export default function TerminalView({ projectId, nodeId, cwd, initialCmd, onSta
 
   return (
     <div
-      className="flex flex-col h-full w-full bg-[#050811] overflow-hidden min-h-0"
+      className="nodrag nopan flex flex-col h-full w-full bg-[#050811] overflow-hidden min-h-0 select-text" onMouseDown={(e) => e.stopPropagation()}
       onFocusCapture={() => presence.setActive(nodeId, "viewing")}
       onBlurCapture={() => presence.setActive(null, "viewing")}
     >
@@ -217,7 +217,7 @@ export default function TerminalView({ projectId, nodeId, cwd, initialCmd, onSta
 
       {/* Terminal Container com posicionamento absoluto para prevenir expansão do container */}
       <div className="flex-1 w-full relative overflow-hidden min-h-0">
-        <div ref={containerRef} className="absolute inset-0 p-2 overflow-hidden" />
+        <div ref={containerRef} className="absolute inset-0 p-2 overflow-hidden nodrag nopan" onMouseDown={(e) => { e.stopPropagation(); termRef.current?.focus(); }} onMouseUp={(e) => { e.stopPropagation(); }} />
         {status === "encerrada" && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[#050811]/85 text-xs text-slate-300">
             <span>Sessão encerrada</span>
