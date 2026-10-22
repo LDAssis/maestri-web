@@ -1,12 +1,14 @@
-import Fastify from "fastify";
+import Fastify, { FastifyRequest } from "fastify";
+import type { WebSocket } from "ws";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import pty from "node-pty";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WorktreeManager, WorktreeSession } from "./worktree.js";
+import { SessionManager } from "./sessions.js";
+import { CanvasStore } from "./canvas.js";
 
 // Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
 process.on("uncaughtException", (err) => {
@@ -51,12 +53,6 @@ fastify.addHook("onRequest", async (req, reply) => {
   }
 });
 await fastify.register(websocket);
-
-const isWindows = process.platform === "win32";
-const gitBashPath = "C:\\Program Files\\Git\\bin\\bash.exe";
-const defaultShell = isWindows
-  ? fs.existsSync(gitBashPath) ? gitBashPath : "powershell.exe"
-  : process.env.SHELL || "/bin/bash";
 
 // Diretório base dos projetos e persistência
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -128,6 +124,16 @@ function canvasFileFor(id: string) {
   return /^[\w-]+$/.test(id) && projects.some((p) => p.id === id) ? path.join(dataDir, `canvas_${id}.json`) : null;
 }
 
+const sessions = new SessionManager();
+const canvas = new CanvasStore(canvasFileFor, writeJsonAtomic, (projectId, ids) => sessions.killNodes(projectId, ids));
+
+fastify.addHook("onClose", async () => {
+  canvas.flushAll();
+  sessions.killAll();
+});
+
+const idPattern = /^[\w-]+$/;
+
 // Endpoints de Projetos
 fastify.get("/api/projects", async () => {
   return projects;
@@ -160,6 +166,8 @@ fastify.delete<{ Params: { id: string } }>("/api/projects/:id", async (req, repl
   }
   projects.splice(idx, 1);
   saveProjects();
+  sessions.killProject(req.params.id);
+  canvas.drop(req.params.id);
   return { ok: true };
 });
 
@@ -172,13 +180,8 @@ fastify.get<{ Params: { id: string } }>("/api/projects/:id/canvas", async (req, 
   if (!canvasFile) {
     return reply.status(404).send({ error: "Projeto não encontrado." });
   }
-  if (fs.existsSync(canvasFile)) {
-    try {
-      const state = JSON.parse(fs.readFileSync(canvasFile, "utf-8"));
-      return state;
-    } catch {}
-  }
-  return { nodes: null, edges: null };
+  const { nodes, edges, rev } = canvas.state(req.params.id);
+  return { nodes, edges, rev };
 });
 
 fastify.post<{ Params: { id: string }; Body: { nodes: any[]; edges: any[] } }>("/api/projects/:id/canvas", async (req, reply) => {
@@ -189,41 +192,63 @@ fastify.post<{ Params: { id: string }; Body: { nodes: any[]; edges: any[] } }>("
   if (!canvasFile) {
     return reply.status(404).send({ error: "Projeto não encontrado." });
   }
-  writeJsonAtomic(canvasFile, req.body);
+  const res = canvas.applyAndBroadcast(req.params.id, { kind: "replace", nodes: req.body?.nodes, edges: req.body?.edges }, "http");
+  if ("error" in res) return reply.status(400).send({ error: res.error });
+  return { ok: true, rev: res.rev };
+});
+
+// Sessões de terminal
+fastify.get<{ Params: { id: string } }>("/api/projects/:id/sessions", async (req, reply) => {
+  if (!canvasFileFor(req.params.id)) return reply.status(404).send({ error: "Projeto não encontrado." });
+  return sessions.list(req.params.id);
+});
+
+fastify.delete<{ Params: { id: string; node: string } }>("/api/projects/:id/sessions/:node", async (req, reply) => {
+  if (!sessions.kill(req.params.id, req.params.node)) return reply.status(404).send({ error: "Sessão não encontrada." });
   return { ok: true };
 });
 
-// Prepend CLI tools paths (agy, claude, opencode) — só no Windows
-const extraPaths = isWindows
-  ? [
-      "C:\\Users\\ti\\AppData\\Local\\agy\\bin",
-      "C:\\Users\\ti\\.local\\bin",
-      "C:\\Users\\ti\\AppData\\Roaming\\npm",
-    ]
-  : [];
+fastify.post<{ Params: { id: string; node: string } }>("/api/projects/:id/sessions/:node/restart", async (req, reply) => {
+  try {
+    if (!sessions.restart(req.params.id, req.params.node)) return reply.status(404).send({ error: "Sessão não encontrada." });
+  } catch (err: any) {
+    return reply.status(500).send({ error: `Falha ao reiniciar: ${err.message}` });
+  }
+  return { ok: true };
+});
 
-const enrichedPath = [...extraPaths, process.env.PATH || ""].join(path.delimiter);
-
-// WebSocket Terminal com ConPTY e proteção contra EAGAIN
-fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
+// Autoriza uma conexão WS: token (F1) ou, sem token, allowlist de Origin. Navegadores sempre enviam
+// Origin; clientes sem Origin (CLI/ws) não são alvo de CSRF.
+function wsAuthorized(socket: WebSocket, req: FastifyRequest, url: URL) {
   socket.on("error", (err) => {
     console.error("WebSocket socket error capturado:", err.message);
   });
 
-  // Navegadores sempre enviam Origin; clientes sem Origin (CLI/ws) não são alvo de CSRF
-  const url = new URL(req.url, "http://localhost");
-
   if (authToken) {
     if (!tokenMatches(url.searchParams.get("token"))) {
       socket.close(4401, "Token inválido");
-      return;
+      return false;
     }
   } else {
     const origin = req.headers.origin;
     if (origin && !allowedOrigins.includes(origin)) {
       socket.close(1008, "Origin não permitido");
-      return;
+      return false;
     }
+  }
+  return true;
+}
+
+// WebSocket Terminal: anexa o cliente à sessão compartilhada do nó (cria o PTY na primeira vez)
+fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
+  const url = new URL(req.url, "http://localhost");
+  if (!wsAuthorized(socket, req, url)) return;
+
+  const projectId = url.searchParams.get("project") || "";
+  const nodeId = url.searchParams.get("node") || "";
+  if (!idPattern.test(projectId) || !idPattern.test(nodeId) || !canvasFileFor(projectId)) {
+    socket.close(4400, "project/node inválidos");
+    return;
   }
 
   const rawCwd = url.searchParams.get("cwd")?.trim();
@@ -241,101 +266,20 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
       if (allowed && fs.statSync(real).isDirectory()) cwd = real;
     } catch {}
   }
-  const initialCommand = url.searchParams.get("cmd") || "";
 
-  let ptyProcess: pty.IPty | null = null;
+  sessions.attach(socket, projectId, nodeId, { cwd, cmd: url.searchParams.get("cmd") || "" });
+});
 
-  try {
-    const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : isWindows ? ["-NoLogo"] : [];
-    ptyProcess = pty.spawn(defaultShell, shellArgs, {
-      name: "xterm-256color",
-      cols: 80,
-      rows: 24,
-      cwd,
-      env: {
-        ...process.env,
-        ...(isWindows ? { Path: enrichedPath } : {}),
-        PATH: enrichedPath,
-        TERM: "xterm-256color",
-        COLORTERM: "truecolor",
-      },
-    });
-  } catch (err: any) {
-    console.error("Erro ao iniciar ConPTY:", err.message);
-    socket.send(`\r\n\x1b[31m[Erro]: Falha ao iniciar ConPTY: ${err.message}\x1b[0m\r\n`);
-    socket.close();
+// WebSocket do canvas: snapshot ao conectar, depois ops em tempo real
+fastify.get<{ Params: { id: string } }>("/ws/project/:id", { websocket: true }, (socket, req) => {
+  const url = new URL(req.url, "http://localhost");
+  if (!wsAuthorized(socket, req, url)) return;
+
+  if (!idPattern.test(req.params.id) || !canvasFileFor(req.params.id)) {
+    socket.close(4400, "Projeto inválido");
     return;
   }
-
-  socket.send(`\r\n\x1b[32m[Maestri Web - ConPTY Ativo]\x1b[0m Terminal pronto em: ${cwd}\r\n`);
-
-  if (initialCommand) {
-    setTimeout(() => {
-      try {
-        ptyProcess?.write(`${initialCommand}\r`);
-      } catch {}
-    }, 600);
-  }
-
-  ptyProcess.onData((data: string) => {
-    try {
-      if (socket.readyState === 1 /* OPEN */) {
-        socket.send(data);
-      }
-    } catch (e: any) {
-      console.warn("Aviso ao enviar data para socket:", e.message);
-    }
-  });
-
-  socket.on("message", (message: Buffer | string) => {
-    try {
-      if (!ptyProcess) return;
-      const text = message.toString();
-      if (text.startsWith('{"type":"resize"')) {
-        const { cols, rows } = JSON.parse(text);
-        if (Number.isFinite(cols) && Number.isFinite(rows)) {
-          ptyProcess.resize(Math.min(500, Math.max(10, Math.floor(cols))), Math.min(200, Math.max(5, Math.floor(rows))));
-        }
-        return;
-      }
-      ptyProcess.write(text);
-    } catch (e: any) {
-      console.error("Erro ao escrever no PTY:", e.message);
-    }
-  });
-
-  const cleanup = () => {
-    if (ptyProcess) {
-      const { pid } = ptyProcess;
-      try {
-        ptyProcess.kill();
-      } catch {}
-      if (!isWindows) {
-        // node-pty faz setsid: o shell lidera o grupo; mata também os filhos (claude, npm run dev...)
-        try {
-          process.kill(-pid, "SIGHUP");
-        } catch {}
-        setTimeout(() => {
-          try {
-            process.kill(-pid, "SIGKILL");
-          } catch {}
-        }, 2000).unref();
-      }
-      ptyProcess = null;
-    }
-  };
-
-  socket.on("close", cleanup);
-
-  ptyProcess.onExit((event) => {
-    try {
-      if (socket.readyState === 1) {
-        socket.send(`\r\n\x1b[33m[PTY finalizado (exitCode: ${event.exitCode})]\x1b[0m\r\n`);
-        socket.close();
-      }
-    } catch {}
-    cleanup();
-  });
+  canvas.attach(socket, req.params.id, url.searchParams.get("clientId") || "");
 });
 
 const port = Number(process.env.PORT) || 4000;

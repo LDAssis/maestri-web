@@ -1,17 +1,31 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { wsUrl } from "@/lib/api";
+import { apiFetch, wsUrl } from "@/lib/api";
+
+export type TerminalStatus = "conectando" | "online" | "offline" | "encerrada";
 
 interface TerminalViewProps {
+  projectId: string;
+  nodeId: string;
   cwd?: string;
   initialCmd?: string;
+  onStatusChange?: (status: TerminalStatus) => void;
 }
 
-export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
+export default function TerminalView({ projectId, nodeId, cwd, initialCmd, onStatusChange }: TerminalViewProps) {
+  const [status, setStatus] = useState<TerminalStatus>("conectando");
+  const onStatusRef = useRef(onStatusChange);
+  onStatusRef.current = onStatusChange;
+  const connectRef = useRef<() => void>(() => {});
+  const updateStatus = useCallback((next: TerminalStatus) => {
+    setStatus(next);
+    onStatusRef.current?.(next);
+  }, []);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -46,22 +60,61 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
     term.open(containerRef.current);
     termRef.current = term;
 
-    // Conecta via WebSocket ao Fastify Terminal
-    const ws = new WebSocket(wsUrl("/ws/terminal", { cwd: cwd || "", cmd: initialCmd || "" }));
-    socketRef.current = ws;
+    // Sessão compartilhada no servidor: fechar o socket não mata o PTY; reconecta com backoff
+    let ws: WebSocket | null = null;
+    let closed = false;
+    let attempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    ws.onmessage = (event) => {
-      term.write(event.data);
+    const connect = () => {
+      if (retryTimer) clearTimeout(retryTimer);
+      updateStatus("conectando");
+      const sock = new WebSocket(
+        wsUrl("/ws/terminal", { project: projectId, node: nodeId, cwd: cwd || "", cmd: initialCmd || "" })
+      );
+      ws = sock;
+      socketRef.current = sock;
+
+      sock.onopen = () => {
+        attempt = 0;
+        term.reset(); // o servidor reenvia o scrollback inteiro ao anexar
+        updateStatus("online");
+        try {
+          fitAddon.fit();
+        } catch {}
+        sock.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      };
+
+      sock.onmessage = (event) => {
+        term.write(event.data);
+      };
+
+      sock.onclose = (event) => {
+        if (closed || ws !== sock) return;
+        if (event.code === 4000) {
+          updateStatus("encerrada");
+          return;
+        }
+        updateStatus("offline");
+        retryTimer = setTimeout(connect, Math.min(1000 * 2 ** attempt, 10000));
+        attempt++;
+      };
     };
+    connectRef.current = () => {
+      attempt = 0;
+      ws?.close();
+      connect();
+    };
+    connect();
 
     term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws?.readyState === WebSocket.OPEN) {
         ws.send(data);
       }
     });
 
     term.onResize((size) => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "resize", cols: size.cols, rows: size.rows }));
       }
     });
@@ -84,7 +137,7 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
           resizeTimer = setTimeout(() => {
             try {
               fitAddon.fit();
-              if (ws.readyState === WebSocket.OPEN) {
+              if (ws?.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
               }
             } catch {}
@@ -104,10 +157,19 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
     return () => {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeObserver.disconnect();
-      ws.close();
+      closed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      ws?.close();
       term.dispose();
     };
-  }, [cwd, initialCmd]);
+  }, [projectId, nodeId, cwd, initialCmd, updateStatus]);
+
+  const restartSession = async () => {
+    try {
+      await apiFetch(`/api/projects/${projectId}/sessions/${nodeId}/restart`, { method: "POST" });
+    } catch {}
+    connectRef.current();
+  };
 
   const sendCommand = (cmd: string) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
@@ -149,6 +211,17 @@ export default function TerminalView({ cwd, initialCmd }: TerminalViewProps) {
       {/* Terminal Container com posicionamento absoluto para prevenir expansão do container */}
       <div className="flex-1 w-full relative overflow-hidden min-h-0">
         <div ref={containerRef} className="absolute inset-0 p-2 overflow-hidden" />
+        {status === "encerrada" && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[#050811]/85 text-xs text-slate-300">
+            <span>Sessão encerrada</span>
+            <button
+              onClick={restartSession}
+              className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition"
+            >
+              Reiniciar
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
