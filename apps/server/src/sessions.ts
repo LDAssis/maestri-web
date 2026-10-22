@@ -1,0 +1,222 @@
+import pty from "node-pty";
+import fs from "node:fs";
+import path from "node:path";
+import type { WebSocket } from "ws";
+
+const isWindows = process.platform === "win32";
+const gitBashPath = "C:\\Program Files\\Git\\bin\\bash.exe";
+const defaultShell = isWindows
+  ? fs.existsSync(gitBashPath) ? gitBashPath : "powershell.exe"
+  : process.env.SHELL || "/bin/bash";
+
+// Prepend CLI tools paths (agy, claude, opencode) — só no Windows
+const extraPaths = isWindows
+  ? [
+      "C:\\Users\\ti\\AppData\\Local\\agy\\bin",
+      "C:\\Users\\ti\\.local\\bin",
+      "C:\\Users\\ti\\AppData\\Roaming\\npm",
+    ]
+  : [];
+
+const enrichedPath = [...extraPaths, process.env.PATH || ""].join(path.delimiter);
+
+const SCROLLBACK_MAX = 200 * 1024;
+
+export interface Session {
+  projectId: string;
+  nodeId: string;
+  pty: pty.IPty;
+  scrollback: string;
+  clients: Set<WebSocket>;
+  cwd: string;
+  cmd: string;
+  createdAt: string;
+  cols: number;
+  rows: number;
+  dead: boolean;
+}
+
+function spawnPty(cwd: string, cols: number, rows: number) {
+  const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : isWindows ? ["-NoLogo"] : [];
+  return pty.spawn(defaultShell, shellArgs, {
+    name: "xterm-256color",
+    cols,
+    rows,
+    cwd,
+    env: {
+      ...process.env,
+      ...(isWindows ? { Path: enrichedPath } : {}),
+      PATH: enrichedPath,
+      TERM: "xterm-256color",
+      COLORTERM: "truecolor",
+    },
+  });
+}
+
+function killGroup(p: pty.IPty) {
+  const { pid } = p;
+  try {
+    p.kill();
+  } catch {}
+  if (!isWindows) {
+    // node-pty faz setsid: o shell lidera o grupo; mata também os filhos (claude, npm run dev...)
+    try {
+      process.kill(-pid, "SIGHUP");
+    } catch {}
+    setTimeout(() => {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {}
+    }, 2000).unref();
+  }
+}
+
+// Sessões de terminal compartilhadas: sobrevivem à desconexão dos clientes
+export class SessionManager {
+  private sessions = new Map<string, Session>();
+
+  private key(projectId: string, nodeId: string) {
+    return `${projectId}:${nodeId}`;
+  }
+
+  private broadcast(s: Session, data: string) {
+    for (const c of s.clients) {
+      try {
+        if (c.readyState === 1 /* OPEN */) c.send(data);
+      } catch (e: any) {
+        console.warn("Aviso ao enviar data para socket:", e.message);
+      }
+    }
+  }
+
+  private push(s: Session, data: string) {
+    s.scrollback += data;
+    if (s.scrollback.length > SCROLLBACK_MAX) s.scrollback = s.scrollback.slice(-SCROLLBACK_MAX);
+    this.broadcast(s, data);
+  }
+
+  private runCmd(s: Session, p: pty.IPty) {
+    if (!s.cmd) return;
+    setTimeout(() => {
+      try {
+        if (s.pty === p && !s.dead) p.write(`${s.cmd}\r`);
+      } catch {}
+    }, 600);
+  }
+
+  private wire(s: Session, p: pty.IPty) {
+    p.onData((data: string) => {
+      if (s.pty === p && !s.dead) this.push(s, data);
+    });
+    p.onExit((event) => {
+      if (s.pty === p) this.end(s, String(event.exitCode));
+    });
+  }
+
+  // Encerra a sessão: avisa, fecha os clientes (4000), tira do registro e mata o process group
+  private end(s: Session, exitCode: string) {
+    if (s.dead) return;
+    s.dead = true;
+    const k = this.key(s.projectId, s.nodeId);
+    if (this.sessions.get(k) === s) this.sessions.delete(k);
+    this.broadcast(s, `\r\n\x1b[33m[PTY finalizado (exitCode: ${exitCode})]\x1b[0m\r\n`);
+    for (const c of s.clients) {
+      try {
+        c.close(4000, "PTY finalizado");
+      } catch {}
+    }
+    s.clients.clear();
+    killGroup(s.pty);
+  }
+
+  attach(socket: WebSocket, projectId: string, nodeId: string, opts: { cwd: string; cmd: string }) {
+    const k = this.key(projectId, nodeId);
+    let s = this.sessions.get(k);
+    if (!s) {
+      try {
+        const cols = 80;
+        const rows = 24;
+        const p = spawnPty(opts.cwd, cols, rows);
+        s = {
+          projectId, nodeId, pty: p, clients: new Set(), cwd: opts.cwd, cmd: opts.cmd,
+          createdAt: new Date().toISOString(), cols, rows, dead: false,
+          scrollback: `\r\n\x1b[32m[Maestri Web - ConPTY Ativo]\x1b[0m Terminal pronto em: ${opts.cwd}\r\n`,
+        };
+        this.sessions.set(k, s);
+        this.wire(s, p);
+        this.runCmd(s, p);
+      } catch (err: any) {
+        console.error("Erro ao iniciar ConPTY:", err.message);
+        socket.send(`\r\n\x1b[31m[Erro]: Falha ao iniciar ConPTY: ${err.message}\x1b[0m\r\n`);
+        socket.close();
+        return;
+      }
+    }
+
+    const session = s;
+    try {
+      socket.send(session.scrollback);
+    } catch {}
+    session.clients.add(socket);
+
+    socket.on("message", (message: Buffer | string) => {
+      try {
+        const text = message.toString();
+        if (text.startsWith('{"type":"resize"')) {
+          const { cols, rows } = JSON.parse(text);
+          if (Number.isFinite(cols) && Number.isFinite(rows)) {
+            session.cols = Math.min(500, Math.max(10, Math.floor(cols)));
+            session.rows = Math.min(200, Math.max(5, Math.floor(rows)));
+            session.pty.resize(session.cols, session.rows);
+          }
+          return;
+        }
+        session.pty.write(text);
+      } catch (e: any) {
+        console.error("Erro ao escrever no PTY:", e.message);
+      }
+    });
+
+    // Fechar um cliente não mata o PTY
+    socket.on("close", () => session.clients.delete(socket));
+  }
+
+  list(projectId: string) {
+    return [...this.sessions.values()]
+      .filter((s) => s.projectId === projectId)
+      .map((s) => ({ nodeId: s.nodeId, pid: s.pty.pid, clients: s.clients.size, createdAt: s.createdAt }));
+  }
+
+  kill(projectId: string, nodeId: string) {
+    const s = this.sessions.get(this.key(projectId, nodeId));
+    if (!s) return false;
+    this.end(s, "killed");
+    return true;
+  }
+
+  killNodes(projectId: string, nodeIds: string[]) {
+    for (const id of nodeIds) this.kill(projectId, id);
+  }
+
+  killProject(projectId: string) {
+    for (const s of [...this.sessions.values()]) if (s.projectId === projectId) this.end(s, "killed");
+  }
+
+  killAll() {
+    for (const s of [...this.sessions.values()]) this.end(s, "killed");
+  }
+
+  // Recria o PTY com o mesmo cwd/cmd; os clientes continuam anexados
+  restart(projectId: string, nodeId: string) {
+    const s = this.sessions.get(this.key(projectId, nodeId));
+    if (!s) return false;
+    const old = s.pty;
+    const p = spawnPty(s.cwd, s.cols, s.rows);
+    s.pty = p;
+    killGroup(old);
+    this.push(s, "\r\n\x1b[33m[Sessão reiniciada]\x1b[0m\r\n");
+    this.wire(s, p);
+    this.runCmd(s, p);
+    return true;
+  }
+}

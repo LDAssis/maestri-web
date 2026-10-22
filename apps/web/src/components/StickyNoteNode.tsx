@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import { StickyNote, Edit3 } from "lucide-react";
+import DeleteNodeButton from "./DeleteNodeButton";
 
 export interface StickyNoteData extends Record<string, unknown> {
   title: string;
@@ -20,8 +21,8 @@ export default function StickyNoteNode({
   data: StickyNoteData;
   selected?: boolean;
 }) {
-  const [content, setContent] = useState(data.content || "");
-  const [title, setTitle] = useState(data.title || "Nota Adesiva");
+  const content = data.content || "";
+  const title = data.title || "Nota Adesiva";
   const [isEditing, setIsEditing] = useState(false);
   const { updateNodeData } = useReactFlow();
 
@@ -67,7 +68,6 @@ export default function StickyNoteNode({
               type="text"
               value={title}
               onChange={(e) => {
-                setTitle(e.target.value);
                 updateNodeData(id, { title: e.target.value });
               }}
               className="bg-black/40 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
@@ -84,6 +84,7 @@ export default function StickyNoteNode({
           >
             <Edit3 className="h-3 w-3 opacity-70" />
           </button>
+          <DeleteNodeButton id={id} />
         </div>
       </div>
 
@@ -93,7 +94,6 @@ export default function StickyNoteNode({
           <textarea
             value={content}
             onChange={(e) => {
-              setContent(e.target.value);
               updateNodeData(id, { content: e.target.value });
             }}
             className="w-full h-full bg-black/40 rounded-lg p-2 text-xs font-mono leading-relaxed text-white focus:outline-none resize-none"

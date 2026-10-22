@@ -253,6 +253,7 @@ function App({
                 key={activeProject.id}
                 projectId={activeProject.id}
                 projectName={activeProject.name}
+                clientId={user.id}
               />
             ) : projectsError ? (
               <div

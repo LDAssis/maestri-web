@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useContext, useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import {
   Terminal,
@@ -12,8 +12,13 @@ import {
   AtSign,
   Crown,
   Sparkles,
+  RotateCw,
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import DeleteNodeButton from "./DeleteNodeButton";
+import { apiFetch } from "@/lib/api";
+import { ProjectIdContext } from "@/lib/projectContext";
+import type { TerminalStatus } from "./TerminalView";
 
 const TerminalView = dynamic(() => import("./TerminalView"), {
   ssr: false,
@@ -47,6 +52,8 @@ export default function AgentTerminalNode({
   const nodeData = data;
   const [activeFace, setActiveFace] = useState<"terminal" | "chat">("terminal");
   const { updateNodeData } = useReactFlow();
+  const projectId = useContext(ProjectIdContext);
+  const [termStatus, setTermStatus] = useState<TerminalStatus>("conectando");
   const isMaestro = Boolean(nodeData.isMaestro);
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<Array<{ sender: "user" | "agent"; text: string }>>([
@@ -197,6 +204,7 @@ export default function AgentTerminalNode({
           </div>
 
           <span className={`h-2 w-2 rounded-full ${getStatusColor()}`}></span>
+          <DeleteNodeButton id={id} />
         </div>
       </div>
 
@@ -209,6 +217,9 @@ export default function AgentTerminalNode({
           }`}
         >
           <TerminalView
+            projectId={projectId}
+            nodeId={id}
+            onStatusChange={setTermStatus}
             cwd={nodeData.worktreePath}
             initialCmd={nodeData.defaultCmd}
           />
@@ -265,8 +276,29 @@ export default function AgentTerminalNode({
           <Terminal className="h-3 w-3" />
           {nodeData.branch || "worktree isolado"}
         </span>
-        <span className="text-slate-500">
-          {isMaestro ? "👑 Coordenador da Orquestra" : "ConPTY Conectado"}
+        <span className="flex items-center gap-2 text-slate-500">
+          {isMaestro && "👑"}
+          <span
+            className={
+              termStatus === "online"
+                ? "text-emerald-400"
+                : termStatus === "encerrada"
+                ? "text-rose-400"
+                : "text-amber-400"
+            }
+          >
+            {{ conectando: "Conectando…", online: "Online", offline: "Offline", encerrada: "Sessão encerrada" }[termStatus]}
+          </span>
+          <button
+            onClick={() =>
+              apiFetch(`/api/projects/${projectId}/sessions/${id}/restart`, { method: "POST" }).catch(() => {})
+            }
+            className="p-0.5 rounded hover:text-white hover:bg-slate-800 transition"
+            title="Reiniciar sessão"
+            aria-label="Reiniciar sessão"
+          >
+            <RotateCw className="h-3 w-3" />
+          </button>
         </span>
       </div>
 

@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import { Globe, RefreshCw, ExternalLink, ShieldCheck } from "lucide-react";
+import DeleteNodeButton from "./DeleteNodeButton";
 
 export interface PortalNodeData extends Record<string, unknown> {
   title: string;
@@ -32,10 +33,16 @@ export default function PortalNode({
   data: PortalNodeData;
   selected?: boolean;
 }) {
-  const [currentUrl, setCurrentUrl] = useState(normalizeUrl(data.url || ""));
+  const currentUrl = normalizeUrl(data.url || "");
   const [inputUrl, setInputUrl] = useState(data.url || "");
   const [invalid, setInvalid] = useState(false);
   const [key, setKey] = useState(0);
+
+  // URL alterada por outro usuário: atualiza o campo (o iframe segue data.url)
+  useEffect(() => {
+    setInputUrl(data.url || "");
+    setInvalid(false);
+  }, [data.url]);
   const { updateNodeData } = useReactFlow();
 
   const handleReload = () => {
@@ -46,7 +53,6 @@ export default function PortalNode({
     e.preventDefault();
     const next = normalizeUrl(inputUrl);
     setInvalid(!next && !!inputUrl.trim());
-    setCurrentUrl(next);
     if (next) setInputUrl(next);
     updateNodeData(id, { url: next });
     setKey((prev) => prev + 1);
@@ -102,6 +108,7 @@ export default function PortalNode({
           >
             <ExternalLink className="h-3 w-3" />
           </a>
+          <DeleteNodeButton id={id} />
         </div>
       </div>
 

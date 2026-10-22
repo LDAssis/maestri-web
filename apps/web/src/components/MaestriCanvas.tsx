@@ -11,6 +11,8 @@ import {
   addEdge,
   Connection,
   Edge,
+  NodeChange,
+  EdgeChange,
   Node,
   BackgroundVariant,
   MarkerType,
@@ -18,15 +20,17 @@ import {
   ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { apiFetch } from "@/lib/api";
+import { wsUrl } from "@/lib/api";
+import { ProjectIdContext } from "@/lib/projectContext";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
 import PortalNode, { PortalNodeData } from "./PortalNode";
-import { Plus, RefreshCw, StickyNote, Globe, Save } from "lucide-react";
+import { Plus, RefreshCw, StickyNote, Globe } from "lucide-react";
 
 interface MaestriCanvasProps {
   projectId: string;
   projectName: string;
+  clientId: string;
 }
 
 const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
@@ -181,7 +185,30 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
   ],
 };
 
-export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasProps) {
+type CanvasOp =
+  | { kind: "upsertNodes"; nodes: (Partial<Node<any>> & { id: string })[] }
+  | { kind: "removeNodes"; ids: string[] }
+  | { kind: "patchNodeData"; id: string; data: Record<string, unknown> }
+  | { kind: "upsertEdges"; edges: Edge[] }
+  | { kind: "removeEdges"; ids: string[] }
+  | { kind: "replace"; nodes: Node<any>[]; edges: Edge[] };
+
+type ConnState = "connecting" | "online" | "reconnecting";
+
+// Remove campos transitórios (o servidor também remove, mas evita tráfego inútil)
+const stripNode = ({ selected, dragging, measured, resizing, ...rest }: any) => rest;
+const stripEdge = ({ selected, ...rest }: any) => rest;
+
+const viewportKey = (projectId: string) => `maestri.viewport.${projectId}`;
+const readViewport = (projectId: string): Viewport | undefined => {
+  try {
+    return JSON.parse(localStorage.getItem(viewportKey(projectId)) || "null") || undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+export default function MaestriCanvas({ projectId, projectName, clientId }: MaestriCanvasProps) {
   const nodeTypes = useMemo(
     () => ({
       agentTerminal: AgentTerminalNode as any,
@@ -191,113 +218,224 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
     []
   );
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node<any>>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const [saveStatus, setSaveStatus] = useState<string>("");
-  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
-  const [loadError, setLoadError] = useState<string>("");
-  const [initialViewport, setInitialViewport] = useState<Viewport | undefined>(undefined);
-  const [viewport, setViewport] = useState<Viewport | undefined>(undefined);
+  const [nodes, setNodes, onNodesChangeBase] = useNodesState<Node<any>>([]);
+  const [edges, setEdges, onEdgesChangeBase] = useEdgesState<Edge>([]);
+  const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
+  const [connState, setConnState] = useState<ConnState>("connecting");
+  const [initialViewport] = useState<Viewport | undefined>(() => readViewport(projectId));
   const containerRef = useRef<HTMLDivElement>(null);
   const flowRef = useRef<ReactFlowInstance | null>(null);
-  const lastSavedRef = useRef<string>("");
-  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const nodesRef = useRef<Node<any>[]>([]);
+  const edgesRef = useRef<Edge[]>([]);
+  nodesRef.current = nodes;
+  edgesRef.current = edges;
 
-  // Serializa só o que é persistente (sem selected, dragging, measured...)
-  const serializeCanvas = (n: Node<any>[], e: Edge[], v?: Viewport) =>
-    JSON.stringify({
-      nodes: n.map(({ selected, dragging, measured, resizing, ...rest }: any) => rest),
-      edges: e.map(({ selected, ...rest }: any) => rest),
-      viewport: v,
-    });
-
-  // Carrega o canvas específico deste projeto
-  const loadProjectCanvas = useCallback(async () => {
-    setLoadState("loading");
-    setLoadError("");
-    try {
-      const res = await apiFetch(`/api/projects/${projectId}/canvas`);
-      if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);
-      const data = await res.json();
-      const hasNodes = Array.isArray(data?.nodes) && data.nodes.length > 0;
-      // Padrão só quando o backend responde sem canvas salvo
-      const loadedNodes = hasNodes ? data.nodes : defaultPartituraFullstack.nodes;
-      const loadedEdges = hasNodes ? data.edges || [] : defaultPartituraFullstack.edges;
-      const loadedViewport: Viewport | undefined = hasNodes ? data.viewport : undefined;
-      setNodes(loadedNodes);
-      setEdges(loadedEdges);
-      setInitialViewport(loadedViewport);
-      setViewport(loadedViewport);
-      lastSavedRef.current = serializeCanvas(loadedNodes, loadedEdges, loadedViewport);
-      setLoadState("ready");
-    } catch (err: any) {
-      setLoadError(err?.message || "Falha de rede");
-      setLoadState("error");
-    }
-  }, [projectId, setNodes, setEdges]);
-
-  useEffect(() => {
-    loadProjectCanvas();
-  }, [loadProjectCanvas]);
-
-  const flashStatus = useCallback((msg: string, ms?: number) => {
-    if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
-    setSaveStatus(msg);
-    if (ms) statusTimerRef.current = setTimeout(() => setSaveStatus(""), ms);
+  const sendOp = useCallback((op: CanvasOp) => {
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "op", op }));
   }, []);
 
-  // Salva o canvas deste projeto no backend (manual e autosave)
-  const saveProjectCanvas = useCallback(
-    async (auto = false) => {
-      if (loadState !== "ready") return;
-      const body = serializeCanvas(nodes, edges, viewport);
-      if (auto && body === lastSavedRef.current) return;
-      flashStatus(auto ? "Salvando automaticamente..." : "Salvando...");
-      try {
-        const res = await apiFetch(`/api/projects/${projectId}/canvas`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-        });
-        if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);
-        lastSavedRef.current = body;
-        flashStatus("Salvo!", 2000);
-      } catch (err: any) {
-        flashStatus(`Erro ao salvar: ${err?.message || "falha de rede"}`);
+  // Aplica op recebida de outro cliente (sem reemitir)
+  const applyRemoteOp = useCallback(
+    (op: CanvasOp) => {
+      switch (op.kind) {
+        case "upsertNodes":
+          setNodes((nds) => {
+            const byId = new Map(op.nodes.map((n) => [n.id, n]));
+            const merged = nds.map((n) => (byId.has(n.id) ? { ...n, ...byId.get(n.id)! } : n));
+            const known = new Set(nds.map((n) => n.id));
+            return [...merged, ...(op.nodes.filter((n) => n.position && !known.has(n.id)) as Node<any>[])];
+          });
+          break;
+        case "removeNodes": {
+          const ids = new Set(op.ids);
+          setNodes((nds) => nds.filter((n) => !ids.has(n.id)));
+          setEdges((eds) => eds.filter((e) => !ids.has(e.source) && !ids.has(e.target)));
+          break;
+        }
+        case "patchNodeData":
+          setNodes((nds) =>
+            nds.map((n) => (n.id === op.id ? { ...n, data: { ...n.data, ...op.data } } : n))
+          );
+          break;
+        case "upsertEdges":
+          setEdges((eds) => {
+            const byId = new Map(op.edges.map((e) => [e.id, e]));
+            const merged = eds.map((e) => (byId.has(e.id) ? { ...e, ...byId.get(e.id)! } : e));
+            const known = new Set(eds.map((e) => e.id));
+            return [...merged, ...op.edges.filter((e) => !known.has(e.id))];
+          });
+          break;
+        case "removeEdges": {
+          const ids = new Set(op.ids);
+          setEdges((eds) => eds.filter((e) => !ids.has(e.id)));
+          break;
+        }
+        case "replace":
+          setNodes(op.nodes);
+          setEdges(op.edges);
+          break;
       }
     },
-    [loadState, nodes, edges, viewport, projectId, flashStatus]
+    [setNodes, setEdges]
   );
 
-  // Autosave com debounce após mudanças
+  // Conexão em tempo real com o projeto (reconecta com backoff; o snapshot substitui o estado local)
   useEffect(() => {
-    if (loadState !== "ready") return;
-    if (serializeCanvas(nodes, edges, viewport) === lastSavedRef.current) return;
-    const t = setTimeout(() => saveProjectCanvas(true), 1500);
-    return () => clearTimeout(t);
-  }, [loadState, nodes, edges, viewport, saveProjectCanvas]);
+    let closed = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const connect = () => {
+      const ws = new WebSocket(wsUrl(`/ws/project/${projectId}`, { clientId }));
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        attempt = 0;
+        setConnState("online");
+      };
+
+      ws.onmessage = (event) => {
+        let msg: any;
+        try {
+          msg = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (msg.type === "snapshot") {
+          if (msg.nodes == null) {
+            // Projeto sem canvas salvo: o primeiro cliente semeia o arranjo padrão
+            setNodes(defaultPartituraFullstack.nodes);
+            setEdges(defaultPartituraFullstack.edges);
+            sendOp({ kind: "replace", nodes: defaultPartituraFullstack.nodes, edges: defaultPartituraFullstack.edges });
+          } else {
+            setNodes(msg.nodes);
+            setEdges(msg.edges || []);
+          }
+          setLoadState("ready");
+        } else if (msg.type === "op") {
+          applyRemoteOp(msg.op);
+        } else if (msg.type === "error") {
+          console.warn("Op recusada pelo servidor:", msg.error);
+        }
+      };
+
+      ws.onclose = () => {
+        if (closed) return;
+        setConnState("reconnecting");
+        timer = setTimeout(connect, Math.min(1000 * 2 ** attempt, 10000));
+        attempt++;
+      };
+    };
+
+    connect();
+    return () => {
+      closed = true;
+      if (timer) clearTimeout(timer);
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, [projectId, clientId, setNodes, setEdges, sendOp, applyRemoteOp]);
+
+  // Arrasto/resize saem como upsertNodes parciais ({id, position} / {id, width, height, style}) com throttle de 60ms
+  const pendingUpsertRef = useRef<Map<string, { pos?: boolean; size?: boolean }>>(new Map());
+  const upsertTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queueUpsert = useCallback(
+    (id: string, field: "pos" | "size") => {
+      pendingUpsertRef.current.set(id, { ...pendingUpsertRef.current.get(id), [field]: true });
+      if (upsertTimerRef.current) return;
+      upsertTimerRef.current = setTimeout(() => {
+        upsertTimerRef.current = null;
+        const pending = pendingUpsertRef.current;
+        pendingUpsertRef.current = new Map();
+        const changed = nodesRef.current.filter((n) => pending.has(n.id)).map((n) => {
+          const f = pending.get(n.id)!;
+          return {
+            id: n.id,
+            ...(f.pos ? { position: n.position } : {}),
+            ...(f.size ? { width: n.width, height: n.height, style: n.style } : {}),
+          };
+        });
+        if (changed.length) sendOp({ kind: "upsertNodes", nodes: changed });
+      }, 60);
+    },
+    [sendOp]
+  );
+
+  // Mudanças de data (updateNodeData dos nós) chegam como 'replace': vira patchNodeData com debounce de 300ms
+  const pendingPatchRef = useRef<Map<string, Record<string, unknown>>>(new Map());
+  const patchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queuePatch = useCallback(
+    (id: string, data: Record<string, unknown>) => {
+      pendingPatchRef.current.set(id, { ...pendingPatchRef.current.get(id), ...data });
+      if (patchTimerRef.current) clearTimeout(patchTimerRef.current);
+      patchTimerRef.current = setTimeout(() => {
+        patchTimerRef.current = null;
+        const patches = pendingPatchRef.current;
+        pendingPatchRef.current = new Map();
+        patches.forEach((data, id) => sendOp({ kind: "patchNodeData", id, data }));
+      }, 300);
+    },
+    [sendOp]
+  );
 
   useEffect(
     () => () => {
-      if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+      if (upsertTimerRef.current) clearTimeout(upsertTimerRef.current);
+      if (patchTimerRef.current) clearTimeout(patchTimerRef.current);
     },
     []
   );
 
+  const onNodesChange = useCallback(
+    (changes: NodeChange<Node<any>>[]) => {
+      onNodesChangeBase(changes);
+      const removed: string[] = [];
+      for (const c of changes) {
+        if (c.type === "position") {
+          queueUpsert(c.id, "pos");
+        } else if (c.type === "dimensions" && c.resizing === false) {
+          queueUpsert(c.id, "size");
+        } else if (c.type === "remove") {
+          removed.push(c.id);
+        } else if (c.type === "replace") {
+          const prev = nodesRef.current.find((n) => n.id === c.id);
+          if (!prev) continue;
+          const diff: Record<string, unknown> = {};
+          for (const k of Object.keys(c.item.data || {})) {
+            if (c.item.data[k] !== (prev.data as any)?.[k]) diff[k] = c.item.data[k];
+          }
+          if (Object.keys(diff).length) queuePatch(c.id, diff);
+        }
+      }
+      if (removed.length) sendOp({ kind: "removeNodes", ids: removed });
+    },
+    [onNodesChangeBase, queueUpsert, queuePatch, sendOp]
+  );
+
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange<Edge>[]) => {
+      onEdgesChangeBase(changes);
+      const removed = changes.filter((c) => c.type === "remove").map((c) => c.id);
+      if (removed.length) sendOp({ kind: "removeEdges", ids: removed });
+    },
+    [onEdgesChangeBase, sendOp]
+  );
+
   const onConnect = useCallback(
-    (params: Connection) =>
-      setEdges((eds) =>
-        addEdge(
-          {
-            ...params,
-            animated: true,
-            style: { stroke: "#818cf8", strokeWidth: 2 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: "#818cf8" },
-          },
-          eds
-        )
-      ),
-    [setEdges]
+    (params: Connection) => {
+      const edge: Edge = {
+        ...addEdge<Edge>(params, [])[0],
+        animated: true,
+        style: { stroke: "#818cf8", strokeWidth: 2 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: "#818cf8" },
+      };
+      if (edgesRef.current.some((e) => e.id === edge.id)) return;
+      setEdges((eds) => addEdge(edge, eds));
+      sendOp({ kind: "upsertEdges", edges: [edge] });
+    },
+    [setEdges, sendOp]
   );
 
   // Centro da viewport atual (nó centralizado), deslocado em passos de 40px até não sobrepor outro nó
@@ -343,6 +481,7 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
       },
     };
     setNodes((nds) => [...nds, newNode]);
+    sendOp({ kind: "upsertNodes", nodes: [newNode] });
   };
 
   const addStickyNote = () => {
@@ -360,6 +499,7 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
       },
     };
     setNodes((nds) => [...nds, newNode]);
+    sendOp({ kind: "upsertNodes", nodes: [newNode] });
   };
 
   const addPortal = () => {
@@ -375,11 +515,13 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
       },
     };
     setNodes((nds) => [...nds, newNode]);
+    sendOp({ kind: "upsertNodes", nodes: [newNode] });
   };
 
   const resetToDefault = () => {
-    setNodes(defaultPartituraFullstack.nodes);
-    setEdges(defaultPartituraFullstack.edges);
+    if (!window.confirm("Restaurar o arranjo padrão? Isso substitui o canvas para todos os usuários.")) return;
+    applyRemoteOp({ kind: "replace", ...defaultPartituraFullstack });
+    sendOp({ kind: "replace", ...defaultPartituraFullstack });
   };
 
   return (
@@ -410,18 +552,6 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
           Novo Portal Web
         </button>
 
-        <div className="h-4 w-[1px] bg-slate-700 mx-1"></div>
-
-        <button
-          onClick={() => saveProjectCanvas()}
-          disabled={loadState !== "ready"}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-          title="Salvar canvas deste projeto"
-        >
-          <Save className="h-3.5 w-3.5" />
-          {saveStatus || "Salvar no Projeto"}
-        </button>
-
         <button
           onClick={resetToDefault}
           className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
@@ -433,7 +563,10 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
 
       {/* Badge do Projeto Ativo no Canvas */}
       <div className="absolute top-4 right-4 z-10 bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 font-mono flex items-center gap-2 backdrop-blur-md">
-        <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+        <span
+          className={`h-2 w-2 rounded-full ${connState === "online" ? "bg-emerald-500" : "bg-amber-500 animate-pulse"}`}
+          title={connState === "online" ? "Online" : "Reconectando..."}
+        ></span>
         <span>Espaço Isolado: <strong className="text-white font-semibold">{projectName}</strong></span>
       </div>
 
@@ -448,24 +581,18 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
         </div>
       )}
 
-      {loadState === "error" && (
+      {connState !== "online" && (
         <div
-          role="alert"
-          className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-[#080d1a] text-xs"
+          role="status"
+          className="absolute top-16 left-1/2 -translate-x-1/2 z-30 rounded-lg border border-amber-700/60 bg-amber-950/90 px-3 py-1.5 text-xs text-amber-300 font-mono"
         >
-          <p className="text-rose-300">Não foi possível carregar o canvas: {loadError}</p>
-          <p className="text-slate-500">O salvamento está bloqueado para não sobrescrever seus dados.</p>
-          <button
-            onClick={loadProjectCanvas}
-            className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition"
-          >
-            Tentar novamente
-          </button>
+          Reconectando…
         </div>
       )}
 
       {/* O Canvas Principal com React Flow */}
       {loadState === "ready" && (
+      <ProjectIdContext.Provider value={projectId}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -474,9 +601,15 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
         onConnect={onConnect}
         onInit={(instance) => (flowRef.current = instance)}
         nodeTypes={nodeTypes}
+        deleteKeyCode={["Backspace", "Delete"]}
         defaultViewport={initialViewport}
         fitView={!initialViewport}
-        onMoveEnd={(event, v) => event && setViewport(v)}
+        onMoveEnd={(event, v) => {
+          if (!event) return;
+          try {
+            localStorage.setItem(viewportKey(projectId), JSON.stringify(v));
+          } catch {}
+        }}
         className="bg-[#080d1a]"
       >
         <Background
@@ -498,6 +631,7 @@ export default function MaestriCanvas({ projectId, projectName }: MaestriCanvasP
           maskColor="rgba(15, 23, 42, 0.7)"
         />
       </ReactFlow>
+      </ProjectIdContext.Provider>
       )}
     </div>
   );
