@@ -38,6 +38,16 @@ function gh(cwd: string, args: string[]): Promise<string> {
   });
 }
 
+// Só http/https vira link (a URL vem do gh e é guardada no andar)
+export const safeHttpUrl = (v: unknown) => {
+  try {
+    const u = new URL(String(v ?? ""));
+    return u.protocol === "http:" || u.protocol === "https:" ? u.href : "";
+  } catch {
+    return "";
+  }
+};
+
 // Conta os checks de um PR (statusCheckRollup do gh)
 export function tallyChecks(rollup: unknown) {
   const checks = { passing: 0, failing: 0, pending: 0 };
@@ -162,7 +172,7 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
       throw new ApiError(409, "Resposta inesperada do gh.");
     }
     if (String(pr.state).toUpperCase() !== "OPEN") throw new ApiError(409, `O pull request #${n} não está aberto (${String(pr.state).toLowerCase()}).`);
-    return { number: n, title: String(pr.title ?? ""), url: String(pr.url ?? ""), head: String(pr.headRefName ?? ""), fork: pr.isCrossRepository === true };
+    return { number: n, title: String(pr.title ?? ""), url: safeHttpUrl(pr.url), head: String(pr.headRefName ?? ""), fork: pr.isCrossRepository === true };
   }
 
   async function fetchPrBranch(repo: string, pr: { number: number; head: string; fork: boolean }) {
@@ -541,7 +551,7 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
       try {
         const out = JSON.parse(await gh(repo, ["pr", "list", "--head", f.branch, "--state", "open", "--json", "number,url,title", "--limit", "1"]));
         if (out[0]?.number) {
-          f.pullRequest = { number: Number(out[0].number), url: String(out[0].url ?? ""), title: String(out[0].title ?? "") };
+          f.pullRequest = { number: Number(out[0].number), url: safeHttpUrl(out[0].url), title: String(out[0].title ?? "") };
           found++;
         }
       } catch (e: any) {

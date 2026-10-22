@@ -65,7 +65,7 @@ function PrInfo({ projectId, floor }: { projectId: string; floor: FloorInfo }) {
   const okChecks = !!info && info.checks.failing === 0 && info.checks.pending === 0;
   return (
     <div className="mt-0.5 text-[10px] flex flex-wrap items-center gap-x-2 gap-y-0.5">
-      <a href={pr.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-sky-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 rounded">
+      <a href={/^https?:\/\//i.test(pr.url) ? pr.url : undefined} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-sky-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 rounded">
         <GitPullRequest className="h-2.5 w-2.5" />PR #{pr.number}
       </a>
       {info && (
