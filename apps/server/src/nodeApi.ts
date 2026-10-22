@@ -21,8 +21,11 @@ const stripAnsi = (s: string) => s.replace(ANSI, "").replace(/\r\n?/g, "\n");
 const lc = (v: unknown) => String(v ?? "").trim().toLowerCase();
 const isText = (v: unknown, max = 100_000): v is string => typeof v === "string" && v.length <= max;
 
+// Chat ocupado (captura em andamento), chave `${projectId}:${nodeId}`; lido pelas rotinas
+export const chatBusy = new Set<string>();
+
 // Escreve no PTY e espera ele ficar quieto (depois de produzir saída); devolve só a saída nova
-async function typeAndWait(sessions: SessionManager, session: Session, input: string, timeoutS: number, aborted = () => false) {
+export async function typeAndWait(sessions: SessionManager, session: Session, input: string, timeoutS: number, aborted = () => false) {
   const quietMs = Number(process.env.MAESTRI_ASK_QUIET_MS) || 5000;
   let out = "";
   let last = 0;
@@ -291,8 +294,6 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
   }));
 
   // --- Chat (face de chat do nó): histórico em node.data.chat, sincronizado pelo canvas ---
-  const busy = new Set<string>();
-
   const chatOf = (projectId: string, nodeId: string): Obj[] =>
     canvas.state(projectId).nodes?.find((n) => n.id === nodeId)?.data?.chat ?? [];
 
@@ -337,8 +338,8 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
     const session = sessions.get(c.projectId, c.me.id);
     if (!session) throw new ApiError(409, "O terminal deste agente não tem sessão ativa.");
     const key = `${c.projectId}:${c.me.id}`;
-    if (busy.has(key)) throw new ApiError(409, "Agente ocupado.");
-    busy.add(key);
+    if (chatBusy.has(key)) throw new ApiError(409, "Agente ocupado.");
+    chatBusy.add(key);
 
     appendChat(c.projectId, c.me.id, { role: "user", text, author: user }, { chatBusy: true });
 
@@ -353,7 +354,7 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
       })
       .catch((e) => req.log.error(e))
       .finally(() => {
-        busy.delete(key);
+        chatBusy.delete(key);
         const node = canvas.state(c.projectId).nodes?.find((n) => n.id === c.me.id);
         if (node) canvas.applyAndBroadcast(c.projectId, { kind: "patchNodeData", id: c.me.id, data: { chatBusy: false } }, `chat:${c.me.id}`);
       });

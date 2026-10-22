@@ -11,7 +11,8 @@ import { registerWorktreeApi } from "./worktrees.js";
 import { registerRolesApi } from "./roles.js";
 import { CanvasStore } from "./canvas.js";
 import { PresenceHub } from "./presence.js";
-import { registerNodeApi } from "./nodeApi.js";
+import { registerNodeApi, typeAndWait, chatBusy } from "./nodeApi.js";
+import { registerRoutinesApi } from "./routines.js";
 
 // Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
 process.on("uncaughtException", (err) => {
@@ -149,6 +150,7 @@ registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find(
 const projectRepo = (id: string) => projects.find((p) => p.id === id)?.repoPath ?? null;
 const { createFloorFor } = registerWorktreeApi({ fastify, sessions, canvas, projectRepo });
 registerRolesApi({ fastify, canvas, projectRepo, createFloorFor });
+const routines = registerRoutinesApi({ fastify, sessions, canvas, projectRepo, dataDir, typeAndWait, isChatBusy: (p, n) => chatBusy.has(`${p}:${n}`) });
 
 // Endpoints de Projetos
 fastify.get("/api/projects", async () => {
@@ -184,6 +186,7 @@ fastify.delete<{ Params: { id: string } }>("/api/projects/:id", async (req, repl
   saveProjects();
   sessions.killProject(req.params.id);
   canvas.drop(req.params.id);
+  routines.removeProject(req.params.id);
   return { ok: true };
 });
 

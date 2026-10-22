@@ -127,9 +127,9 @@ test("envio grava user, marca chatBusy, responde 202, captura a saída e grava t
   await until(async () => (await nodeData("agent")).chatBusy === false, "chatBusy false");
 
   // os navegadores recebem por patchNodeData
-  const ops = proj.got.filter((m) => m.type === "op" && m.op.kind === "patchNodeData" && m.op.id === "agent" && m.op.data.chat);
-  assert.ok(ops.length >= 2);
-  assert.equal(ops.at(-1).op.data.chat.at(-1).role, "terminal");
+  // (o WS entrega depois da mudança de estado: espera chegar)
+  const chatOps = () => proj.got.filter((m) => m.type === "op" && m.op.kind === "patchNodeData" && m.op.id === "agent" && m.op.data.chat);
+  await until(() => chatOps().length >= 2 && chatOps().at(-1).op.data.chat.at(-1).role === "terminal", "ops de chat no WS");
 });
 
 test("409 sem sessão ativa e 409 quando o agente está ocupado", async () => {

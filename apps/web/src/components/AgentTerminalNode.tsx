@@ -5,6 +5,7 @@ import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import {
   Terminal,
   GitBranch,
+  AlarmClock,
   ShieldCheck,
   Cpu,
   Code2,
@@ -20,6 +21,7 @@ import ChatFace, { ChatMessage } from "./ChatFace";
 import { apiFetch } from "@/lib/api";
 import { ProjectIdContext } from "@/lib/projectContext";
 import { useRoles } from "@/lib/useRoles";
+import { useActiveRoutineCount } from "@/lib/useRoutines";
 import { usePresenceValue } from "@/lib/presence";
 import type { TerminalStatus } from "./TerminalView";
 
@@ -71,6 +73,7 @@ export default function AgentTerminalNode({
   const [wtError, setWtError] = useState("");
   const isMaestro = Boolean(nodeData.isMaestro);
   const { roles } = useRoles(projectId);
+  const routineCount = useActiveRoutineCount(projectId, id);
   const roleColor = nodeData.roleId ? roles.find((r) => r.id === nodeData.roleId)?.color : undefined;
   const chat = nodeData.chat || [];
   const agentCount = chat.filter((m) => m.role === "agent").length;
@@ -247,6 +250,17 @@ export default function AgentTerminalNode({
             </button>
           </div>
 
+          {routineCount > 0 && (
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent("maestri:open-routines"))}
+              className="nodrag flex items-center gap-0.5 rounded-md border border-slate-800 bg-slate-900 px-1 py-0.5 text-[10px] text-indigo-300 hover:border-indigo-500"
+              title={`${routineCount} ${routineCount === 1 ? "rotina ativa" : "rotinas ativas"} — abrir Rotinas`}
+              aria-label={`${routineCount} ${routineCount === 1 ? "rotina ativa" : "rotinas ativas"}, abrir Rotinas`}
+            >
+              <AlarmClock className="h-3 w-3" />
+              {routineCount}
+            </button>
+          )}
           <span className={`h-2 w-2 rounded-full ${getStatusColor()}`}></span>
           <DeleteNodeButton id={id} />
         </div>

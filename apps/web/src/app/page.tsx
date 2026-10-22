@@ -8,6 +8,7 @@ import {
   Users,
   Settings,
   FolderGit2,
+  AlarmClock,
   FolderPlus,
   ChevronDown,
   Plus,
@@ -16,6 +17,7 @@ import {
 import EntryGate, { ProfileMenu, MaestriUser } from "@/components/EntryGate";
 import { apiFetch } from "@/lib/api";
 import { Peer, PresenceProvider } from "@/lib/presence";
+import RoutinesPanel from "@/components/RoutinesPanel";
 import WorktreesPanel from "@/components/WorktreesPanel";
 import { PresenceStack, PresenceToasts } from "@/components/PresenceUI";
 
@@ -53,7 +55,7 @@ function App({
   setUser: (u: MaestriUser) => void;
   logout: () => void;
 }) {
-  const [activeTab, setActiveTab] = useState<"canvas" | "worktrees">("canvas");
+  const [activeTab, setActiveTab] = useState<"canvas" | "worktrees" | "routines">("canvas");
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -99,8 +101,13 @@ function App({
       setDiffFocus((e as CustomEvent<string>).detail);
       setActiveTab("worktrees");
     };
+    const openRoutines = () => setActiveTab("routines");
     window.addEventListener("maestri:open-diff", h);
-    return () => window.removeEventListener("maestri:open-diff", h);
+    window.addEventListener("maestri:open-routines", openRoutines);
+    return () => {
+      window.removeEventListener("maestri:open-diff", h);
+      window.removeEventListener("maestri:open-routines", openRoutines);
+    };
   }, []);
 
   const handleCreateProject = async (e: React.FormEvent) => {
@@ -166,6 +173,19 @@ function App({
               title="Worktrees & Diffs Git"
             >
               <FolderGit2 className="h-5 w-5" />
+            </button>
+
+            <button
+              onClick={() => setActiveTab("routines")}
+              className={`p-3 rounded-xl transition ${
+                activeTab === "routines"
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                  : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+              }`}
+              title="Rotinas agendadas"
+              aria-label="Rotinas agendadas"
+            >
+              <AlarmClock className="h-5 w-5" />
             </button>
           </div>
         </div>
@@ -271,6 +291,16 @@ function App({
               >
                 Worktrees & Diffs
               </button>
+              <button
+                onClick={() => setActiveTab("routines")}
+                className={`px-3 py-1 rounded-md font-medium transition ${
+                  activeTab === "routines"
+                    ? "bg-indigo-600 text-white"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                Rotinas
+              </button>
             </div>
           </div>
         </header>
@@ -302,6 +332,14 @@ function App({
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-slate-500 font-mono">
                 Selecione um projeto para abrir o canvas.
+              </div>
+            )
+          ) : activeTab === "routines" ? (
+            activeProject ? (
+              <RoutinesPanel key={activeProject.id} projectId={activeProject.id} />
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-slate-500 font-mono">
+                Selecione um projeto para ver as rotinas.
               </div>
             )
           ) : activeProject ? (

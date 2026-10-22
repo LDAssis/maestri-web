@@ -14,7 +14,7 @@ Ordem de execução (cada item = 1 branch + PR). Status: ⬜ a fazer · 🔄 em 
 | F8 | UX do canvas: elevar nó, busca Ctrl+K, atalhos, apagar nó, menu de contexto, nota com Markdown e cor | F3 | ✅ |
 | F9 | Roles e presets: folha de criação de agente (claude/codex/opencode/agy/shell), roles por projeto | F2, F5 | ✅ |
 | F10 | Partituras: exportar/importar seleção do canvas como arquivo | F3 | ✅ |
-| F11 | Rotinas: comando/prompt agendado para um terminal, histórico, liga/desliga | F2 | ⬜ |
+| F11 | Rotinas: comando/prompt agendado para um terminal, histórico, liga/desliga | F2 | ✅ |
 | F12 | Árvore de arquivos e nó de diff | F7 | ⬜ |
 
 Fora de escopo (exclusivos do app nativo): portais de dispositivo (iOS/Android), Ombro (LLM no dispositivo), Wire/Remote, impedir suspensão, anéis de uso, ambientes SSH/Docker, ferramentas de desenho.
