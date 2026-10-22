@@ -120,10 +120,20 @@ export class PortalManager {
   private browser() {
     if (!this.browserP) {
       const args = process.env.MAESTRI_PORTAL_NO_SANDBOX ? ["--no-sandbox"] : [];
-      const p = chromium.launch({ headless: true, args }).catch((e: any) => {
-        if (this.browserP === p) this.browserP = null;
-        throw new ApiError(503, `Não foi possível iniciar o Chromium: ${String(e?.message ?? e).split("\n")[0]}`);
-      });
+      const p = chromium.launch({ headless: true, args }).then(
+        (b) => {
+          // Chromium morreu/foi encerrado: esquece o navegador para o próximo comando lançar outro (senão todo
+          // portal falhava com "Target closed" até reiniciar o servidor)
+          b.on("disconnected", () => {
+            if (this.browserP === p) this.browserP = null;
+          });
+          return b;
+        },
+        (e: any) => {
+          if (this.browserP === p) this.browserP = null;
+          throw new ApiError(503, `Não foi possível iniciar o Chromium: ${String(e?.message ?? e).split("\n")[0]}`);
+        },
+      );
       this.browserP = p;
     }
     return this.browserP;

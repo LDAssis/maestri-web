@@ -316,6 +316,14 @@ test("resize devolve o viewport obtido e ua troca o user agent", { skip }, async
   await ok(["portal", "resize", "Form", "1280", "800"]);
 });
 
+test("Chromium encerrado de fora: o próximo comando relança o navegador e reabre a página", { skip }, async () => {
+  const b = await (portals as any).browserP;
+  await b.close(); // equivale ao processo morrer: dispara "disconnected"
+  await sleep(200);
+  assert.match(await ok(["portal", "info", "Form"]), /title: Formulário/);
+  assert.match(await ok(["portal", "snapshot", "Form"]), /^viewport:/);
+});
+
 test("screenshot salva um PNG e imprime o caminho", { skip }, async () => {
   const file = await ok(["portal", "screenshot", "Form"]);
   assert.ok(path.isAbsolute(file) && file.endsWith(".png"), file);
