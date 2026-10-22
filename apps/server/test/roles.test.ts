@@ -161,7 +161,11 @@ test("agents: preset, role, posição e id/dados do nó", async () => {
   assert.equal(node.data.status, "idle");
   const promptFile = path.join(repo, ".maestri-roles", `${node.id}.md`);
   assert.equal(fs.readFileSync(promptFile, "utf8"), "Seja útil.");
-  assert.equal(node.data.defaultCmd, `claude "$(cat '${promptFile}')"`);
+  // paridade com o recruit do CLI: o prompt vira CLAUDE.md/AGENTS.md em .maestri/roles/<id>/ e o terminal começa lá
+  assert.equal(node.data.defaultCmd, "claude");
+  assert.equal(node.data.roleDir, true);
+  assert.equal(node.data.worktreePath, path.join(".maestri", "roles", role.id.toLowerCase()));
+  assert.match(fs.readFileSync(path.join(repo, node.data.worktreePath, "CLAUDE.md"), "utf8"), /<your_assigned_role>\nSeja útil\.\n<\/your_assigned_role>/);
   assert.ok((await canvasNodes()).some((n) => n.id === node.id), "persistido no canvas");
 
   // Shell: comando vazio; opencode/agy/codex: nome do preset; role só vira prompt para claude/codex
@@ -178,7 +182,8 @@ test("agents: preset, role, posição e id/dados do nó", async () => {
   assert.equal(oc.data.defaultCmd, "opencode");
   assert.ok(fs.existsSync(path.join(repo, ".maestri-roles", `${oc.id}.md`)));
   const cx = (await api("POST", "/agents", { title: "CX", preset: "codex", roleId: role.id })).json().node;
-  assert.match(cx.data.defaultCmd, /^codex "\$\(cat '.+\.md'\)"$/);
+  assert.equal(cx.data.defaultCmd, "codex");
+  assert.equal(cx.data.roleDir, true);
 
   // nós novos não se sobrepõem
   const nodes = await canvasNodes();

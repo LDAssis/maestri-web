@@ -189,3 +189,6 @@ maestri band create "Squad" --workspace "Frontend"   maestri band add "Squad @ F
 `maestri portal wait "Portal" (@ref|seletor | --text "t" | --url "padrão" | MS) [--timeout S]` espera um elemento visível, um texto, uma URL (substring ou glob com `*`) ou um tempo; estourar o tempo é erro (`maestri: error:`, saída != 0).
 
 Com role, o recruta começa em `.maestri/roles/<id>/`, que traz o prompt em `CLAUDE.md` (claude) e `AGENTS.md` (codex, opencode, agy); com `--dir`/`--floor` o terminal começa onde você pediu e claude/codex recebem o prompt como argumento.
+
+## Limites de segurança dos portais
+Por padrão um portal não abre (nem alcança por redirecionamento ou sub-requisição) endereços link-local/metadata de nuvem (169.254.0.0/16, `fd00:ec2::254`, `metadata.google.internal`) nem a API do próprio servidor do Maestri; localhost em outras portas continua livre. `MAESTRI_PORTAL_ALLOW_PRIVATE=1` no servidor libera tudo. `portal upload` só lê arquivos do projeto, dos anexos do chat ou do diretório temporário. Cada portal raiz aceita no máximo 8 popups abertos. Contas: apagar uma conta desafixa (e lista) os presets que a fixavam.

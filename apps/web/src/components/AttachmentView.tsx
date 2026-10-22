@@ -13,29 +13,59 @@ export interface ChatAttachment {
 }
 
 // A rota é autenticada (Bearer): o arquivo vem por fetch e é exibido por blob URL, nunca por <img src> direto.
-const cache = new Map<string, Promise<string | null>>();
+// Cache com contagem de uso: o blob URL é compartilhado entre quem o mostra; quando ninguém usa mais, ele vira "ocioso" e
+// só os 50 mais recentes ficam (os demais têm o blob URL revogado, liberando a memória).
+interface Blobbed {
+  promise: Promise<string | null>;
+  url: string | null;
+  refs: number;
+}
+const cache = new Map<string, Blobbed>(); // ordem de inserção = ordem de uso (a mais antiga primeiro)
+const IDLE_MAX = 50;
 const key = (projectId: string, id: string) => `${projectId}:${id}`;
 
-function blobUrl(projectId: string, id: string): Promise<string | null> {
-  const k = key(projectId, id);
-  let p = cache.get(k);
-  if (!p) {
-    p = apiFetch(`/api/projects/${projectId}/attachments/${id}`)
-      .then((r) => (r.ok ? r.blob() : null))
-      .then((b) => (b ? URL.createObjectURL(b) : null))
-      .catch(() => null);
-    cache.set(k, p);
+function evictIdle() {
+  const idle = Array.from(cache.entries()).filter(([, b]) => b.refs === 0);
+  for (const [k, b] of idle.slice(0, Math.max(0, idle.length - IDLE_MAX))) {
+    if (b.url) URL.revokeObjectURL(b.url);
+    cache.delete(k);
   }
-  return p;
+}
+
+function acquire(projectId: string, id: string): Blobbed {
+  const k = key(projectId, id);
+  let b = cache.get(k);
+  if (b) {
+    cache.delete(k); // reinsere: passa a ser o mais recente
+  } else {
+    const fresh: Blobbed = { refs: 0, url: null, promise: Promise.resolve(null) };
+    fresh.promise = apiFetch(`/api/projects/${projectId}/attachments/${id}`)
+      .then((r) => (r.ok ? r.blob() : null))
+      .then((blob) => (blob ? (fresh.url = URL.createObjectURL(blob)) : null))
+      .catch(() => null);
+    b = fresh;
+  }
+  cache.set(k, b);
+  b.refs++;
+  return b;
+}
+
+function release(projectId: string, id: string) {
+  const b = cache.get(key(projectId, id));
+  if (!b) return;
+  b.refs = Math.max(0, b.refs - 1);
+  evictIdle();
 }
 
 export function AttachmentImage({ projectId, id, alt }: { projectId: string; id: string; alt?: string }) {
   const [url, setUrl] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
-    blobUrl(projectId, id).then((u) => live && setUrl(u));
+    const b = acquire(projectId, id);
+    b.promise.then((u) => live && setUrl(u));
     return () => {
       live = false;
+      release(projectId, id); // desmontou: o blob URL fica ocioso (e é revogado quando passa do limite)
     };
   }, [projectId, id]);
   if (url === undefined) return <span className="text-[11px] text-slate-500">Carregando imagem…</span>;
@@ -48,12 +78,17 @@ const size = (n: number) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n
 
 export function AttachmentFile({ projectId, att }: { projectId: string; att: ChatAttachment }) {
   const download = async () => {
-    const u = await blobUrl(projectId, att.id);
-    if (!u) return;
-    const a = document.createElement("a");
-    a.href = u;
-    a.download = att.name;
-    a.click();
+    const b = acquire(projectId, att.id);
+    try {
+      const u = await b.promise;
+      if (!u) return;
+      const a = document.createElement("a");
+      a.href = u;
+      a.download = att.name;
+      a.click();
+    } finally {
+      release(projectId, att.id);
+    }
   };
   return (
     <button

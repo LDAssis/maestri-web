@@ -29,6 +29,7 @@ import { registerRoutinesApi } from "./routines.js";
 import { registerFilesApi } from "./files.js";
 import { sweepBands } from "./team.js";
 import { registerPortalApi } from "./portalApi.js";
+import { setPortalSelfPorts } from "./portals.js";
 import { createProjectDir, findConflict, isInside, migrateProjects, overlaps, resolveInside } from "./projectDirs.js";
 
 // Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
@@ -214,20 +215,24 @@ registerCommApi({ fastify, sessions, canvas, nodeApi, attachments });
 registerNotesApi({ fastify, canvas, nodeApi });
 const floors = new FloorStore(dataDir, (id) => projects.find((p) => p.id === id)?.repoPath ?? null, writeJsonAtomic);
 const floorsApi = registerFloorsApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, floors, nodeApi });
-registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds: () => projects.map((p) => p.id) });
+// Acesso às configurações (global e por projeto) para as APIs de equipe e de contas
+const settingsAccess = {
+  readGlobal: () => readGlobalSettings(),
+  writeGlobal: (s: any) => writeJsonAtomic(globalSettingsFile, s),
+  readProject: (id: string) => readProjectSettings(id),
+  writeProject: (id: string, s: any) => writeJsonAtomic(projectSettingsFile(id), s),
+};
+registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds: () => projects.map((p) => p.id), settings: settingsAccess });
 registerTeamApi({
   fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, dataDir, nodeApi, floors, accounts, links: crossLinks, workspaces: { nameOf: (id) => projects.find((p) => p.id === id)?.name, idOf: (name) => projects.find((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase())?.id },
-  settings: {
-    readGlobal: () => readGlobalSettings(),
-    writeGlobal: (s) => writeJsonAtomic(globalSettingsFile, s),
-    readProject: (id) => readProjectSettings(id),
-    writeProject: (id, s) => writeJsonAtomic(projectSettingsFile(id), s),
-  },
+  settings: settingsAccess,
 });
 const projectRepo = (id: string) => projects.find((p) => p.id === id)?.repoPath ?? null;
-export const portals = registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAuthorized });
+// o portal não navega até a API do próprio servidor (porta real, mesmo quando escolhida pelo SO)
+setPortalSelfPorts(() => [(fastify.server.address() as { port?: number } | null)?.port ?? port]);
+export const portals = registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAuthorized, dataDir });
 const { createFloorFor } = registerWorktreeApi({ fastify, sessions, canvas, projectRepo });
-registerRolesApi({ fastify, canvas, projectRepo, createFloorFor });
+registerRolesApi({ fastify, canvas, projectRepo, createFloorFor, globalRoot: path.join(dataDir, "global-roles") });
 registerGlobalRolesApi({ fastify, canvas, dataDir, projectRepo, projectIds: () => projects.map((p) => p.id) });
 const routines = registerRoutinesApi({ fastify, sessions, canvas, projectRepo, projectName: (id) => projects.find((p) => p.id === id)?.name, floorCwd: (p, n, nodes) => floors.cwdForNode(p, n, nodes), dataDir, typeAndWait, isChatBusy: (p, n) => chatBusy.has(`${p}:${n}`) });
 registerFilesApi({ fastify, projectRepo });

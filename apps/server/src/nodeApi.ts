@@ -8,6 +8,7 @@ import { readRole } from "./roles.js";
 import { THREADS, DEFAULT_THREAD, isThread, chatHeader, wantsChatHeader, currentThread } from "./chatThreads.js";
 import type { AttachmentStore } from "./attachments.js";
 import type { CrossLinks } from "./crossLinks.js";
+import { sanitizeTyped } from "./routines.js";
 import { reachNotes } from "./noteGraph.js";
 import { bandReach, isBand, memberIds, myBands, neighbors, sweepBands, teamTree } from "./team.js";
 
@@ -304,6 +305,9 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     try {
       const r = await typeAndWait(sessions, session, `${text}\r`, timeoutS, () => aborted);
       if (!aborted) raw.end(JSON.stringify(r));
+    } catch (e: any) {
+      // Os cabeçalhos 200 já saíram (hijack): o erro vai no corpo; o CLI o transforma em erro com saída != 0
+      if (!raw.writableEnded && !aborted) raw.end(JSON.stringify({ error: e?.message || "Erro interno." }));
     } finally {
       clearInterval(keepalive);
     }
@@ -389,16 +393,20 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     if (!session) throw new ApiError(409, "O terminal deste agente não tem sessão ativa.");
     const key = `${c.projectId}:${c.me.id}`;
     if (chatBusy.has(key)) throw new ApiError(409, "Agente ocupado.");
-    chatBusy.add(key);
 
-    appendChat(c.projectId, c.me.id, { role: "user", text, author: user, thread, ...(files.length && { attachments: files }) }, { chatBusy: true });
-
-    // Várias linhas vão como bracketed paste para o shell/TUI não executar linha a linha.
-    // Com um agente em primeiro plano, a mensagem leva o cabeçalho do Maestri Chat (thread + `maestri say`).
-    // Anexos: uma linha por arquivo com o comando para obtê-lo
-    const attLines = files.map((f) => `[Attachment: ${f.name} (${f.image ? "image" : f.mime}, ${f.size} bytes) — get it with: maestri recall attachment ${f.id}]`);
-    const hinted = (wantsChatHeader(session) ? chatHeader(thread) : "") + [expandMentions(text, c.connected), ...attLines].filter(Boolean).join("\n");
+    // Monta TUDO o que vai ao PTY antes de marcar o agente como ocupado (uma exceção aqui não deixa chatBusy preso).
+    // Texto e nomes de anexo passam por sanitizeTyped: sem ESC/controles (nada fecha o bracketed paste nem injeta teclas).
+    const attLines = files.map((f) => `[Attachment: ${sanitizeTyped(f.name)} (${f.image ? "image" : sanitizeTyped(f.mime)}, ${f.size} bytes) — get it with: maestri recall attachment ${f.id}]`);
+    const hinted = (wantsChatHeader(session) ? chatHeader(thread) : "") + [expandMentions(sanitizeTyped(text), c.connected), ...attLines].filter(Boolean).join("\n");
     const input = hinted.includes("\n") ? `\x1b[200~${hinted}\x1b[201~\r` : `${hinted}\r`;
+
+    chatBusy.add(key);
+    try {
+      appendChat(c.projectId, c.me.id, { role: "user", text, author: user, thread, ...(files.length && { attachments: files }) }, { chatBusy: true });
+    } catch (e) {
+      chatBusy.delete(key);
+      throw e;
+    }
 
     // Captura em segundo plano; a resposta 202 não espera
     void typeAndWait(sessions, session, input, 600)

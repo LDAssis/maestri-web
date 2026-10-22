@@ -102,19 +102,22 @@ test("roles globais pela UI: CRUD, duplicado, validação, mesmo armazenamento d
   // não aparece como role do projeto
   assert.ok(!(await call("GET", `/api/projects/${P}/roles`)).json().roles.some((r: any) => r.id === role.id));
 
-  // usar um role global num agente: materializa a cópia (idempotente, origin:"global") e cria o agente com o prompt
-  const mat = await call("POST", `/api/projects/${P}/roles/materialize-global`, { roleId: role.id });
-  assert.deepEqual(mat.json(), { roleId: role.id, copied: true });
-  const copy = (await call("GET", `/api/projects/${P}/roles`)).json().roles.find((r: any) => r.id === role.id);
-  assert.deepEqual([copy.origin, copy.prompt], ["global", "Novo prompt"]);
-  assert.equal((await call("POST", `/api/projects/${P}/roles/materialize-global`, { roleId: "00000000-0000-4000-8000-000000000000" })).statusCode, 404);
+  // usar um role global num agente: POST /agents resolve o id no projeto e, se não houver, no global (sem cópia)
+  assert.equal((await call("POST", `/api/projects/${P}/roles/materialize-global`, { roleId: role.id })).statusCode, 404, "a materialização foi removida");
   const agent = await call("POST", `/api/projects/${P}/agents`, { title: "Rev", preset: "shell", roleId: role.id });
   assert.equal(agent.statusCode, 201, agent.body);
   assert.equal(agent.json().node.data.roleId, role.id);
   assert.equal(agent.json().node.data.role, "Revisor 2");
-  // editar o global atualiza a cópia materializada; apagar remove só o global
+  assert.ok(!(await call("GET", `/api/projects/${P}/roles`)).json().roles.some((r: any) => r.id === role.id), "nenhuma cópia no projeto");
+  // o prompt vai em .maestri/roles/<id>/CLAUDE.md|AGENTS.md (pasta de contexto) e o terminal começa lá
+  const ctxDir = agent.json().node.data.worktreePath;
+  assert.equal(agent.json().node.data.roleDir, true);
+  assert.match(fs.readFileSync(path.join(repo, ctxDir, "AGENTS.md"), "utf8"), /Novo prompt/);
+  assert.equal((await call("POST", `/api/projects/${P}/agents`, { title: "Fantasma", preset: "shell", roleId: "00000000-0000-4000-8000-000000000000" })).statusCode, 404);
+  // editar o global vale para os próximos agentes
   await call("PUT", `/api/global-roles/${role.id}`, { prompt: "Terceiro prompt" });
-  assert.equal((await call("GET", `/api/projects/${P}/roles`)).json().roles.find((r: any) => r.id === role.id).prompt, "Terceiro prompt");
+  const again = await call("POST", `/api/projects/${P}/agents`, { title: "Rev2", preset: "shell", roleId: role.id });
+  assert.match(fs.readFileSync(path.join(repo, again.json().node.data.worktreePath, "CLAUDE.md"), "utf8"), /Terceiro prompt/);
   assert.equal((await call("DELETE", `/api/global-roles/${role.id}`)).statusCode, 200);
   assert.ok(!(await call("GET", "/api/global-roles")).json().roles.some((r: any) => r.id === role.id));
   assert.equal((await call("DELETE", `/api/global-roles/${role.id}`)).statusCode, 404);

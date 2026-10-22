@@ -120,6 +120,9 @@ export function registerCommApi({ fastify, sessions, canvas, nodeApi, attachment
     try {
       const r = await typeAndWait(sessions, session, input, timeoutS, () => aborted);
       if (!aborted) raw.end(JSON.stringify(r));
+    } catch (e: any) {
+      // Os cabeçalhos 200 já saíram (hijack): o erro vai no corpo; o CLI o transforma em erro com saída != 0
+      if (!raw.writableEnded && !aborted) raw.end(JSON.stringify({ error: e?.message || "Erro interno." }));
     } finally {
       clearInterval(keepalive);
     }

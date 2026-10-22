@@ -11,7 +11,6 @@ export interface Role {
   color: string;
   icon?: string;
   // Cópia materializada de um role global (ver server/src/globalRolesApi.ts): a UI a lista como global
-  origin?: string;
 }
 
 // Cache por projeto compartilhado entre todos os nós; recargas simultâneas viram uma só requisição

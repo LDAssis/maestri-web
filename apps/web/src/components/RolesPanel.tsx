@@ -16,8 +16,7 @@ interface Draft {
 export default function RolesPanel({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const { roles: allProject, reload } = useRoles(projectId);
   const { globalRoles, reloadGlobal } = useGlobalRoles(projectId);
-  // Cópias de roles globais (criadas ao usar um global num agente) aparecem só como global
-  const roles = allProject.filter((r) => r.origin !== "global");
+  const roles = allProject;
   const scopeOf = (id: string): "project" | "global" => (globalRoles.some((g) => g.id === id) ? "global" : "project");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);

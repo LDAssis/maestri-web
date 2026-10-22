@@ -533,9 +533,12 @@ test("andares: recruit --floor usa o checkout do andar; recruta herda o andar de
   await ok(M("recruit", "Iso", "--preset", "shell", "--floor", "Iso"));
   const iso = await byTitle("Iso");
   assert.equal(iso.data.floor, "Iso");
-  // o bash de login pode demorar (máquina carregada): repete o pwd até o shell responder
+  // Marcador no lugar de esperar silêncio (o bash de login pode demorar com a máquina carregada): o texto digitado traz
+  // "CWD[$(pwd -P)]" literal e só a SAÍDA tem o caminho depois do "[" — o `check` repete até casar.
+  await ok(M("send", "Iso", "echo CWD[$(pwd -P)]"));
   let where = "";
-  await until(async () => ((where = (await ok(M("ask", "Iso", "pwd"))).stdout), /\.worktrees\//.test(where)), "cwd = checkout do andar", 20000);
+  await until(async () => ((where = /CWD\[(\/[^\]]+)\]/.exec((await M("check", "Iso")).stdout)?.[1] ?? ""), where !== ""), "cwd do terminal", 30000);
+  assert.match(where, /\.worktrees\//, "cwd = checkout do andar");
 
   await ok(M("recruit", "Terra", "--preset", "shell", "--floor", "Ground"));
   assert.equal((await byTitle("Terra")).data.floor, undefined);
