@@ -97,3 +97,16 @@ maestri chat history --last 10                                 # histórico brut
   fichários conectados a você, também podem ser lidas e escritas.
 - O nome de uma nota sem `--name` acompanha a primeira linha; `write`/`edit` informam o novo nome quando muda. Prefira `--name`
   se for endereçar a nota de novo.
+
+## Rotinas (só o Maestro)
+Rotinas são comandos/prompts agendados do **projeto**; disparam num terminal (o seu por padrão) ou viram um aviso (`--reminder`). Rode `maestri routine list` antes para ver nomes e ids curtos.
+```
+maestri routine create "Digest" --command "Resuma os commits:\n\n{{output}}" --daily 18:00 --pre-run "git log --since=midnight --oneline"
+maestri routine create "Auditoria" --command "npm audit" --weekly mon,wed,fri@02:00 --terminal "Backend" --count 10 --until 2026-12-31
+maestri routine create "Standup" --command "Hora do standup" --weekly mon,tue,wed,thu,fri@09:00 --reminder
+maestri routine create "Auto-check" --command "Releia o plano" --every 1h30m     # 45s, 30m, 2h, 1h30m; número puro = minutos
+maestri routine create "Deploy" --command "./deploy.sh" --once "2026-06-20 15:00" --no-notify --disabled
+maestri routine show|edit|enable|disable|run|delete "Nome"                       # edit muda só os campos passados
+maestri routine edit "Auditoria" --id a1b2c3 --daily 03:00                        # --id (prefixo) quando há nomes iguais
+```
+Horários na hora local do servidor. O `--pre-run` roda no diretório do alvo e precisa sair com 0 (senão o disparo é pulado); `{{output}}` no comando vira o stdout. Por padrão o disparo é pulado se o terminal estiver ocupado (chat em andamento ou saída nos últimos 5s; `--no-skip-if-busy` desliga). `delete` é destrutivo: só a pedido do usuário.

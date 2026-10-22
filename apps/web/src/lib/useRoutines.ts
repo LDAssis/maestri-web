@@ -17,7 +17,8 @@ function refresh(projectId: string) {
       .then((body) => {
         if (!body?.routines) return;
         const counts: Record<string, number> = {};
-        for (const r of body.routines as { nodeId: string; enabled: boolean }[]) if (r.enabled) counts[r.nodeId] = (counts[r.nodeId] || 0) + 1;
+        // lembretes (nodeId null) não pertencem a nenhum nó
+        for (const r of body.routines as { nodeId: string | null; enabled: boolean }[]) if (r.enabled && r.nodeId) counts[r.nodeId] = (counts[r.nodeId] || 0) + 1;
         cache.set(projectId, counts);
         subs.forEach((s) => s());
       })

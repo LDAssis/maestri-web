@@ -38,6 +38,8 @@ export interface Session {
   rows: number;
   dead: boolean;
   listeners: Set<(data: string) => void>;
+  // Última saída do PTY (epoch ms); as rotinas usam para saber se o terminal está ocupado
+  lastOutputAt: number;
 }
 
 function spawnPty(cwd: string, cols: number, rows: number, extraEnv: Record<string, string>) {
@@ -108,6 +110,7 @@ export class SessionManager {
 
   private push(s: Session, data: string) {
     s.scrollback += data;
+    s.lastOutputAt = Date.now();
     if (s.scrollback.length > SCROLLBACK_MAX) s.scrollback = s.scrollback.slice(-SCROLLBACK_MAX);
     this.broadcast(s, data);
     for (const fn of s.listeners) fn(data);
@@ -157,7 +160,7 @@ export class SessionManager {
     const p = spawnPty(opts.cwd, cols, rows, this.env(projectId, nodeId));
     s = {
       projectId, nodeId, pty: p, clients: new Set(), cwd: opts.cwd, cmd: opts.cmd,
-      createdAt: new Date().toISOString(), cols, rows, dead: false, listeners: new Set(),
+      createdAt: new Date().toISOString(), cols, rows, dead: false, listeners: new Set(), lastOutputAt: 0,
       scrollback: `\r\n\x1b[32m[Maestri Web - ConPTY Ativo]\x1b[0m Terminal pronto em: ${opts.cwd}\r\n`,
     };
     this.sessions.set(k, s);
