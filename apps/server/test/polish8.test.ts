@@ -170,12 +170,12 @@ test("maestri notify, lembrete de rotina e andar em blocked/review/done também 
   fs.writeFileSync(notifyLog, "");
   await ok(M("notify", "build terminou"));
   await until(() => notifications().length === 1, "notify");
-  assert.deepEqual(lastNotification(), ["-a", "Maestri", "--", "Chefe", "build terminou"]);
+  assert.deepEqual(lastNotification(), ["-a", "Maestri", "--", "Maestri — Chefe", "build terminou"]);
   // lembrete
   await ok(M("routine", "create", "Standup", "--command", "Hora do standup", "--every", "1h", "--reminder"));
   await ok(M("routine", "run", "Standup"));
   await until(() => notifications().length === 2, "lembrete");
-  assert.deepEqual(lastNotification(), ["-a", "Maestri", "--", "Standup", "Hora do standup"]);
+  assert.deepEqual(lastNotification(), ["-a", "Maestri", "--", "Maestri — Standup", "Hora do standup"]);
   // status do andar: working não avisa; blocked/review/done sim
   await ok(M("floor", "status", "trabalhando", "--state", "working"));
   await sleep(300);

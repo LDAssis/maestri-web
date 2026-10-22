@@ -355,7 +355,7 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     const { text } = req.body ?? {};
     if (!isText(text, 500) || !text.trim()) throw new ApiError(400, "Informe o texto (até 500 caracteres).");
     canvas.notify(c.projectId, { type: "notify", from: { nodeId: c.me.id, title: c.title(c.me) }, text });
-    desktopNotify(c.projectId, c.title(c.me), text); // também pelo SO, se ligado
+    desktopNotify(c.projectId, `Maestri — ${c.title(c.me)}`, text); // também pelo SO, se ligado
     return { ok: true };
   }));
 

@@ -157,7 +157,7 @@ Com `MAESTRI_TOKEN` definido, `GET /api/health` continua público; as demais rot
 | `REPO_PATH` | raiz do repositório | Diretório do projeto inicial; `.maestri_data/` fica dentro dele |
 | `MAESTRI_PROJECTS_DIR` | `~/maestri-projects` | Onde nascem as pastas dos projetos criados pela UI |
 | `SHELL` | `/bin/bash` | Shell dos terminais dos agentes |
-| `MAESTRI_PORTAL_ALLOW_PRIVATE` | — | `1` libera o bloqueio de metadata/link-local e da API do próprio servidor nos portais (localhost em outras portas já é livre) |
+| `MAESTRI_PORTAL_ALLOW_PRIVATE` | — | `1` libera o bloqueio de metadata/link-local e da API do próprio servidor nos portais (localhost em outras portas já é livre); necessário para abrir a própria UI do Maestri Web dentro de um portal |
 | `MAESTRI_PORTAL_NO_SANDBOX` | — | Qualquer valor inicia o Chromium com `--no-sandbox` (necessário em alguns contêineres/root) |
 | `MAESTRI_PORTAL_FRAME_MS` | `700` | Intervalo dos frames ao vivo dos portais |
 | `MAESTRI_ASK_QUIET_MS` | `5000` | Silêncio do terminal que encerra um `ask` |

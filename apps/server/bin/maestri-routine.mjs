@@ -86,7 +86,7 @@ export function register({ call, need, CliError }) {
       for (const r of routines) {
         const last = r.history.at(-1);
         const lastText = last ? `${last.status}${last.reason ? ` (${last.reason})` : ""}` : "nunca rodou";
-        const to = r.reminder ? "lembrete" : r.nodeTitle;
+        const to = r.reminder ? "lembrete" : r.nodeFloor && r.nodeFloor !== "Ground" ? `${r.nodeTitle} (andar ${r.nodeFloor})` : r.nodeTitle;
         console.log(`${r.shortId}  ${r.name}  [${r.label}]  → ${to}  ${STATUS[r.status]}  próxima: ${r.status === "active" ? when(r.nextRunAt) : "—"}  última: ${lastText}`);
       }
     } else if (sub === "show") {
@@ -96,7 +96,7 @@ export function register({ call, need, CliError }) {
       const out = [
         `${r.name}  (id ${r.shortId})`,
         `  agendamento: ${r.label}`,
-        `  alvo: ${r.reminder ? "lembrete (aviso aos navegadores)" : r.nodeTitle}`,
+        `  alvo: ${r.reminder ? "lembrete (aviso aos navegadores)" : r.nodeTitle}${r.nodeFloor && r.nodeFloor !== "Ground" ? ` (andar ${r.nodeFloor})` : ""}`,
         `  status: ${STATUS[r.status]} · disparos: ${r.fired}${r.count ? `/${r.count}` : ""}${r.until ? ` · até ${r.until}` : ""}`,
         `  próxima: ${r.status === "active" ? when(r.nextRunAt) : "—"}`,
         `  pular se ocupado: ${r.skipIfBusy ? "sim" : "não"} · notificar: ${r.notify ? "sim" : "não"}`,

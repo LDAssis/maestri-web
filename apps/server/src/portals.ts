@@ -883,7 +883,11 @@ const COMMANDS: Record<string, Handler> = {
       try {
         await e.page.locator(ref ? `[data-maestri-ref="e${ref[1]}"]` : value).first().waitFor({ state: "visible", timeout });
       } catch (err: any) {
-        if (/Timeout/i.test(String(err?.message))) throw new ApiError(408, `tempo esgotado esperando ${value} (${timeout / 1000}s)`);
+        if (/Timeout/i.test(String(err?.message))) {
+          // Palavra solta é um seletor CSS válido (tag); lembra do --text para quem queria esperar um texto
+          const hint = !ref && /^[\p{L}\w-]+$/u.test(value) ? ' (para esperar um texto, use --text "...")' : "";
+          throw new ApiError(408, `tempo esgotado esperando ${value} (${timeout / 1000}s)${hint}`);
+        }
         throw err;
       }
       return "ok";

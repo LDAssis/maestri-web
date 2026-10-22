@@ -432,7 +432,7 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, pr
       }
       if (r.reminder) {
         canvas.notify(projectId, { type: "notify", from: { nodeId: "", title: r.name }, text });
-        desktopNotify(projectId, r.name, text); // lembrete: também pelo SO, se ligado
+        desktopNotify(projectId, `Maestri — ${r.name}`, text); // lembrete: também pelo SO, se ligado
         entry.output = text.slice(-OUTPUT_MAX);
         return;
       }
@@ -522,6 +522,8 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, pr
   const pub = (projectId: string, r: Routine) => ({
     ...r,
     nodeTitle: r.reminder ? null : String(nodeOf(projectId, r.nodeId)?.data?.title ?? r.nodeId),
+    // Andar do terminal-alvo: desambigua rotinas de terminais homônimos em andares diferentes
+    nodeFloor: r.reminder ? null : floorOf(nodeOf(projectId, r.nodeId) ?? {}),
     shortId: shortId(r),
     label: scheduleLabel(r.schedule),
     status: r.completed ? "completed" : r.enabled ? "active" : "disabled",
