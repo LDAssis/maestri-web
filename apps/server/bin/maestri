@@ -16,6 +16,8 @@ Comandos:
   recruit "Nome" [--cmd C] [--role R]   (Maestro) cria e inicia um novo agente
   dismiss "Nome"                     (Maestro) remove um agente conectado
   notify "texto"                     Avisa todos os navegadores do projeto
+  chat reply "texto markdown"        Responde na face de chat do SEU nó
+  chat history [--last N]            Últimas mensagens do chat do seu nó (20)
 
 Use "maestri <comando> --help" para detalhes. Nomes são os títulos dos nós (sem diferenciar maiúsculas)
 e o alvo precisa estar conectado a você por uma aresta.`,
@@ -28,6 +30,7 @@ e o alvo precisa estar conectado a você por uma aresta.`,
   portal: `maestri portal navigate "Nome" "url"\nMuda a URL do portal conectado (apenas http/https).`,
   recruit: `maestri recruit "Nome" [--cmd "claude"] [--role "texto do papel"]\nApenas o Maestro. Cria um agente conectado a você e inicia o terminal dele.\n--role grava o texto em .maestri-roles/<id>.md; com --cmd claude/codex o arquivo é passado como prompt.`,
   dismiss: `maestri dismiss "Nome"\nApenas o Maestro. Remove o nó conectado e encerra o terminal dele.`,
+  chat: `maestri chat reply "texto markdown"   Responde ao usuário na face de chat do seu nó (aceita Markdown)\nmaestri chat history [--last N]     Imprime as últimas N mensagens (padrão 20) do chat do seu nó`,
   notify: `maestri notify "texto"\nMostra um aviso (toast) para todos os navegadores no projeto, com o título do seu nó.`,
 };
 
@@ -38,7 +41,7 @@ class CliError extends Error {
   }
 }
 
-const FLAGS = ["--lines", "--timeout", "--cmd", "--role"];
+const FLAGS = ["--lines", "--timeout", "--cmd", "--role", "--last"];
 
 function parse(argv) {
   const pos = [];
@@ -157,6 +160,21 @@ const COMMANDS = {
     need(pos, 1, 'dismiss "Nome"');
     await call("POST", "/dismiss", { target: pos[0] });
     console.log(`Agente "${pos[0]}" dispensado.`);
+  },
+
+  async chat({ pos, flags }) {
+    if (pos[0] === "reply") {
+      need(pos, 2, 'chat reply "texto markdown"');
+      await call("POST", "/chat/reply", { text: pos.slice(1).join(" ") });
+      console.log("Resposta enviada ao chat.");
+    } else if (pos[0] === "history") {
+      const { messages } = await call("GET", `/chat?last=${encodeURIComponent(flags.last || "20")}`);
+      if (!messages.length) return console.log("Chat vazio.");
+      for (const m of messages) {
+        const who = m.role === "user" ? m.author?.name || "usuário" : m.role === "agent" ? "agente" : "terminal";
+        console.log(`[${m.at}] ${who}: ${m.text}`);
+      }
+    } else throw new CliError('Uso: maestri chat reply "texto" | chat history [--last N]');
   },
 
   async notify({ pos }) {

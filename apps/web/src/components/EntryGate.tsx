@@ -13,7 +13,7 @@ export interface MaestriUser {
 const USER_KEY = "maestri.user";
 const COLORS = ["#6366f1", "#8b5cf6", "#ec4899", "#ef4444", "#f59e0b", "#10b981", "#06b6d4", "#3b82f6"];
 
-const readUser = (): MaestriUser | null => {
+export const readUser = (): MaestriUser | null => {
   try {
     const u = JSON.parse(localStorage.getItem(USER_KEY) || "null");
     return u?.id && u?.name && u?.color ? u : null;

@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { CanvasStore } from "./canvas.js";
-import type { SessionManager } from "./sessions.js";
+import type { Session, SessionManager } from "./sessions.js";
+import { parseUser } from "./presence.js";
 
 type Obj = Record<string, any>;
 
@@ -50,6 +51,52 @@ function freePosition(nodes: Obj[], ref: Obj, size: [number, number]) {
 
 const lc = (v: unknown) => String(v ?? "").trim().toLowerCase();
 const isText = (v: unknown, max = 100_000): v is string => typeof v === "string" && v.length <= max;
+
+// Escreve no PTY e espera ele ficar quieto (depois de produzir saída); devolve só a saída nova
+async function typeAndWait(sessions: SessionManager, session: Session, input: string, timeoutS: number, aborted = () => false) {
+  const quietMs = Number(process.env.MAESTRI_ASK_QUIET_MS) || 5000;
+  let out = "";
+  let last = 0;
+  const listener = (d: string) => {
+    out += d;
+    last = Date.now();
+  };
+  session.listeners.add(listener);
+  const started = Date.now();
+  let timedOut = false;
+  try {
+    sessions.write(session.projectId, session.nodeId, input);
+    while (!aborted()) {
+      await new Promise((r) => setTimeout(r, 100));
+      const now = Date.now();
+      if (last && now - last >= quietMs) break;
+      if (session.dead) break;
+      if (now - started >= timeoutS * 1000) {
+        timedOut = true;
+        break;
+      }
+    }
+  } finally {
+    session.listeners.delete(listener);
+  }
+  return { output: stripAnsi(out).trim(), timedOut };
+}
+
+const CHAT_MAX = 200;
+const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// '@Título' de nó conectado vira, só no texto enviado ao PTY, uma dica de como o agente lê/consulta o nó
+function expandMentions(text: string, connected: Obj[]) {
+  const mentionable = connected.filter((n) => (n.type === "stickyNote" || n.type === "agentTerminal") && String(n.data?.title ?? "").trim());
+  if (!mentionable.length) return text;
+  const titles = mentionable.map((n) => String(n.data.title)).sort((a, b) => b.length - a.length);
+  const re = new RegExp(`@(${titles.map(escapeRe).join("|")})(?!\\w)`, "gi");
+  return text.replace(re, (m, name: string) => {
+    const n = mentionable.find((x) => lc(x.data.title) === lc(name))!;
+    const q = String(n.data.title).replace(/"/g, '\\"');
+    return `${m} (use: ${n.type === "stickyNote" ? `maestri note read "${q}"` : `maestri ask "${q}" ...`})`;
+  });
+}
 
 class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -160,7 +207,6 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
       return reply.status(500).send({ error: e?.message || "Erro interno." });
     }
     const timeoutS = Math.min(3600, Math.max(1, Number(req.body?.timeout) || 600));
-    const quietMs = Number(process.env.MAESTRI_ASK_QUIET_MS) || 5000;
     const session = sessions.get(c.projectId, t.id)!;
 
     // Cabeçalhos já: o cliente (fetch) não estoura headersTimeout; espaços de keepalive precedem o JSON
@@ -169,34 +215,14 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
     raw.writeHead(200, { "content-type": "application/json" });
     const keepalive = setInterval(() => raw.write(" "), 30_000);
 
-    let out = "";
-    let last = 0;
-    const listener = (d: string) => {
-      out += d;
-      last = Date.now();
-    };
-    session.listeners.add(listener);
     let aborted = false;
     raw.on("close", () => (aborted = true));
 
-    const started = Date.now();
     try {
-      sessions.write(c.projectId, t.id, `${text}\r`);
-      let timedOut = false;
-      while (!aborted) {
-        await new Promise((r) => setTimeout(r, 100));
-        const now = Date.now();
-        if (last && now - last >= quietMs) break;
-        if (session.dead) break;
-        if (now - started >= timeoutS * 1000) {
-          timedOut = true;
-          break;
-        }
-      }
-      if (!aborted) raw.end(JSON.stringify({ output: stripAnsi(out).trim(), timedOut }));
+      const r = await typeAndWait(sessions, session, `${text}\r`, timeoutS, () => aborted);
+      if (!aborted) raw.end(JSON.stringify(r));
     } finally {
       clearInterval(keepalive);
-      session.listeners.delete(listener);
     }
   });
 
@@ -291,5 +317,75 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
     if (!isText(text, 500) || !text.trim()) throw new ApiError(400, "Informe o texto (até 500 caracteres).");
     canvas.notify(c.projectId, { type: "notify", from: { nodeId: c.me.id, title: c.title(c.me) }, text });
     return { ok: true };
+  }));
+
+  // --- Chat (face de chat do nó): histórico em node.data.chat, sincronizado pelo canvas ---
+  const busy = new Set<string>();
+
+  const chatOf = (projectId: string, nodeId: string): Obj[] =>
+    canvas.state(projectId).nodes?.find((n) => n.id === nodeId)?.data?.chat ?? [];
+
+  // Lê e grava no mesmo tick: appends concorrentes não se perdem. Descarta as mais antigas além de CHAT_MAX.
+  function appendChat(projectId: string, nodeId: string, msg: Obj, extra: Obj = {}) {
+    const node = canvas.state(projectId).nodes?.find((n) => n.id === nodeId);
+    if (!node) return;
+    const chat = [...(node.data?.chat ?? []), { id: crypto.randomUUID(), at: new Date().toISOString(), ...msg }].slice(-CHAT_MAX);
+    canvas.applyAndBroadcast(projectId, { kind: "patchNodeData", id: nodeId, data: { chat, ...extra } }, `chat:${nodeId}`);
+  }
+
+  const agentOnly = (c: Ctx) => {
+    if (c.me.type !== "agentTerminal") throw new ApiError(400, "O chat só existe em nós de agente.");
+  };
+
+  fastify.get(`${base}/chat`, wrap((c, req) => {
+    agentOnly(c);
+    const last = Math.min(CHAT_MAX, Math.max(1, Math.floor(Number(req.query?.last)) || 20));
+    return { messages: chatOf(c.projectId, c.me.id).slice(-last) };
+  }));
+
+  fastify.delete(`${base}/chat`, wrap((c) => {
+    agentOnly(c);
+    canvas.applyAndBroadcast(c.projectId, { kind: "patchNodeData", id: c.me.id, data: { chat: [] } }, `chat:${c.me.id}`);
+    return { ok: true };
+  }));
+
+  fastify.post(`${base}/chat/reply`, wrap((c, req) => {
+    agentOnly(c);
+    const { text } = req.body ?? {};
+    if (!isText(text, 50_000) || !text.trim()) throw new ApiError(400, "Informe o texto.");
+    appendChat(c.projectId, c.me.id, { role: "agent", text });
+    return { ok: true };
+  }));
+
+  fastify.post(`${base}/chat`, wrap((c, req, reply) => {
+    agentOnly(c);
+    const { text, author } = req.body ?? {};
+    if (!isText(text, 20_000) || !text.trim()) throw new ApiError(400, "Informe o texto.");
+    const user = parseUser(author);
+    if (!user) throw new ApiError(400, "Autor inválido (id, name e color #rrggbb).");
+    const session = sessions.get(c.projectId, c.me.id);
+    if (!session) throw new ApiError(409, "O terminal deste agente não tem sessão ativa.");
+    const key = `${c.projectId}:${c.me.id}`;
+    if (busy.has(key)) throw new ApiError(409, "Agente ocupado.");
+    busy.add(key);
+
+    appendChat(c.projectId, c.me.id, { role: "user", text, author: user }, { chatBusy: true });
+
+    // Várias linhas vão como bracketed paste para o shell/TUI não executar linha a linha
+    const hinted = expandMentions(text, c.connected);
+    const input = hinted.includes("\n") ? `\x1b[200~${hinted}\x1b[201~\r` : `${hinted}\r`;
+
+    // Captura em segundo plano; a resposta 202 não espera
+    void typeAndWait(sessions, session, input, 600)
+      .then(({ output }) => {
+        if (output) appendChat(c.projectId, c.me.id, { role: "terminal", text: output.slice(-20_000) });
+      })
+      .catch((e) => req.log.error(e))
+      .finally(() => {
+        busy.delete(key);
+        const node = canvas.state(c.projectId).nodes?.find((n) => n.id === c.me.id);
+        if (node) canvas.applyAndBroadcast(c.projectId, { kind: "patchNodeData", id: c.me.id, data: { chatBusy: false } }, `chat:${c.me.id}`);
+      });
+    return reply.status(202).send({ ok: true });
   }));
 }

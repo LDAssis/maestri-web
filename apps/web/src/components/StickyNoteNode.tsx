@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import { StickyNote, Edit3 } from "lucide-react";
 import DeleteNodeButton from "./DeleteNodeButton";
+import Markdown from "./Markdown";
 import { usePresenceStore } from "@/lib/presence";
 
 export interface StickyNoteData extends Record<string, unknown> {
@@ -107,8 +108,8 @@ export default function StickyNoteNode({
             className="w-full h-full bg-black/40 rounded-lg p-2 text-xs font-mono leading-relaxed text-white focus:outline-none resize-none"
           />
         ) : (
-          <div className="w-full h-full text-xs leading-relaxed whitespace-pre-wrap font-mono opacity-90 overflow-y-auto">
-            {content}
+          <div className="w-full h-full text-xs leading-relaxed opacity-90 overflow-y-auto nowheel">
+            <Markdown>{content}</Markdown>
           </div>
         )}
       </div>

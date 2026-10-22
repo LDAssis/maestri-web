@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useContext, useState } from "react";
+import React, { useContext, useEffect, useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import {
   Terminal,
@@ -8,8 +8,6 @@ import {
   Cpu,
   Code2,
   MessageSquare,
-  Send,
-  AtSign,
   Crown,
   Sparkles,
   RotateCw,
@@ -17,6 +15,7 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import DeleteNodeButton from "./DeleteNodeButton";
+import ChatFace, { ChatMessage } from "./ChatFace";
 import { apiFetch } from "@/lib/api";
 import { ProjectIdContext } from "@/lib/projectContext";
 import { usePresenceValue } from "@/lib/presence";
@@ -40,6 +39,8 @@ export interface AgentNodeData extends Record<string, unknown> {
   worktreePath?: string;
   defaultCmd?: string;
   isMaestro?: boolean;
+  chat?: ChatMessage[];
+  chatBusy?: boolean;
 }
 
 export default function AgentTerminalNode({
@@ -62,13 +63,28 @@ export default function AgentTerminalNode({
   const [showCli, setShowCli] = useState(false);
   const [termStatus, setTermStatus] = useState<TerminalStatus>("conectando");
   const isMaestro = Boolean(nodeData.isMaestro);
-  const [chatInput, setChatInput] = useState("");
-  const [messages, setMessages] = useState<Array<{ sender: "user" | "agent"; text: string }>>([
-    {
-      sender: "agent",
-      text: `Olá! Sou o ${nodeData.title}. Estou ciente do meu papel no canvas do Maestri.`,
-    },
-  ]);
+  const chat = nodeData.chat || [];
+  const agentCount = chat.filter((m) => m.role === "agent").length;
+  const seenKey = `maestri.chatSeen.${projectId}.${id}`;
+  const [seen, setSeen] = useState<number | null>(null);
+
+  // Badge: mensagens do agente desde a última vez que a face de chat foi aberta (sem badge para histórico antigo)
+  useEffect(() => {
+    let stored: number | null = null;
+    try {
+      const v = localStorage.getItem(seenKey);
+      stored = v === null ? null : Number(v);
+    } catch {}
+    setSeen(stored ?? agentCount);
+  }, [seenKey]);
+  useEffect(() => {
+    if (seen === null || (activeFace !== "chat" && agentCount >= seen)) return;
+    setSeen(agentCount);
+    try {
+      localStorage.setItem(seenKey, String(agentCount));
+    } catch {}
+  }, [activeFace, agentCount, seen, seenKey]);
+  const unread = activeFace === "chat" || seen === null ? 0 : Math.max(0, agentCount - seen);
 
   const getStatusColor = () => {
     switch (nodeData.status) {
@@ -94,23 +110,6 @@ export default function AgentTerminalNode({
       return <ShieldCheck className="h-4 w-4 text-emerald-400" />;
     }
     return <Code2 className="h-4 w-4 text-indigo-400" />;
-  };
-
-  const handleSendMessage = () => {
-    if (!chatInput.trim()) return;
-    const userMsg = chatInput;
-    setMessages((prev) => [...prev, { sender: "user", text: userMsg }]);
-    setChatInput("");
-
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: "agent",
-          text: `[Recebido]: Processando instrução no worktree '${nodeData.branch}'. Executando modificações...`,
-        },
-      ]);
-    }, 600);
   };
 
   return (
@@ -207,6 +206,14 @@ export default function AgentTerminalNode({
             >
               <MessageSquare className="h-3 w-3" />
               Chat
+              {unread > 0 && (
+                <span
+                  className="min-w-[14px] rounded-full bg-rose-500 px-1 text-center text-[9px] font-bold leading-[14px] text-white"
+                  aria-label={`${unread} mensagens novas`}
+                >
+                  {unread}
+                </span>
+              )}
             </button>
           </div>
 
@@ -232,48 +239,7 @@ export default function AgentTerminalNode({
           />
         </div>
         {activeFace === "chat" && (
-          <div className="w-full h-full bg-[#070b16] flex flex-col justify-between p-3 min-h-0">
-            {/* Mensagens formatadas */}
-            <div className="overflow-y-auto space-y-2 pr-1 flex-1 text-xs">
-              {messages.map((m, i) => (
-                <div
-                  key={i}
-                  className={`p-2.5 rounded-xl max-w-[85%] leading-relaxed ${
-                    m.sender === "user"
-                      ? "ml-auto bg-indigo-600 text-white"
-                      : "bg-slate-900 border border-slate-800 text-slate-200"
-                  }`}
-                >
-                  {m.text}
-                </div>
-              ))}
-            </div>
-
-            {/* Prompt Composer com @ mention */}
-            <div className="mt-2 pt-2 border-t border-slate-800 flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => setChatInput((prev) => prev + "@nota ")}
-                className="p-1 rounded text-slate-400 hover:text-indigo-400 hover:bg-slate-800"
-                title="Mencionar Nota ou Terminal (@)"
-              >
-                <AtSign className="h-3.5 w-3.5" />
-              </button>
-              <input
-                type="text"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                placeholder="Digite instrução ou @ para mencionar..."
-                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs focus:outline-none focus:border-indigo-500"
-              />
-              <button
-                onClick={handleSendMessage}
-                className="p-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition"
-              >
-                <Send className="h-3 w-3" />
-              </button>
-            </div>
-          </div>
+          <ChatFace projectId={projectId} nodeId={id} messages={chat} busy={Boolean(nodeData.chatBusy)} />
         )}
       </div>
 

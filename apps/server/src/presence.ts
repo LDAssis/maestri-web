@@ -25,7 +25,7 @@ const PONG_TIMEOUT_MS = 60_000;
 const isStr = (v: unknown): v is string => typeof v === "string" && v.length <= 64;
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
-function parseUser(u: any): User | null {
+export function parseUser(u: any): User | null {
   if (!u || !isStr(u.id) || !u.id || !isStr(u.name) || !u.name.trim()) return null;
   if (typeof u.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(u.color)) return null;
   return { id: u.id, name: u.name, color: u.color };

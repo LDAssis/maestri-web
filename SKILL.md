@@ -43,3 +43,11 @@ maestri dismiss "QA"
 3. Registre decisões e progresso nas notas conectadas (`note append`) — os humanos veem ao vivo no canvas.
 4. `recruit`: com `--role`, o texto do papel vai para `.maestri-roles/<id>.md` (nunca é interpolado no comando); com `--cmd claude` ou `--cmd codex` o arquivo é passado como prompt inicial. O novo agente já nasce conectado a você e com o terminal iniciado.
 5. Se for o Maestro: quebre o objetivo em tarefas, recrute especialistas, delegue com `send`/`ask`, acompanhe com `check` e dispense (`dismiss`) quem terminou.
+
+## Face de chat
+Os usuários também conversam com você pela **face de chat** do seu nó: a mensagem chega digitada no seu terminal (menções `@Nota` vêm com a dica de como ler). **Quando receber mensagens pela face de chat, responda com `maestri chat reply`** — é o que aparece, renderizado em Markdown, para todos que estão no canvas; a saída crua do terminal vira só um bloco recolhido.
+
+```bash
+maestri chat reply "Pronto! Veja o resumo:\n\n- item 1\n- item 2"   # aceita Markdown (tabelas, listas, código)
+maestri chat history --last 10                                         # releia o que o usuário pediu
+```
