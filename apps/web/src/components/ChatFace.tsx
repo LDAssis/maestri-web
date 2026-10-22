@@ -13,7 +13,21 @@ export interface ChatMessage {
   text: string;
   author?: { id: string; name: string; color: string };
   at: string;
+  // Thread (cor) da conversa; ausente = blue. progress = balão intermediário (`maestri say --progress`)
+  thread?: string;
+  progress?: boolean;
 }
+
+// As 7 threads do chat de cada agente (mesmos nomes do servidor)
+const THREADS = [
+  { id: "blue", dot: "bg-blue-500" },
+  { id: "purple", dot: "bg-purple-500" },
+  { id: "pink", dot: "bg-pink-500" },
+  { id: "red", dot: "bg-red-500" },
+  { id: "orange", dot: "bg-orange-500" },
+  { id: "yellow", dot: "bg-yellow-400" },
+  { id: "green", dot: "bg-green-500" },
+] as const;
 
 interface Mention {
   title: string;
@@ -57,7 +71,24 @@ export default function ChatFace({
       return "";
     }
   });
+  const threadKey = `maestri.chatThread.${projectId}.${nodeId}`;
+  const [thread, setThread] = useState<string>(() => {
+    try {
+      const v = localStorage.getItem(threadKey);
+      return THREADS.some((t) => t.id === v) ? (v as string) : "blue";
+    } catch {
+      return "blue";
+    }
+  });
   const [warning, setWarning] = useState("");
+  const shown = messages.filter((m) => (m.thread ?? "blue") === thread);
+  const pickThread = (id: string) => {
+    setThread(id);
+    stickRef.current = true;
+    try {
+      localStorage.setItem(threadKey, id);
+    } catch {}
+  };
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -68,7 +99,7 @@ export default function ChatFace({
   useEffect(() => {
     const el = listRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [messages.length, busy]);
+  }, [shown.length, busy, thread]);
 
   useEffect(() => {
     try {
@@ -123,7 +154,7 @@ export default function ChatFace({
       const res = await apiFetch(`/api/projects/${projectId}/nodes/${nodeId}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, author: readUser() }),
+        body: JSON.stringify({ text, author: readUser(), thread }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -174,6 +205,24 @@ export default function ChatFace({
 
   return (
     <div className="w-full h-full bg-[#070b16] flex flex-col p-3 min-h-0">
+      <div role="tablist" aria-label="Threads do chat" className="flex items-center gap-1.5 pb-2 shrink-0">
+        {THREADS.map((t) => {
+          const count = messages.filter((m) => (m.thread ?? "blue") === t.id && m.role !== "terminal").length;
+          return (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={thread === t.id}
+              aria-label={`Thread ${t.id}${count ? ` (${count} mensagens)` : ""}`}
+              title={`Thread ${t.id}${count ? ` · ${count}` : ""}`}
+              onClick={() => pickThread(t.id)}
+              className={`nodrag h-3.5 w-3.5 rounded-full ${t.dot} transition ${
+                thread === t.id ? "ring-2 ring-white/80 ring-offset-1 ring-offset-[#070b16]" : count ? "opacity-70 hover:opacity-100" : "opacity-30 hover:opacity-70"
+              }`}
+            />
+          );
+        })}
+      </div>
       <div
         ref={listRef}
         role="log"
@@ -184,10 +233,10 @@ export default function ChatFace({
         }}
         className="overflow-y-auto space-y-2 pr-1 flex-1 text-xs min-h-0 nowheel"
       >
-        {messages.length === 0 && (
+        {shown.length === 0 && (
           <div className="text-slate-500 text-center pt-6">Nenhuma mensagem. Envie uma instrução ao agente.</div>
         )}
-        {messages.map((m) =>
+        {shown.map((m) =>
           m.role === "user" ? (
             <div key={m.id} className="ml-auto max-w-[85%]">
               <div className="flex items-center justify-end gap-1.5 mb-0.5 text-[10px]" style={{ color: m.author?.color }}>
@@ -201,7 +250,9 @@ export default function ChatFace({
           ) : m.role === "agent" ? (
             <div
               key={m.id}
-              className="max-w-[90%] p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 leading-relaxed"
+              className={`max-w-[90%] p-2.5 rounded-xl text-slate-200 leading-relaxed ${
+                m.progress ? "bg-transparent border border-dashed border-slate-700 text-slate-400 italic" : "bg-slate-900 border border-slate-800"
+              }`}
             >
               <Markdown>{m.text}</Markdown>
             </div>

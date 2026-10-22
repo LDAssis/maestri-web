@@ -5,6 +5,7 @@ import type { Session, SessionManager } from "./sessions.js";
 import { parseUser } from "./presence.js";
 import { ApiError, PRESETS, PRESET_LABELS, SIZES, freePosition, validCmd, withRolePrompt } from "./agents.js";
 import { readRole } from "./roles.js";
+import { THREADS, DEFAULT_THREAD, isThread, chatHeader, wantsChatHeader, currentThread } from "./chatThreads.js";
 
 type Obj = Record<string, any>;
 
@@ -327,14 +328,15 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
     agentOnly(c);
     const { text } = req.body ?? {};
     if (!isText(text, 50_000) || !text.trim()) throw new ApiError(400, "Informe o texto.");
-    appendChat(c.projectId, c.me.id, { role: "agent", text });
+    appendChat(c.projectId, c.me.id, { role: "agent", text, thread: currentThread(chatOf(c.projectId, c.me.id)) });
     return { ok: true };
   }));
 
   fastify.post(`${base}/chat`, wrap((c, req, reply) => {
     agentOnly(c);
-    const { text, author } = req.body ?? {};
+    const { text, author, thread = DEFAULT_THREAD } = req.body ?? {};
     if (!isText(text, 20_000) || !text.trim()) throw new ApiError(400, "Informe o texto.");
+    if (!isThread(thread)) throw new ApiError(400, `Thread inválida (${THREADS.join(", ")}).`);
     const user = parseUser(author);
     if (!user) throw new ApiError(400, "Autor inválido (id, name e color #rrggbb).");
     const session = sessions.get(c.projectId, c.me.id);
@@ -343,16 +345,17 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo }: Deps
     if (chatBusy.has(key)) throw new ApiError(409, "Agente ocupado.");
     chatBusy.add(key);
 
-    appendChat(c.projectId, c.me.id, { role: "user", text, author: user }, { chatBusy: true });
+    appendChat(c.projectId, c.me.id, { role: "user", text, author: user, thread }, { chatBusy: true });
 
-    // Várias linhas vão como bracketed paste para o shell/TUI não executar linha a linha
-    const hinted = expandMentions(text, c.connected);
+    // Várias linhas vão como bracketed paste para o shell/TUI não executar linha a linha.
+    // Com um agente em primeiro plano, a mensagem leva o cabeçalho do Maestri Chat (thread + `maestri say`).
+    const hinted = (wantsChatHeader(session) ? chatHeader(thread) : "") + expandMentions(text, c.connected);
     const input = hinted.includes("\n") ? `\x1b[200~${hinted}\x1b[201~\r` : `${hinted}\r`;
 
     // Captura em segundo plano; a resposta 202 não espera
     void typeAndWait(sessions, session, input, 600)
       .then(({ output }) => {
-        if (output) appendChat(c.projectId, c.me.id, { role: "terminal", text: output.slice(-20_000) });
+        if (output) appendChat(c.projectId, c.me.id, { role: "terminal", text: output.slice(-20_000), thread });
       })
       .catch((e) => req.log.error(e))
       .finally(() => {

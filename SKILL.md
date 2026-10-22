@@ -20,6 +20,9 @@ maestri send "Backend" "rode os testes e me avise"      # escreve texto + Enter 
 maestri check "Backend" --lines 80                       # últimas 80 linhas do terminal dele (sem ANSI; padrão 60)
 maestri ask "Backend" "qual o status da migração?"      # send + espera o agente ficar 5s quieto e imprime a resposta
 maestri ask "Backend" "..." --timeout 120                # padrão 600s; ao estourar imprime o parcial e sai com código 2
+maestri ask --batch '{"Backend":"status?","Frontend":"status?"}'   # asks em paralelo; imprime array JSON [{name, output}|{name, error}]
+maestri ask "Backend" --raw "2\n"                          # entrada crua (\n Enter, \t Tab, \e ESC, \xNN) para responder prompts interativos
+maestri debug                                              # diagnostica env, API, nó, sessão e papel de Maestro (sai 0/1)
 
 maestri note read "Notas"                                # lê uma nota conectada
 maestri note write "Notas" "texto"                       # substitui o conteúdo
@@ -45,9 +48,14 @@ maestri dismiss "QA"
 5. Se for o Maestro: quebre o objetivo em tarefas, recrute especialistas, delegue com `send`/`ask`, acompanhe com `check` e dispense (`dismiss`) quem terminou.
 
 ## Face de chat
-Os usuários também conversam com você pela **face de chat** do seu nó: a mensagem chega digitada no seu terminal (menções `@Nota` vêm com a dica de como ler). **Quando receber mensagens pela face de chat, responda com `maestri chat reply`** — é o que aparece, renderizado em Markdown, para todos que estão no canvas; a saída crua do terminal vira só um bloco recolhido.
+Os usuários também conversam com você pela **face de chat** do seu nó: a mensagem chega digitada no seu terminal (menções `@Nota` vêm com a dica de como ler). **Quando receber mensagens pela face de chat (cabeçalho `Below is a message from the user through Maestri Chat` com `thread: <cor>`), responda SOMENTE com `maestri say`** — é o que aparece, renderizado em Markdown, para todos que estão no canvas, na thread (cor) da última mensagem do usuário; a saída crua do terminal vira só um bloco recolhido. `maestri chat reply` continua funcionando como alias.
 
 ```bash
-maestri chat reply "Pronto! Veja o resumo:\n\n- item 1\n- item 2"   # aceita Markdown (tabelas, listas, código)
-maestri chat history --last 10                                         # releia o que o usuário pediu
+maestri say "Pronto! Veja o resumo:\n\n- item 1\n- item 2"   # aceita Markdown; sem argumento lê stdin (heredoc)
+maestri say --file resposta.md                                 # texto UTF-8 de um arquivo
+maestri say --progress "rodando os testes..."                  # balão intermediário (estilo diferente), antes da resposta final
+maestri recall --turns 5                                       # releia a thread atual (--last day|week|month, --from/--to YYYY-MM-DD, --all, --json)
+maestri recall purple                                          # outra thread: blue purple pink red orange yellow green
+maestri recall list                                            # threads com contagem de mensagens
+maestri chat history --last 10                                 # histórico bruto do chat (todas as threads)
 ```
