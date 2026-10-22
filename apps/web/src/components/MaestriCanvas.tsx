@@ -516,8 +516,24 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     }
   };
 
-  const addAgent = () => {
+  const addAgent = async () => {
     const newId = `agent-${Date.now().toString().slice(-4)}`;
+    let defaultCmd = "echo 'Agente inicializado'";
+    let cliPresets = undefined;
+
+    try {
+      const res = await apiFetch(`/api/projects/${projectId}/settings`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.effective) {
+          if (data.effective.defaultCmd) defaultCmd = data.effective.defaultCmd;
+          if (data.effective.cliPresets) cliPresets = data.effective.cliPresets;
+        }
+      }
+    } catch (e) {
+      console.warn("Falha ao obter configurações para novo agente:", e);
+    }
+
     const newNode: Node<AgentNodeData> = {
       id: newId,
       type: "agentTerminal",
@@ -529,7 +545,8 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         model: "Claude 3.5 Sonnet",
         status: "idle",
         branch: `agent/${newId}`,
-        defaultCmd: `echo 'Agente inicializado'`,
+        defaultCmd,
+        cliPresets,
       },
     };
     setNodes((nds) => [...nds, newNode]);

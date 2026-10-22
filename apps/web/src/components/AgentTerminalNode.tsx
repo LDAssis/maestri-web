@@ -249,6 +249,8 @@ export default function AgentTerminalNode({
             onStatusChange={setTermStatus}
             cwd={nodeData.worktreePath}
             initialCmd={nodeData.defaultCmd}
+            cliPresets={nodeData.cliPresets}
+            onUpdateConfig={handleUpdateConfig}
           />
         </div>
         {activeFace === "chat" && (

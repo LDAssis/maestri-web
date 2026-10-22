@@ -339,7 +339,13 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
     } catch {}
   }
 
-  sessions.attach(socket, projectId, nodeId, { cwd, cmd: url.searchParams.get("cmd") || "" });
+  let cmd = url.searchParams.get("cmd") || "";
+  if (!cmd) {
+    const projSettings = readProjectSettings(projectId);
+    const globalSettings = readGlobalSettings();
+    cmd = projSettings?.defaultCmd || globalSettings?.defaultCmd || "";
+  }
+  sessions.attach(socket, projectId, nodeId, { cwd, cmd });
 });
 
 // WebSocket do canvas: snapshot ao conectar, depois ops em tempo real
