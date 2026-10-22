@@ -125,6 +125,15 @@ test("help geral sem linhas duplicadas e recall documenta o que ignora", async (
   assert.match(recall.stdout, /terminal/);
 });
 
+test("saída fechada pelo leitor (| head) não despeja stack de EPIPE", async () => {
+  const r = await new Promise<{ code: number; stderr: string; stdout: string }>((resolve) =>
+    execFile("sh", ["-c", `"$0" "$1" debug | head -1`, process.execPath, bin], { env: { ...process.env, MAESTRI_API_URL: `http://127.0.0.1:${port}/api`, MAESTRI_PROJECT_ID: P, MAESTRI_NODE_ID: "maestro", MAESTRI_TOKEN: "tok-cli" } }, (err, stdout, stderr) => resolve({ code: err ? 1 : 0, stderr, stdout })),
+  );
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /MAESTRI_API_URL/);
+  assert.equal(r.stderr, "");
+});
+
 test("context lista os conectados agrupados, sem os não conectados", async () => {
   for (const cmd of ["context", "list"]) {
     const r = await maestri("maestro", [cmd]);

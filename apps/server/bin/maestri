@@ -217,6 +217,9 @@ async function loadModules() {
   }
 }
 
+// `maestri ... | head`: o leitor fechou o pipe; sair em silêncio em vez de despejar o stack do EPIPE
+for (const out of [process.stdout, process.stderr]) out.on("error", (e) => (e.code === "EPIPE" ? process.exit(0) : (() => { throw e; })()));
+
 async function main() {
   await loadModules();
   const { pos, flags, help } = parse(process.argv.slice(2));
