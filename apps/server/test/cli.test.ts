@@ -184,7 +184,7 @@ test("note write propaga pelo WS de projeto; append e read", async () => {
   assert.deepEqual(msg.op, { kind: "patchNodeData", id: "note1", data: { content: "novo texto" } });
   await maestri("maestro", ["note", "append", "Notas", "mais"]);
   const r = await maestri("maestro", ["note", "read", "Notas"]);
-  assert.equal(r.stdout, "novo texto\nmais\n");
+  assert.equal(r.stdout, "   1| novo texto\n   2| mais\n");
 });
 
 test("note create cria a nota perto do nó, sem sobrepor, conectada a ele", async () => {

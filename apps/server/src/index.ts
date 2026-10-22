@@ -12,6 +12,7 @@ import { registerRolesApi } from "./roles.js";
 import { CanvasStore } from "./canvas.js";
 import { PresenceHub } from "./presence.js";
 import { registerNodeApi, typeAndWait, chatBusy } from "./nodeApi.js";
+import { registerNotesApi } from "./notesApi.js";
 import { registerRoutinesApi } from "./routines.js";
 import { registerFilesApi } from "./files.js";
 import { createProjectDir, findConflict, isInside, migrateProjects, overlaps, resolveInside } from "./projectDirs.js";
@@ -154,6 +155,7 @@ fastify.addHook("onClose", async () => {
 const idPattern = /^[\w-]+$/;
 
 const nodeApi = registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null });
+registerNotesApi({ fastify, canvas, nodeApi });
 const projectRepo = (id: string) => projects.find((p) => p.id === id)?.repoPath ?? null;
 const { createFloorFor } = registerWorktreeApi({ fastify, sessions, canvas, projectRepo });
 registerRolesApi({ fastify, canvas, projectRepo, createFloorFor });

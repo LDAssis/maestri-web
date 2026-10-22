@@ -21,10 +21,16 @@ maestri check "Backend" --lines 80                       # últimas 80 linhas do
 maestri ask "Backend" "qual o status da migração?"      # send + espera o agente ficar 5s quieto e imprime a resposta
 maestri ask "Backend" "..." --timeout 120                # padrão 600s; ao estourar imprime o parcial e sai com código 2
 
-maestri note read "Notas"                                # lê uma nota conectada
+maestri note read "Notas" [início] [quantidade]          # lê com números de linha (intervalo opcional)
 maestri note write "Notas" "texto"                       # substitui o conteúdo
 maestri note append "Notas" "mais uma linha"             # acrescenta
-maestri note create "Decisões" "texto"                   # cria uma nota perto de você, já conectada a você
+maestri note edit "Notas" "antigo" "novo"                # troca um trecho (precisa aparecer exatamente uma vez)
+maestri note delete "Notas"                              # remove a nota (destrutivo: só se o usuário pedir)
+maestri note create ["conteúdo"] [--name "Nome"] [--stack ["Fichário"]] [--color C]   # nome = 1ª linha, a menos que --name fixe; imprime o nome exato
+maestri note stack "Notas" ["Fichário"]                  # guarda a nota num fichário (cria se preciso)
+maestri note unstack "Notas"                             # tira do fichário
+maestri arrange ["Nome"] [--name N] [--icon I] [--color C]   # renomeia/estiliza você, uma nota ou (Maestro) um agente; sem args mostra; --help lista ícones/cores
+maestri note create "Decisões" "texto"                   # forma antiga: título fixo + texto
 
 maestri portal navigate "Preview" "http://localhost:3000"   # só http/https
 
@@ -51,3 +57,10 @@ Os usuários também conversam com você pela **face de chat** do seu nó: a men
 maestri chat reply "Pronto! Veja o resumo:\n\n- item 1\n- item 2"   # aceita Markdown (tabelas, listas, código)
 maestri chat history --last 10                                         # releia o que o usuário pediu
 ```
+
+## Notas avançadas
+- `maestri list` mostra `(locked: true)` em notas travadas (somente leitura: write/edit/append/delete falham), notas encadeadas
+  indentadas sob a nota-mãe e os fichários com suas páginas. Notas ligadas a uma nota conectada a você, e as páginas de
+  fichários conectados a você, também podem ser lidas e escritas.
+- O nome de uma nota sem `--name` acompanha a primeira linha; `write`/`edit` informam o novo nome quando muda. Prefira `--name`
+  se for endereçar a nota de novo.

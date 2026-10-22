@@ -2,17 +2,24 @@
 
 import React, { useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
-import { StickyNote, Edit3 } from "lucide-react";
+import { StickyNote, Edit3, Lock, LockOpen } from "lucide-react";
 import DeleteNodeButton from "./DeleteNodeButton";
 import Markdown from "./Markdown";
 import { NOTE_COLORS, NOTE_DOT } from "./CanvasOverlays";
 import { usePresenceStore } from "@/lib/presence";
+import { NOTE_STYLE, ICON_MAP } from "./palette";
 
 export interface StickyNoteData extends Record<string, unknown> {
   title: string;
   content: string;
   author?: string;
-  color?: "amber" | "indigo" | "emerald" | "rose";
+  color?: string;
+  icon?: string;
+  locked?: boolean;
+  // Nome fixo (pinnedName) ou acompanhando a primeira linha (autoTitle), usado pelo CLI
+  pinnedName?: boolean;
+  autoTitle?: boolean;
+  stackId?: string | null;
 }
 
 export default function StickyNoteNode({
@@ -34,22 +41,13 @@ export default function StickyNoteNode({
     onBlur: () => presence.setActive(null, "viewing"),
   };
 
-  const getColorStyles = () => {
-    switch (data.color) {
-      case "indigo":
-        return "bg-indigo-950/80 border-indigo-700/80 text-indigo-100";
-      case "emerald":
-        return "bg-emerald-950/80 border-emerald-700/80 text-emerald-100";
-      case "rose":
-        return "bg-rose-950/80 border-rose-700/80 text-rose-100";
-      default:
-        return "bg-amber-950/70 border-amber-600/70 text-amber-100";
-    }
-  };
+  const locked = data.locked === true;
+  const Icon = (data.icon && ICON_MAP[data.icon]) || StickyNote;
+  const colorStyles = NOTE_STYLE[data.color ?? "amber"] ?? NOTE_STYLE.amber;
 
   return (
     <div
-      className={`w-full h-full min-w-[240px] min-h-[160px] rounded-2xl border p-4 shadow-2xl backdrop-blur-md transition hover:shadow-indigo-500/10 font-sans flex flex-col ${getColorStyles()}`}
+      className={`w-full h-full min-w-[240px] min-h-[160px] rounded-2xl border p-4 shadow-2xl backdrop-blur-md transition hover:shadow-indigo-500/10 font-sans flex flex-col ${colorStyles}`}
     >
       {/* Redimensionador Oficial do React Flow */}
       <NodeResizer
@@ -70,13 +68,14 @@ export default function StickyNoteNode({
       {/* Header da Nota */}
       <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10 text-xs shrink-0">
         <div className="flex items-center gap-1.5 font-semibold">
-          <StickyNote className="h-3.5 w-3.5 opacity-80" />
-          {isEditing ? (
+          <Icon className="h-3.5 w-3.5 opacity-80" />
+          {isEditing && !locked ? (
             <input
               type="text"
               value={title}
               onChange={(e) => {
-                updateNodeData(id, { title: e.target.value });
+                // Renomear à mão fixa o nome (a primeira linha deixa de renomear)
+                updateNodeData(id, { title: e.target.value, pinnedName: true, autoTitle: false });
               }}
               {...editingProps}
               className="bg-black/40 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
@@ -102,9 +101,20 @@ export default function StickyNoteNode({
             ))}
           </div>
           <button
+            onClick={() => updateNodeData(id, { locked: !locked })}
+            aria-pressed={locked}
+            aria-label={locked ? "Destravar nota" : "Travar nota"}
+            title={locked ? "Nota travada: agentes só podem ler. Clique para destravar" : "Travar nota (somente leitura para agentes)"}
+            className="p-1 hover:bg-white/10 rounded transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70"
+          >
+            {locked ? <Lock className="h-3 w-3 text-amber-300" /> : <LockOpen className="h-3 w-3 opacity-70" />}
+          </button>
+          <button
             onClick={() => setIsEditing(!isEditing)}
-            className="p-1 hover:bg-white/10 rounded transition"
-            title="Editar nota"
+            disabled={locked}
+            aria-label="Editar nota"
+            className="p-1 hover:bg-white/10 rounded transition disabled:opacity-30 disabled:cursor-not-allowed"
+            title={locked ? "Nota travada" : "Editar nota"}
           >
             <Edit3 className="h-3 w-3 opacity-70" />
           </button>
@@ -114,7 +124,7 @@ export default function StickyNoteNode({
 
       {/* Conteúdo da Nota com preenchimento total */}
       <div className="flex-1 w-full overflow-hidden flex flex-col">
-        {isEditing ? (
+        {isEditing && !locked ? (
           <textarea
             value={content}
             onChange={(e) => {
