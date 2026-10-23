@@ -1,5 +1,5 @@
 {
-  "defaultCmd": "echo json",
+  "defaultCmd": "",
   "cliPresets": [
     {
       "id": "agy",

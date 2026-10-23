@@ -416,8 +416,17 @@ test("upload só lê arquivos do projeto, dos anexos do chat e do tmp", { skip }
   assert.match(await ok(["portal", "upload", "Form", "#arq", attFile]), /1 arquivo/);
 });
 
+// A API também atende pelos IPs de rede da máquina (HOST=0.0.0.0): o bloqueio cobre esses endereços e o hostname
+const lanSelfUrls = () => {
+  const urls = [`http://${os.hostname()}:${port}/api/health`];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const a of list ?? []) if (a.family === "IPv4" && !a.internal) urls.push(`http://${a.address}:${port}/api/health`);
+  }
+  return urls;
+};
+
 test("URLs bloqueadas: metadata/link-local e a API do próprio servidor; localhost em outra porta e ALLOW_PRIVATE liberam", { skip }, async () => {
-  for (const url of ["http://169.254.169.254/latest/meta-data", "http://169.254.1.1/", "http://[fd00:ec2::254]/", "http://[::ffff:169.254.169.254]/", "http://metadata.google.internal/computeMetadata/v1/", `http://127.0.0.1:${port}/api/health`, `http://localhost:${port}/`]) {
+  for (const url of ["http://169.254.169.254/latest/meta-data", "http://169.254.1.1/", "http://[fd00:ec2::254]/", "http://[::ffff:169.254.169.254]/", "http://metadata.google.internal/computeMetadata/v1/", `http://127.0.0.1:${port}/api/health`, `http://localhost:${port}/`, ...lanSelfUrls()]) {
     const create = await maestri(["portal", "create", url, "Bloq"]);
     assert.equal(create.code, 1, url);
     assert.match(create.stderr, /^maestri: error: URL bloqueada: /, url);

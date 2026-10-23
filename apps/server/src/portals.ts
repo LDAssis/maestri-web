@@ -47,8 +47,17 @@ export function blockedReason(u: URL): string | null {
   if (/^::ffff:a9fe:/.test(host)) return "endereço link-local/metadata (169.254.0.0/16)";
   const port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
   const loopback = host === "localhost" || host.endsWith(".localhost") || /^127\./.test(host) || host === "::1" || host === "0.0.0.0" || host === "::";
-  if (loopback && selfPorts().includes(port)) return "a API do próprio servidor do Maestri";
+  if ((loopback || isOwnAddress(host)) && selfPorts().includes(port)) return "a API do próprio servidor do Maestri";
   return null;
+}
+
+// Endereços desta máquina (IPs das interfaces e o hostname): com HOST=0.0.0.0 a API também atende pelo IP da rede
+function isOwnAddress(host: string) {
+  if (host === os.hostname().toLowerCase()) return true;
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const a of list ?? []) if (a.address.toLowerCase().replace(/%.*$/, "") === host) return true;
+  }
+  return false;
 }
 
 // Só http/https (localhost incluso); devolve a URL normalizada ou "" (inválida ou bloqueada, veja urlError)
