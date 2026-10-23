@@ -7,7 +7,8 @@ import "@xterm/xterm/css/xterm.css";
 import { apiFetch, wsUrl } from "@/lib/api";
 import { usePresenceStore } from "@/lib/presence";
 import CliConfigModal, { CliPreset, DEFAULT_CLI_PRESETS } from "./CliConfigModal";
-import { Settings } from "lucide-react";
+import { Settings, Copy, ClipboardPaste, TextSelect } from "lucide-react";
+import { copyText, readText } from "@/lib/clipboard";
 
 export type TerminalStatus = "conectando" | "online" | "offline" | "encerrada";
 
@@ -60,6 +61,30 @@ export default function TerminalView({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  // Copiar/colar: menu do botão direito, campo de colar (quando o navegador não deixa ler a área de transferência) e aviso
+  const [menu, setMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null);
+  const [pasteBox, setPasteBox] = useState(false);
+  const [flash, setFlash] = useState("");
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showFlash = useCallback((text: string) => {
+    setFlash(text);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlash(""), 1400);
+  }, []);
+  const copySelection = useCallback(async () => {
+    const term = termRef.current;
+    const text = term?.getSelection() ?? "";
+    if (!text) return showFlash("Nada selecionado");
+    const ok = await copyText(text);
+    showFlash(ok ? "Copiado" : "Não foi possível copiar");
+    term?.focus();
+  }, [showFlash]);
+  const pasteFromClipboard = useCallback(async () => {
+    const text = await readText();
+    if (text === null) return setPasteBox(true); // sem permissão (ex.: http na rede): o usuário cola no campo
+    if (text) termRef.current?.paste(text);
+    termRef.current?.focus();
+  }, []);
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -91,6 +116,23 @@ export default function TerminalView({
     term.loadAddon(fitAddon);
     term.open(containerRef.current);
     termRef.current = term;
+
+    // Atalhos de copiar/colar. Ctrl+C com seleção copia (sem seleção segue como interrupção, ^C);
+    // Ctrl+Shift+C sempre copia. Ctrl+V / Ctrl+Shift+V não vão ao PTY: o navegador dispara o evento de colar,
+    // que o xterm trata (com bracketed paste) e funciona até sem HTTPS. Shift+Insert já é nativo.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown") return true;
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      if (mod && key === "c" && (e.shiftKey || term.hasSelection())) {
+        e.preventDefault(); // Ctrl+Shift+C abriria o inspetor do Chrome
+        copySelectionRef.current();
+        if (!e.shiftKey) term.clearSelection();
+        return false;
+      }
+      if (mod && key === "v") return false;
+      return true;
+    });
 
     // Sessão compartilhada no servidor: fechar o socket não mata o PTY; reconecta com backoff
     let ws: WebSocket | null = null;
@@ -197,6 +239,39 @@ export default function TerminalView({
     };
   }, [projectId, nodeId, cwd, currentDefaultCmd, updateStatus, presence]);
 
+  // O efeito do xterm não depende de copySelection; a ref mantém a versão atual para o atalho
+  const copySelectionRef = useRef(copySelection);
+  copySelectionRef.current = copySelection;
+
+  // Fecha o menu ao clicar fora ou apertar Esc
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+
+  const openMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation(); // não abre o menu do canvas
+    const el = e.currentTarget;
+    const rect = el.getBoundingClientRect();
+    // o nó pode estar com zoom do canvas: converte para coordenadas locais do elemento
+    const scale = rect.width ? el.offsetWidth / rect.width : 1;
+    setMenu({ x: (e.clientX - rect.left) * scale, y: (e.clientY - rect.top) * scale, hasSelection: !!termRef.current?.hasSelection() });
+  };
+
+  const menuAction = (fn: () => void) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setMenu(null);
+    fn();
+  };
+
   const restartSession = async () => {
     try {
       await apiFetch(`/api/projects/${projectId}/sessions/${nodeId}/restart`, { method: "POST" });
@@ -247,8 +322,24 @@ export default function TerminalView({
         </div>
 
         <button
+          onClick={copySelection}
+          className="ml-auto p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-800 transition shrink-0"
+          title="Copiar seleção (Ctrl+Shift+C, ou Ctrl+C com texto selecionado)"
+          aria-label="Copiar seleção"
+        >
+          <Copy className="h-3 w-3" />
+        </button>
+        <button
+          onClick={pasteFromClipboard}
+          className="p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-800 transition shrink-0"
+          title="Colar (Ctrl+Shift+V ou Ctrl+V)"
+          aria-label="Colar"
+        >
+          <ClipboardPaste className="h-3 w-3" />
+        </button>
+        <button
           onClick={() => sendCommand("clear")}
-          className="ml-auto px-1.5 py-0.5 text-slate-500 hover:text-slate-300 transition shrink-0"
+          className="px-1.5 py-0.5 text-slate-500 hover:text-slate-300 transition shrink-0"
           title="Limpar tela"
         >
           limpar
@@ -275,7 +366,57 @@ export default function TerminalView({
           onMouseUp={(e) => {
             e.stopPropagation();
           }}
+          onContextMenu={openMenu}
         />
+        {menu && (
+          <div
+            role="menu"
+            aria-label="Menu do terminal"
+            className="absolute z-20 min-w-[170px] rounded-lg border border-slate-700 bg-slate-900/95 py-1 text-[11px] text-slate-200 shadow-2xl nodrag nopan"
+            style={{ left: menu.x, top: menu.y }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button role="menuitem" disabled={!menu.hasSelection} onClick={menuAction(copySelection)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent">
+              <Copy className="h-3 w-3" /> Copiar <span className="ml-auto text-slate-500">Ctrl+Shift+C</span>
+            </button>
+            <button role="menuitem" onClick={menuAction(pasteFromClipboard)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-800">
+              <ClipboardPaste className="h-3 w-3" /> Colar <span className="ml-auto text-slate-500">Ctrl+Shift+V</span>
+            </button>
+            <button role="menuitem" onClick={menuAction(() => { termRef.current?.selectAll(); termRef.current?.focus(); })} className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-800">
+              <TextSelect className="h-3 w-3" /> Selecionar tudo
+            </button>
+          </div>
+        )}
+        {pasteBox && (
+          <div className="absolute inset-x-3 top-3 z-20 rounded-lg border border-indigo-700 bg-slate-950/95 p-2 text-[11px] text-slate-300 shadow-2xl nodrag nopan" onMouseDown={(e) => e.stopPropagation()}>
+            <p className="mb-1">O navegador não deixa ler a área de transferência aqui (sem HTTPS). Cole no campo abaixo com <b>Ctrl+V</b>:</p>
+            <textarea
+              autoFocus
+              aria-label="Colar no terminal"
+              rows={2}
+              className="w-full resize-none rounded bg-slate-900 border border-slate-700 px-2 py-1 font-mono text-slate-100 focus:outline-none focus:border-indigo-500"
+              onPaste={(e) => {
+                e.preventDefault();
+                const text = e.clipboardData.getData("text");
+                setPasteBox(false);
+                if (text) termRef.current?.paste(text);
+                termRef.current?.focus();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setPasteBox(false);
+                  termRef.current?.focus();
+                }
+              }}
+            />
+            <button onClick={() => { setPasteBox(false); termRef.current?.focus(); }} className="mt-1 text-slate-500 hover:text-slate-300">Cancelar (Esc)</button>
+          </div>
+        )}
+        {flash && (
+          <div role="status" className="pointer-events-none absolute bottom-2 right-3 z-20 rounded bg-indigo-600/90 px-2 py-0.5 text-[10px] font-medium text-white shadow">
+            {flash}
+          </div>
+        )}
         {status === "encerrada" && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[#050811]/85 text-xs text-slate-300 nodrag">
             <span>Sessão encerrada</span>
