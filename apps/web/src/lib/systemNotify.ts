@@ -2,7 +2,9 @@
 // rotina e mudanças de status de andar chegam todos como {type:"notify"} no WS do projeto.
 export type NotifyPermission = NotificationPermission | "unsupported";
 
-export const notifyPermission = (): NotifyPermission => (typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported");
+// Fora de contexto seguro (acesso por http://<ip> da rede) o navegador nega a permissão sem perguntar: trata como não suportado
+export const notifyPermission = (): NotifyPermission =>
+  typeof window !== "undefined" && window.isSecureContext && "Notification" in window ? Notification.permission : "unsupported";
 
 // Pede a permissão uma vez (só a partir de um clique do usuário); devolve o estado resultante
 export async function requestNotifyPermission(): Promise<NotifyPermission> {

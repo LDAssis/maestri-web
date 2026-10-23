@@ -11,6 +11,12 @@ export interface MaestriUser {
 }
 
 const USER_KEY = "maestri.user";
+
+// crypto.randomUUID só existe em contexto seguro (HTTPS/localhost); acessando pelo IP da rede (http://192.168...) cai no getRandomValues
+const newUserId = () =>
+  typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
 const COLORS = ["#6366f1", "#8b5cf6", "#ec4899", "#ef4444", "#f59e0b", "#10b981", "#06b6d4", "#3b82f6"];
 
 export const readUser = (): MaestriUser | null => {
@@ -84,7 +90,7 @@ function ProfileForm({
       onSubmit={(e) => {
         e.preventDefault();
         if (!name.trim()) return;
-        onSubmit({ id: initial?.id || crypto.randomUUID(), name: name.trim(), color });
+        onSubmit({ id: initial?.id || newUserId(), name: name.trim(), color });
       }}
     >
       <div>
