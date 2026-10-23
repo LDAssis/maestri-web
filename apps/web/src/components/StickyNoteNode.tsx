@@ -66,9 +66,10 @@ export default function StickyNoteNode({
       />
 
       {/* Header da Nota */}
-      <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10 text-xs shrink-0">
-        <div className="flex items-center gap-1.5 font-semibold">
-          <Icon className="h-3.5 w-3.5 opacity-80" />
+      <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-white/10 text-xs shrink-0">
+        {/* min-w-0 + truncate: título longo encolhe em vez de passar por baixo das cores e botões */}
+        <div className="flex items-center gap-1.5 font-semibold min-w-0 flex-1">
+          <Icon className="h-3.5 w-3.5 opacity-80 shrink-0" />
           {isEditing && !locked ? (
             <input
               type="text"
@@ -78,13 +79,13 @@ export default function StickyNoteNode({
                 updateNodeData(id, { title: e.target.value, pinnedName: true, autoTitle: false });
               }}
               {...editingProps}
-              className="bg-black/40 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
+              className="nodrag min-w-0 w-full bg-black/40 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
             />
           ) : (
-            <span>{title}</span>
+            <span className="truncate" title={title}>{title}</span>
           )}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           <div role="radiogroup" aria-label="Cor da nota" className="nodrag flex items-center gap-1 mr-1">
             {NOTE_COLORS.map((c) => (
               <button
@@ -131,11 +132,12 @@ export default function StickyNoteNode({
               updateNodeData(id, { content: e.target.value });
             }}
             {...editingProps}
-            className="w-full h-full bg-black/40 rounded-lg p-2 text-xs font-mono leading-relaxed text-white focus:outline-none resize-none"
+            placeholder="Escreva a nota (aceita Markdown)…"
+            className="nodrag nowheel w-full h-full bg-black/40 rounded-lg p-2 text-xs font-mono leading-relaxed text-white focus:outline-none resize-none"
           />
         ) : (
           <div className="w-full h-full text-xs leading-relaxed opacity-90 overflow-y-auto nowheel">
-            <Markdown>{content}</Markdown>
+            {content.trim() ? <Markdown>{content}</Markdown> : <p className="italic opacity-60">Nota vazia — clique no lápis para escrever.</p>}
           </div>
         )}
       </div>

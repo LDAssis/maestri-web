@@ -12,3 +12,12 @@ body {
   background: var(--background);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
+
+/* Barras de rolagem no tema escuro (sem isso o Chrome desenha a barra nativa branca em textareas e painéis) */
+:root {
+  color-scheme: dark;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}

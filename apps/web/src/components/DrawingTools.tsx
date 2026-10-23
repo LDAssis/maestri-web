@@ -172,7 +172,14 @@ export function DrawingLayer({
           className="absolute bg-black/50 rounded px-1 outline outline-1 outline-white/40 resize-none"
           style={{ left: textAt.local.x, top: textAt.local.y, color, fontSize: FONT_BY_WIDTH[width] ?? 20, lineHeight: 1.3, minWidth: 120, minHeight: 32 }}
           onPointerDown={(e) => e.stopPropagation()}
-          onBlur={(e) => commitText(e.target.value)}
+          onFocus={(e) => (e.currentTarget.dataset.openedAt ||= String(Date.now()))}
+          onBlur={(e) => {
+            // Alguns navegadores embutidos (ex.: o portal do Maestri) tiram o foco logo depois do clique que abriu a
+            // caixa; vazia e recém-aberta, ela recupera o foco em vez de sumir
+            const el = e.currentTarget;
+            if (!el.value.trim() && Date.now() - Number(el.dataset.openedAt || 0) < 500) return void setTimeout(() => el.focus(), 0);
+            commitText(el.value);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Escape") setTextAt(null);
             else if (e.key === "Enter" && !e.shiftKey) (e.currentTarget as HTMLTextAreaElement).blur();

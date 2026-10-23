@@ -1,5 +1,6 @@
 "use client";
 
+import { readUser } from "./EntryGate";
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   ReactFlow,
@@ -612,8 +613,9 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       data: withFloor({
         title: `Nota: ${projectName}`,
         color: "amber",
-        author: "Dev / Equipe",
-        content: "Clique no ícone de lápis para escrever notas deste projeto.",
+        // autor = quem criou; conteúdo começa vazio (a instrução é placeholder, não texto da nota)
+        author: readUser()?.name || "Equipe",
+        content: "",
       }),
     };
     setNodes((nds) => [...nds, newNode]);
