@@ -229,7 +229,7 @@ test("help: nenhuma linha repetida no geral; recruit --help cita --workspace/--a
     const h = (await ok(M(cmd, "--help"))).stdout;
     for (const piece of ["Bandas", "↳", "[conta: X]", "Nome @ Workspace", "locked", "Fichários", "(você está nela)", "— <título> @ <Workspace>"]) assert.ok(h.includes(piece), `${cmd}: ${piece}`);
   }
-  assert.match((await ok(M("ask", "--help"))).stdout, /MAESTRI_WAKE_STARTUP_MS \(6s/);
+  assert.match((await ok(M("ask", "--help"))).stdout, /MAESTRI_WAKE_STARTUP_MS \(30s/);
 });
 
 // ---------- 4. ask e o fim do turno ----------

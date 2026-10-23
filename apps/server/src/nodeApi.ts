@@ -100,7 +100,9 @@ function expandMentions(text: string, connected: Obj[]) {
 export type NodeApi = ReturnType<typeof registerNodeApi>;
 
 // Sessão recém-acordada por ask/send/check ainda está subindo o agente por alguns segundos
-const startupMs = () => Number(process.env.MAESTRI_WAKE_STARTUP_MS) || 6000;
+// Agente recém-acordado fica "iniciando" até produzir saída e ficar quieto por settleMs (no máximo startupMs)
+const startupMs = () => Number(process.env.MAESTRI_WAKE_STARTUP_MS) || 30000;
+const settleMs = () => Number(process.env.MAESTRI_WAKE_SETTLE_MS) || 1500;
 
 export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attachments, links, workspaces, wake }: Deps) {
   const base = "/api/projects/:p/nodes/:n";
@@ -202,7 +204,7 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
   const pidOf = (c: Ctx, target: Obj): string => target.__project ?? c.projectId;
 
   // Acorda o alvo: sem sessão (descarregado, andar com unload, servidor reiniciado) sobe a sessão com o cwd e o
-  // comando do nó, como a UI faria. `starting` = acordada há poucos segundos (o agente ainda está subindo).
+  // comando do nó, como a UI faria. `starting` = acordada há pouco e ainda sem a tela assentada (o agente está subindo).
   const woken = new Map<string, { at: number; createdAt: string }>();
   function awake(c: Ctx, target: Obj): { session: Session; starting: boolean } {
     const pid = pidOf(c, target);
@@ -218,7 +220,9 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
       woken.set(key, { at: Date.now(), createdAt: session.createdAt });
     }
     const w = woken.get(key);
-    return { session, starting: !!w && w.createdAt === session.createdAt && Date.now() - w.at < startupMs() };
+    const now = Date.now();
+    const settled = session.lastOutputAt > (w?.at ?? 0) && now - session.lastOutputAt >= settleMs();
+    return { session, starting: !!w && w.createdAt === session.createdAt && now - w.at < startupMs() && !settled };
   }
 
   function requireSession(c: Ctx, target: Obj) {

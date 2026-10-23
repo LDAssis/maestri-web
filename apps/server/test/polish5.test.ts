@@ -148,6 +148,8 @@ test("recruit --workspace cria o agente no outro projeto, ligado a mim; list mos
   // ask, send, check, batch aceitam o endereço (sem diferenciar maiúsculas); o nome puro não vale
   assert.match((await ok(M("send", "alfa @ SATÉLITE", "echo SEND$((2+2))"))).stdout, /Enviado/);
   await until(async () => (await M("check", "Alfa @ Satélite")).stdout.includes("SEND4"), "send chegou lá");
+  // o Worker pode ter sido acordado há pouco por um teste anterior: espera ele ficar pronto (ask sem código 3)
+  await until(async () => (await M("ask", "Worker", "true")).code === 0, "Worker pronto", 20000);
   const b = JSON.parse((await ok(M("ask", "--batch", JSON.stringify({ "Alfa @ Satélite": "echo L$((1+1))", Worker: "echo W$((2+2))" })))).stdout);
   assert.match(b.find((x: any) => x.name === "Alfa @ Satélite").output, /L2/);
   assert.match(b.find((x: any) => x.name === "Worker").output, /W4/);
@@ -276,4 +278,25 @@ test("role: prompt em CLAUDE.md/AGENTS.md na pasta do role, terminal começa nel
   // role editado: o arquivo de contexto acompanha
   await ok(M("role", "edit", "Revisor", "carinho", "rigor"));
   assert.match(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8"), /Revise com rigor\./);
+});
+
+test("agente acordado fica pronto quando a tela assenta, sem esperar a janela máxima", async () => {
+  const prev = { max: process.env.MAESTRI_WAKE_STARTUP_MS, settle: process.env.MAESTRI_WAKE_SETTLE_MS };
+  process.env.MAESTRI_WAKE_STARTUP_MS = "60000";
+  process.env.MAESTRI_WAKE_SETTLE_MS = "500";
+  try {
+    await fastify.inject({ method: "DELETE", url: `/api/projects/${P}/sessions/sleeper`, headers: auth });
+    await until(async () => !(await sessionIds()).includes("sleeper"), "sessão encerrada");
+    const a = await M("ask", "Dorminhoco", "echo NAO");
+    assert.equal(a.code, 3, a.stderr);
+    await until(async () => (await M("check", "Dorminhoco")).stdout.includes("ACORDEI2"), "terminal produziu saída");
+    await sleep(700);
+    // bem antes dos 60s: a tela já assentou, então o ask responde
+    const b = await ok(M("ask", "Dorminhoco", "echo PRONTO$((40+2))"));
+    assert.match(b.stdout, /PRONTO42/);
+  } finally {
+    process.env.MAESTRI_WAKE_STARTUP_MS = prev.max;
+    if (prev.settle === undefined) delete process.env.MAESTRI_WAKE_SETTLE_MS;
+    else process.env.MAESTRI_WAKE_SETTLE_MS = prev.settle;
+  }
 });

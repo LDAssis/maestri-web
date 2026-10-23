@@ -161,7 +161,8 @@ Com `MAESTRI_TOKEN` definido, `GET /api/health` continua público; as demais rot
 | `MAESTRI_PORTAL_NO_SANDBOX` | — | Qualquer valor inicia o Chromium com `--no-sandbox` (necessário em alguns contêineres/root) |
 | `MAESTRI_PORTAL_FRAME_MS` | `700` | Intervalo dos frames ao vivo dos portais |
 | `MAESTRI_ASK_QUIET_MS` | `5000` | Silêncio do terminal que encerra um `ask` |
-| `MAESTRI_WAKE_STARTUP_MS` | `6000` | Janela em que um agente recém-acordado ainda “está iniciando” |
+| `MAESTRI_WAKE_STARTUP_MS` | `30000` | Tempo máximo em que um agente recém-acordado ainda “está iniciando” |
+| `MAESTRI_WAKE_SETTLE_MS` | `1500` | Silêncio após a primeira saída para o agente acordado contar como pronto |
 | `MAESTRI_DESKTOP_NOTIFY` | — | `1`/`0` força ligar/desligar as notificações do sistema (`notify-send` no Linux, `osascript` no macOS) para `maestri notify`, lembretes de rotina, andares em blocked/review/done e andares que passam a seguir um PR. Sem a variável vale a preferência do projeto; o padrão é ligado só quando o servidor escuta em loopback |
 | `MAESTRI_PR_POLL_MS` | `120000` | Intervalo da detecção de PRs em segundo plano nos andares git (também roda quando um agente do andar fica ocioso depois de produzir saída, `MAESTRI_IDLE_MS`, padrão 8000) |
 | `MAESTRI_ROUTINE_TICK_MS` | `15000` | Granularidade do agendador de rotinas |
