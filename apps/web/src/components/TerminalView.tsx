@@ -63,6 +63,10 @@ export default function TerminalView({
   const termRef = useRef<Terminal | null>(null);
   // Copiar/colar: menu do botão direito, campo de colar (quando o navegador não deixa ler a área de transferência) e aviso
   const [menu, setMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null);
+  // Lido pelo atalho do xterm: com o menu aberto, o Esc só fecha o menu (senão o ESC iria ao shell e o bash
+  // juntaria com a próxima tecla, ex.: Esc+e = Meta-e, "comendo" o primeiro caractere do próximo comando)
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = menu !== null;
   const [pasteBox, setPasteBox] = useState(false);
   const [flash, setFlash] = useState("");
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -121,6 +125,11 @@ export default function TerminalView({
     // Ctrl+Shift+C sempre copia. Ctrl+V / Ctrl+Shift+V não vão ao PTY: o navegador dispara o evento de colar,
     // que o xterm trata (com bracketed paste) e funciona até sem HTTPS. Shift+Insert já é nativo.
     term.attachCustomKeyEventHandler((e) => {
+      if (menuOpenRef.current && e.key === "Escape") {
+        if (e.type === "keydown") setMenu(null);
+        e.preventDefault();
+        return false;
+      }
       if (e.type !== "keydown") return true;
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
