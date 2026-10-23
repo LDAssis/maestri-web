@@ -3,13 +3,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { withRolePrompt } from "./agents.js";
+import { ROLE_CANVAS_HINT } from "./agentContext.js";
 
 type Obj = Record<string, any>;
 
 // Cada CLI lê o seu arquivo de contexto: CLAUDE.md (claude) e AGENTS.md (codex, opencode, agy). Escrevemos os dois.
 export function writeRoleContext(dir: string, prompt: string, projectRoot: string) {
   fs.mkdirSync(dir, { recursive: true });
-  const body = `<your_assigned_role>\n${prompt}\n</your_assigned_role>\n\n<working_directory>\nYou were started in this directory only to receive the role above. The actual project you work on is located at:\n${projectRoot}\n</working_directory>\n`;
+  const body = `<your_assigned_role>\n${prompt}\n</your_assigned_role>\n\n${ROLE_CANVAS_HINT}\n<working_directory>\nYou were started in this directory only to receive the role above. The actual project you work on is located at:\n${projectRoot}\n</working_directory>\n`;
   for (const f of ["CLAUDE.md", "AGENTS.md"]) fs.writeFileSync(path.join(dir, f), body);
 }
 

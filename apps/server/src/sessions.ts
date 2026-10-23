@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WebSocket } from "ws";
 import { captureResume, resumeCommand } from "./resume.js";
+import { ensureAgentContext } from "./agentContext.js";
 import type { SessionHistory } from "./sessionHistory.js";
 
 const isWindows = process.platform === "win32";
@@ -49,20 +50,17 @@ export interface Session {
 
 function spawnPty(cwd: string, cols: number, rows: number, extraEnv: Record<string, string>) {
   const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : isWindows ? ["-NoLogo"] : [];
-  return pty.spawn(defaultShell, shellArgs, {
-    name: "xterm-256color",
-    cols,
-    rows,
-    cwd,
-    env: {
-      ...process.env,
-      ...(isWindows ? { Path: enrichedPath } : {}),
-      PATH: enrichedPath,
-      TERM: "xterm-256color",
-      COLORTERM: "truecolor",
-      ...extraEnv,
-    },
-  });
+  const env = {
+    ...process.env,
+    ...(isWindows ? { Path: enrichedPath } : {}),
+    PATH: enrichedPath,
+    TERM: "xterm-256color",
+    COLORTERM: "truecolor",
+    ...extraEnv,
+  };
+  // Instruções do canvas para o claude/codex/opencode/agy que rodar neste terminal (inclui contas por config dir)
+  ensureAgentContext(env);
+  return pty.spawn(defaultShell, shellArgs, { name: "xterm-256color", cols, rows, cwd, env });
 }
 
 function killGroup(p: pty.IPty) {

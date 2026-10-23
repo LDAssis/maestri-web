@@ -20,7 +20,7 @@ export function currentThread(chat: { role?: string; thread?: unknown }[]): Thre
 // (claude, codex, opencode) recebem tudo como UMA colagem e só o \r final submete — achatar numa linha
 // quebraria o formato que a skill procura.
 export const chatHeader = (thread: Thread) =>
-  `---\nBelow is a message from the user through Maestri Chat.\nReply only via \`maestri say\`. If the maestri-chat skill isn't already loaded, load it first.\nthread: ${thread}\n---\n`;
+  `---\nBelow is a message from the user through Maestri Chat.\nReply only via \`maestri say\`. If the maestri-web skill isn't already loaded, load it first.\nthread: ${thread}\n---\n`;
 
 const SHELLS = /^(bash|zsh|sh|dash|ksh|mksh|fish|tcsh|csh|nu|pwsh|powershell|cmd)(\.exe)?$/i;
 
