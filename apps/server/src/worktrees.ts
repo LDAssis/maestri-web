@@ -95,7 +95,8 @@ export function registerWorktreeApi({ fastify, sessions, canvas, projectRepo }: 
     const root = path.join(repo, ".worktrees") + path.sep;
     const found: { name: string; path: string; branch: string }[] = [];
     for (const block of out.split("\n\n")) {
-      const wt = /^worktree (.+)$/m.exec(block)?.[1];
+      // git imprime "/" também no Windows; root vem de path.join ("\")
+      const wt = /^worktree (.+)$/m.exec(block)?.[1]?.replace(/\//g, path.sep);
       const branch = /^branch refs\/heads\/(.+)$/m.exec(block)?.[1];
       if (!wt || !branch || !wt.startsWith(root)) continue;
       found.push({ name: path.basename(wt), path: wt, branch });

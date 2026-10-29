@@ -29,12 +29,14 @@ import { usePresenceValue } from "@/lib/presence";
 import type { TerminalStatus } from "./TerminalView";
 import { COLOR_HEX, ICON_MAP } from "./palette";
 import CrossFloorBadge from "./CrossFloorBadge";
+import ModelPicker, { MODEL_CLIS, MODEL_ERROR, useModels, validModel } from "./ModelPicker";
+import { NodeUsageMeter } from "./UsageMeter";
 
 const TerminalView = dynamic(() => import("./TerminalView"), {
   ssr: false,
   loading: () => (
     <div className="h-full flex items-center justify-center font-mono text-[11px] text-slate-500 bg-[#050811]">
-      Iniciando Bash / ConPTY...
+      Iniciando terminal...
     </div>
   ),
 });
@@ -42,7 +44,8 @@ const TerminalView = dynamic(() => import("./TerminalView"), {
 export interface AgentNodeData extends Record<string, unknown> {
   title: string;
   role: string;
-  model: string;
+  // vazio = padrão do CLI; o servidor acrescenta --model/-m e reinicia o terminal com retomada quando muda
+  model?: string;
   status: "idle" | "running" | "done" | "waiting";
   branch?: string;
   worktree?: string;
@@ -97,6 +100,10 @@ export default function AgentTerminalNode({
   const [showCli, setShowCli] = useState(false);
   const [termStatus, setTermStatus] = useState<TerminalStatus>("conectando");
   const [wtBusy, setWtBusy] = useState(false);
+  const [editModel, setEditModel] = useState<string | null>(null);
+  const [modelError, setModelError] = useState("");
+  const modelCli = nodeData.preset && MODEL_CLIS.includes(nodeData.preset) ? nodeData.preset : undefined;
+  const models = useModels(projectId, editModel === null ? undefined : modelCli);
   const [wtError, setWtError] = useState("");
   const isMaestro = Boolean(nodeData.isMaestro);
   const { roles } = useRoles(projectId);
@@ -254,7 +261,7 @@ export default function AgentTerminalNode({
                   ? "bg-indigo-600 text-white font-medium"
                   : "text-slate-400 hover:text-white"
               }`}
-              title="Ver Terminal ConPTY"
+              title="Ver Terminal"
             >
               <Terminal className="h-3 w-3" />
               Terminal
@@ -281,6 +288,61 @@ export default function AgentTerminalNode({
             </button>
           </div>
 
+          <NodeUsageMeter projectId={projectId} nodeId={id} cli={nodeData.preset} />
+          {modelCli && (
+            <div className="nodrag relative">
+              <button
+                onClick={() => {
+                  setModelError("");
+                  setEditModel(editModel === null ? nodeData.model ?? "" : null);
+                }}
+                className="max-w-[110px] truncate rounded-md border border-slate-800 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-300 hover:border-indigo-500"
+                title="Modelo do CLI (vazio = padrão)"
+                aria-label={`Modelo: ${nodeData.model || "padrão"}. Alterar`}
+                aria-expanded={editModel !== null}
+              >
+                {nodeData.model || "padrão"}
+              </button>
+              {editModel !== null && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const v = editModel.trim();
+                    if (v && !validModel(v)) return setModelError(MODEL_ERROR);
+                    if (v !== (nodeData.model ?? "")) updateNodeData(id, { model: v });
+                    setEditModel(null);
+                  }}
+                  onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), setEditModel(null))}
+                  className="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-slate-700 bg-slate-950 p-2 shadow-xl"
+                >
+                  <ModelPicker
+                    autoFocus
+                    value={editModel}
+                    onChange={(v) => {
+                      setEditModel(v);
+                      setModelError("");
+                    }}
+                    list={models}
+                    className="w-full rounded border border-slate-800 bg-slate-900 px-2 py-1 text-[11px] text-white focus:border-indigo-500 focus:outline-none"
+                  />
+                  {modelError && (
+                    <p role="alert" className="mt-1 text-[10px] text-rose-300">
+                      {modelError}
+                    </p>
+                  )}
+                  <p className="mt-1 text-[10px] text-amber-300">O terminal vai reiniciar e retomar a sessão.</p>
+                  <div className="mt-1.5 flex justify-end gap-1.5">
+                    <button type="button" onClick={() => setEditModel(null)} className="px-2 py-0.5 text-[10px] text-slate-400 hover:text-white">
+                      Cancelar
+                    </button>
+                    <button type="submit" className="rounded bg-indigo-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-indigo-500">
+                      Confirmar
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          )}
           <CrossFloorBadge id={id} floor={(nodeData as any).floor} />
           {external.length > 0 && (
             <span

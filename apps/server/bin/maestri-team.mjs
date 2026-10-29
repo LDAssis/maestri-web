@@ -3,12 +3,14 @@
 
 const HELP = {
   recruit: `maestri recruit "Nome" [--preset "Nome do preset"] [--role "Nome do role"] [--floor "Andar"] [--workspace "W"] [--band "Banda"]
-                      [--account "Conta"] [--command "claude --resume"] [--dir "/caminho/no/projeto"] [--icon I] [--color C]
+                      [--account "Conta"] [--model M] [--command "claude --resume"] [--dir "/caminho/no/projeto"] [--icon I] [--color C]
 maestri recruit ["Novo nome"] --replace "Antigo" (--preset P | --command C) [--role R] [--dir D] [--icon I] [--color C]
 Apenas o Maestro. Cria um agente conectado a você e inicia o terminal dele.
 --preset: veja "maestri preset list"; sem --preset (nem --command) o recruta é uma cópia sua (mesmo comando).
 --role: nome de um role existente ("maestri role list"); --role-id usa o UUID; um texto que não é nome de role segue
   valendo como papel livre (formato antigo). --cmd é o apelido antigo de --command.
+--model M: modelo do agente (claude --model, codex/opencode -m, agy --model=); vazio = padrão do CLI; só letras, números e . _ : / @ - (opencode: provider/modelo).
+  Um comando que já traz a flag de modelo vale mais; shell não usa. Muda depois pelo chip do nó (o terminal reinicia retomando a conversa).
 --account: roda o recruta numa conta do CLI (claude/codex; veja "maestri account list" e "maestri preset list"); vence a
   conta fixada no preset; sem ele, a do preset ou, numa cópia sua, a sua. "Default" = o login existente do CLI.
 --dir: diretório de partida; precisa estar dentro do projeto (padrão: o seu). --icon/--color: veja "maestri arrange --help".
@@ -22,7 +24,9 @@ Com role, o terminal começa em .maestri/roles/<id>/ (pasta do projeto com o pro
 --replace troca o processo do agente existente NO MESMO LUGAR (nó, cordas, posição e rotinas ficam; a sessão reinicia e o chat
   é descartado). O nome posicional renomeia. Exige --preset ou --command para trocar de agente; poderes de Maestro só mudam
   com --preset explícito. --floor não vale com --replace.`,
-  connect: `maestri connect "De" "Para"
+  connect: `maestri connect "De" "Para" [--agent|--band|--note|--fichario|--portal]
+--agent/--band/--note/--fichario/--portal logo DEPOIS de um nome dizem de que tipo ele é, quando o mesmo nome existe em mais de um
+tipo: maestri connect "Soundcheck" "Setlist" --note  (o "Setlist" é a nota).
 Apenas o Maestro. Liga dois nós da sua árvore de equipe (você, recrutas diretos, e as notas/fichários/portais/bandas ligados
 a você ou a eles). Agente↔agente pode cruzar andares; notas, fichários e portais só ligam no mesmo andar; um portal só se
 liga a agente; nota não liga a portal. Uma corda para uma banda alcança todos os membros.`,
@@ -43,9 +47,11 @@ maestri role edit "Nome" "texto antigo" "texto novo" [--scope current|global]
 maestri role edit "Nome" --scope global
 maestri role write "Nome" "novo prompt completo"
 maestri role assign "Recruta" "Role"   |   maestri role assign "Recruta" --none
+maestri role delete "Nome" [--force]
 current = .maestri/roles do projeto (padrão); global = diretório de dados do servidor, visível em todos os projetos.
 edit/write reescrevem o prompt de quem usa o role e reiniciam esses processos; assign reinicia o recruta preservando a
-topologia. O chat se perde no reinício. Só o Maestro altera.`,
+topologia. O chat se perde no reinício. Só o Maestro altera.
+delete recusa enquanto terminais usam o role (lista quais); --force desatribui o role deles (reiniciam) e depois apaga.`,
   band: `maestri band create "Nome" ["Agente" ...] [--without-me] [--floor F] [--workspace W] [--icon I] [--color C]
 maestri band add "Banda" "Agente"
 maestri band remove "Banda" "Agente"
@@ -60,7 +66,7 @@ const SUMMARY = [
   "Equipe:",
   '  connect "De" "Para"                Liga dois nós da sua equipe (Maestro)',
   "  preset list|show|create|set|delete Presets de agente",
-  "  role list|show|create|edit|write|assign   Roles do projeto e globais",
+  "  role list|show|create|edit|write|assign|delete   Roles do projeto e globais",
   "  band create|add|remove|dissolve    Bandas de agentes (Maestro)",
 ];
 
@@ -117,15 +123,15 @@ export function register({ call, need, CliError }) {
     if (!replacing) need(pos, 1, 'recruit "Nome" [--preset P] [--role R] [--band B] [--command C] [--dir D]');
     const r = await call("POST", "/recruit", {
       name: pos[0], replace: flags.replace, preset: flags.preset, role: flags.role, roleId: flags["role-id"],
-      command: flags.command ?? flags.cmd, dir: flags.dir, floor: flags.floor, workspace: flags.workspace, band: flags.band, icon: flags.icon, color: flags.color, account: flags.account,
+      command: flags.command ?? flags.cmd, dir: flags.dir, floor: flags.floor, workspace: flags.workspace, band: flags.band, icon: flags.icon, color: flags.color, account: flags.account, model: flags.model,
     });
     if (r.note) console.error(`[maestri] ${r.note}`);
     console.log(replacing ? `Agente "${r.name}" trocado no mesmo lugar (sessão reiniciada).` : `Agente "${r.name}" recrutado e iniciado${r.band ? ` na banda "${r.band}"` : ""}.`);
   }
 
-  async function connect({ pos }) {
+  async function connect({ pos, flags }) {
     need(pos, 2, 'connect "De" "Para"');
-    const r = await call("POST", "/connect", { from: pos[0], to: pos[1] });
+    const r = await call("POST", "/connect", { from: pos[0], to: pos[1], fromKind: flags.kinds?.[0], toKind: flags.kinds?.[1] });
     console.log(r.already ? `"${pos[0]}" e "${pos[1]}" já estão conectados.` : `"${pos[0]}" ↔ "${pos[1]}" conectados.`);
   }
 
@@ -198,7 +204,11 @@ export function register({ call, need, CliError }) {
       else need(pos, 3, 'role assign "Recruta" "Role"');
       const r = await call("POST", "/roles/assign", { target: name, role: pos[2], none: flags.none === true });
       console.log(r.role ? `"${name}" agora usa o role "${r.role}" (processo reiniciado).` : `Role de "${name}" removido (processo reiniciado).`);
-    } else throw new CliError('Uso: maestri role list|show|create|edit|write|assign (veja "maestri role --help")');
+    } else if (sub === "delete") {
+      need(pos, 2, 'role delete "Nome" [--force]');
+      const r = await call("POST", "/roles/delete", { name, force: flags.force });
+      console.log(`Role "${r.name}" apagado${r.unassigned ? ` (desatribuído de ${r.unassigned} terminal(is); reiniciados)` : ""}.`);
+    } else throw new CliError('Uso: maestri role list|show|create|edit|write|assign|delete (veja "maestri role --help")');
   }
 
   // ----- band -----
@@ -222,7 +232,7 @@ export function register({ call, need, CliError }) {
   return {
     commands: { list, context: list, recruit, connect, preset, role, band },
     help: HELP,
-    flags: ["--floor", "--workspace", "--band", "--command", "--dir", "--account", "--icon", "--color", "--replace", "--scope", "--name", "--maestro", "--chat", "--quick-start"],
+    flags: ["--floor", "--workspace", "--band", "--command", "--dir", "--account", "--model", "--icon", "--color", "--replace", "--scope", "--name", "--maestro", "--chat", "--quick-start"],
     boolFlags: ["--without-me", "--none"],
     summary: SUMMARY,
   };

@@ -63,6 +63,9 @@ class CliError extends Error {
 const FLAGS = ["--lines", "--timeout", "--cmd", "--role", "--last", "--preset", "--role-id"];
 // Flags sem valor (viram flags[nome] = true); módulos de extensão acrescentam as suas
 const BOOL_FLAGS = [];
+// arrange/connect: --agent|--note|--band|--fichario|--portal logo depois de um nome dizem de que tipo ele é.
+// flags.kinds[i] = tipo do i-ésimo nome (sem contar o comando)
+const KIND_FLAGS = ["--agent", "--note", "--band", "--fichario", "--portal"];
 
 // "--" encerra as flags (o resto é texto, mesmo começando com --). Uma flag desconhecida falha em vez de virar texto
 // posicional ("nunca adivinhe uma flag"); "---" e "--1" seguem sendo texto.
@@ -77,6 +80,7 @@ function parse(argv) {
     if (endOfFlags) pos.push(a);
     else if (a === "--") endOfFlags = true;
     else if (a === "--help" || a === "-h") help = true;
+    else if (KIND_FLAGS.includes(a) && (pos[0] === "arrange" || pos[0] === "connect")) ((flags.kinds ??= {})[Math.max(0, pos.length - 2)] = a.slice(2), (flags.kindList ??= []).push(a.slice(2)));
     else if (BOOL_FLAGS.includes(a)) flags[a.slice(2)] = true;
     else if (FLAGS.includes(a)) {
       if (i + 1 >= argv.length) throw new CliError(`Falta o valor de ${a}.`);
@@ -241,9 +245,12 @@ async function main() {
   await loadModules();
   const { pos, flags, help } = parse(process.argv.slice(2));
   const cmd = pos.shift();
-  if (!cmd || cmd === "help") return console.log(HELP._);
-  if (!COMMANDS[cmd]) throw new CliError(`Comando desconhecido: ${cmd}. Use "maestri --help".`);
-  if (help) return console.log(HELP[cmd]);
+  if (!cmd) return console.log(HELP._);
+  // `maestri help [comando]` = `maestri <comando> --help`
+  const topic = cmd === "help" ? pos[0] : help ? cmd : undefined;
+  if (cmd === "help" && !topic) return console.log(HELP._);
+  if (!COMMANDS[topic ?? cmd]) throw new CliError(`Comando desconhecido: ${topic ?? cmd}. Use "maestri --help".`);
+  if (topic) return console.log(HELP[topic]);
   await COMMANDS[cmd]({ pos, flags });
 }
 

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-polish3-test-")));
 const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), "maestri-fakebin-"));
@@ -91,8 +92,8 @@ before(async () => {
 
 after(async () => {
   await fastify.close();
-  fs.rmSync(repo, { recursive: true, force: true });
-  fs.rmSync(fakeBin, { recursive: true, force: true });
+  rmTmp(repo);
+  rmTmp(fakeBin);
 });
 
 // ---------- retomada de sessão ----------
@@ -360,7 +361,7 @@ test("say --file <imagem> e --attach: arquivos vão ao servidor com id estável;
   fs.writeFileSync(path.join(dir, "falsa.png"), "isto não é uma imagem");
   assert.match((await maestri("chatty", ["say", `![x](${path.join(dir, "falsa.png")})`])).stderr, /Não é uma imagem/);
   assert.match((await maestri("chatty", ["say", `![x](${path.join(dir, "nao.png")})`])).stderr, /Imagem não encontrada/);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmTmp(dir);
 });
 
 test("anexos: extensão .png que não é imagem não é embutida; limite de 20MB; sem token = 401; outro projeto não enxerga", async () => {

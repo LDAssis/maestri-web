@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { rmTmp, installFakeBin } from "./rmtmp.js";
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-floors2-test-")));
 const repo = path.join(tmp, "repo");
@@ -43,23 +44,21 @@ git(repo, "checkout", "-q", "main");
 git(repo, "branch", "-D", "forkhead");
 
 // gh falso: devolve o JSON de $GH_FAKE_DIR/pr-N.json (ou erro de autenticação se existir "unauth")
-fs.writeFileSync(
-  path.join(ghDir, "gh"),
-  `#!/bin/sh
-[ -f "$GH_FAKE_DIR/unauth" ] && { echo "To get started with GitHub CLI, please run:  gh auth login" >&2; exit 4; }
+installFakeBin(ghDir, "gh", `[ -f "$GH_FAKE_DIR/unauth" ] && { echo "To get started with GitHub CLI, please run:  gh auth login" >&2; exit 4; }
 f="$GH_FAKE_DIR/pr-$3.json"
-[ -f "$f" ] && cat "$f" || { echo "no pull requests found for #$3" >&2; exit 1; }
-`,
-  { mode: 0o755 },
-);
+[ -f "$f" ] && cat "$f" || { echo "no pull requests found for #$3" >&2; exit 1; }`);
 const pr = (n: number, extra: object) => fs.writeFileSync(path.join(ghDir, `pr-${n}.json`), JSON.stringify({ number: n, title: `Titulo ${n}`, state: "OPEN", url: `https://github.com/acme/app/pull/${n}`, headRefName: "x", headRepositoryOwner: { login: "acme" }, isCrossRepository: false, ...extra }));
 pr(5, { headRefName: "feat-x", reviewDecision: "APPROVED", statusCheckRollup: [{ conclusion: "SUCCESS" }, { conclusion: "FAILURE" }, { status: "IN_PROGRESS" }] });
 pr(6, { headRefName: "feat-y" });
 pr(7, { headRefName: "feat-z", state: "MERGED" });
 pr(9, { headRefName: "forkhead", isCrossRepository: true, headRepositoryOwner: { login: "alguem" } });
 
-process.env.PATH = `${ghDir}:${process.env.PATH}`;
+process.env.PATH = `${ghDir}${path.delimiter}${process.env.PATH}`;
 process.env.GH_FAKE_DIR = ghDir;
+// Windows: core.autocrlf=true converteria os arquivos do teste para CRLF no checkout (herdado pelo git do servidor)
+process.env.GIT_CONFIG_COUNT = "1";
+process.env.GIT_CONFIG_KEY_0 = "core.autocrlf";
+process.env.GIT_CONFIG_VALUE_0 = "false";
 process.env.REPO_PATH = repo;
 process.env.NODE_ENV = "test";
 process.env.MAESTRI_TOKEN = "tok-f2";
@@ -105,7 +104,7 @@ before(async () => {
 after(async () => {
   sockets.forEach((s) => s.close());
   await fastify.close();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  rmTmp(tmp);
 });
 
 test("parsePrRef: número, #número e link", () => {

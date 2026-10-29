@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { rmTmp, installFakeBin } from "./rmtmp.js";
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-polish4-test-")));
 const repo = path.join(tmp, "repo");
@@ -24,20 +25,14 @@ const initRepo = (dir: string) => {
 initRepo(repo);
 
 // gh falso: view/list/merge a partir de arquivos em $GH_FAKE_DIR (unauth = não autenticado)
-fs.writeFileSync(
-  path.join(ghDir, "gh"),
-  `#!/bin/sh
-[ -f "$GH_FAKE_DIR/unauth" ] && { echo "To get started with GitHub CLI, please run:  gh auth login" >&2; exit 4; }
+installFakeBin(ghDir, "gh", `[ -f "$GH_FAKE_DIR/unauth" ] && { echo "To get started with GitHub CLI, please run:  gh auth login" >&2; exit 4; }
 case "$2" in
   view) f="$GH_FAKE_DIR/pr-$3.json"; [ -f "$f" ] && cat "$f" || { echo "no pull requests found" >&2; exit 1; } ;;
   list) f="$GH_FAKE_DIR/list-$4.json"; [ -f "$f" ] && cat "$f" || echo "[]" ;;
   merge) echo "$@" >> "$GH_FAKE_DIR/merge.log"; [ -f "$GH_FAKE_DIR/fail-merge" ] && { echo "merge bloqueado" >&2; exit 1; }; exit 0 ;;
-esac
-`,
-  { mode: 0o755 },
-);
+esac`);
 const wj = (name: string, v: unknown) => fs.writeFileSync(path.join(ghDir, name), JSON.stringify(v));
-process.env.PATH = `${ghDir}:${process.env.PATH}`;
+process.env.PATH = `${ghDir}${path.delimiter}${process.env.PATH}`;
 process.env.GH_FAKE_DIR = ghDir;
 process.env.REPO_PATH = repo;
 process.env.NODE_ENV = "test";
@@ -87,7 +82,7 @@ before(async () => {
 });
 after(async () => {
   await fastify.close();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  rmTmp(tmp);
 });
 
 test("tallyChecks e presetLook", () => {

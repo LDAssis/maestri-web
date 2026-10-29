@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.mkdtempSync(path.join(os.tmpdir(), "maestri-comm-test-"));
 process.env.REPO_PATH = repo;
@@ -119,7 +120,7 @@ after(async () => {
   w1.close();
   w2.close();
   await fastify.close();
-  fs.rmSync(repo, { recursive: true, force: true });
+  rmTmp(repo);
 });
 
 test("decodeEscapes: \\n=Enter(CR), \\t, \\e, \\xNN, \\\\ e desconhecidos literais", () => {

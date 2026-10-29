@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.mkdtempSync(path.join(os.tmpdir(), "maestri-portal-test-"));
 process.env.REPO_PATH = repo;
@@ -33,10 +34,23 @@ const PAGE = `<!doctype html><html><head><title>Formulário</title></head><body>
 document.getElementById('arq').onchange=e=>{document.getElementById('res').textContent='arquivo:'+e.target.files[0].name}</script>
 </body></html>`;
 
+// Origem (#a) e destino (#b) em posições fixas; o mouseup registra onde soltou e se houve movimento intermediário
+const DRAG = `<!doctype html><title>Arrasta</title><body style="margin:0;user-select:none">
+<div id="a" style="position:absolute;left:20px;top:20px;width:80px;height:40px;background:#f00">A</div>
+<div id="b" style="position:absolute;left:300px;top:200px;width:80px;height:40px;background:#00f">B</div>
+<p id="log" style="position:absolute;top:400px"></p>
+<script>
+let moves = -1;
+document.getElementById("a").onmousedown = () => (moves = 0);
+document.onmousemove = () => { if (moves >= 0) moves++; };
+document.onmouseup = (e) => { if (moves >= 0) document.getElementById("log").textContent = "drop:" + document.elementFromPoint(e.clientX, e.clientY).id + ":" + (moves > 1); moves = -1; };
+</script>`;
+
 const server = http.createServer((req, res) => {
   res.setHeader("content-type", "text/html; charset=utf-8");
   if (req.url === "/outra") res.end("<title>Outra</title><p>outra página</p>");
   else if (req.url === "/popup") res.end("<title>Pop</title><p>sou um popup</p>");
+  else if (req.url === "/drag") res.end(DRAG);
   else res.end(PAGE);
 });
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -102,7 +116,7 @@ before(async () => {
 after(async () => {
   await fastify.close();
   server.close();
-  fs.rmSync(repo, { recursive: true, force: true });
+  rmTmp(repo);
 });
 
 test("create: nó à direita, conectado, com viewport e já aberto na URL", { skip }, async () => {
@@ -204,7 +218,7 @@ test("upload resolve caminhos a partir do cwd de quem chamou", { skip }, async (
   const miss = await maestri(["portal", "upload", "Form", "#arq", "./nao-existe.txt"], "maestro", dir);
   assert.equal(miss.code, 1);
   assert.match(miss.stderr, /arquivo não encontrado/);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmTmp(dir);
 });
 
 test("scroll e scrollintoview", { skip }, async () => {
@@ -334,7 +348,7 @@ test("screenshot salva um PNG e imprime o caminho", { skip }, async () => {
   assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.notEqual(await ok(["portal", "screenshot", "Form"]), file, "cada screenshot tem a própria pasta");
-  fs.rmSync(path.dirname(file), { recursive: true, force: true });
+  rmTmp(path.dirname(file));
 });
 
 test("popup vira o portal '[Pai] #2' e some quando a página o fecha", { skip }, async () => {
@@ -493,4 +507,35 @@ test("create --size, close e remoção do nó pelo canvas fecham a página", { s
   ws.send(JSON.stringify({ type: "op", op: { kind: "removeNodes", ids: [form.id] } }));
   await until(() => !portals.has(P, form.id), "página fechada com o nó");
   ws.close();
+});
+
+test("drag: de seletor/ref/coordenadas até outro; falta de argumento e alvo inexistente dão erro", { skip }, async () => {
+  await ok(["portal", "create", `${site}/drag`, "Arrasta"]);
+  const log = () => ok(["portal", "evaluate", "Arrasta", "document.getElementById('log').textContent"]);
+  await ok(["portal", "drag", "Arrasta", "#a", "#b"]);
+  assert.equal(await log(), "drop:b:true", "soltou sobre #b, com movimento intermediário");
+  await ok(["portal", "evaluate", "Arrasta", "document.getElementById('log').textContent = ''"]);
+  await ok(["portal", "drag", "Arrasta", "40,40", "340,220"]);
+  assert.equal(await log(), "drop:b:true", "coordenadas x,y");
+  await ok(["portal", "evaluate", "Arrasta", "document.getElementById('log').textContent = ''"]);
+  await ok(["portal", "drag", "Arrasta", "#a", "40,300"]);
+  assert.equal(await log(), "drop::true", "solto no vazio (body sem id)");
+  const missing = await maestri(["portal", "drag", "Arrasta", "#a"]);
+  assert.equal(missing.code, 1);
+  assert.match(missing.stderr, /Uso: maestri portal drag|uso: drag/);
+  const bad = await maestri(["portal", "drag", "Arrasta", "#a", "#nao-existe"]);
+  assert.equal(bad.code, 1);
+  assert.match(bad.stderr, /elemento não encontrado/);
+});
+
+test("check sem alvo espia (screenshot, devolve o caminho) e com alvo continua marcando a caixa", { skip }, async () => {
+  await ok(["portal", "create", `${site}/`, "Marca"]); // portal próprio: testes anteriores mexem no Form
+  const file = await ok(["portal", "check", "Marca"]);
+  assert.ok(path.isAbsolute(file) && file.endsWith(".png"), file);
+  assert.equal(fs.readFileSync(file).subarray(1, 4).toString(), "PNG");
+  rmTmp(path.dirname(file));
+  await ok(["portal", "uncheck", "Marca", "#ok"]);
+  await ok(["portal", "check", "Marca", "#ok"]);
+  assert.equal(await ok(["portal", "evaluate", "Marca", "document.getElementById('ok').checked"]), "true");
+  await ok(["portal", "uncheck", "Marca", "#ok"]);
 });

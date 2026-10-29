@@ -57,5 +57,5 @@ export function withRolePrompt(repo: string, nodeId: string, cmd: string, prompt
   const file = path.join(dir, `${nodeId}.md`);
   fs.writeFileSync(file, prompt);
   // claude/codex pelo nome do executável (caminho absoluto, variáveis na frente), como a retomada de sessão detecta
-  return directProgramOf(cmd) ? `${cmd} "$(cat ${shQuote(file)})"` : cmd;
+  return directProgramOf(cmd) ? `${cmd} "$(cat ${shQuote(file.replace(/\\/g, "/"))})"` : cmd;
 }

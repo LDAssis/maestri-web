@@ -5,12 +5,12 @@ import path from "node:path";
 
 const VERBS = [
   "back", "forward", "reload", "info", "screenshot", "snapshot", "click", "fill", "type", "key", "selectall", "clear",
-  "hover", "focus", "select", "check", "uncheck", "upload", "scroll", "scrollintoview", "text", "html", "evaluate",
+  "hover", "focus", "drag", "select", "check", "uncheck", "upload", "scroll", "scrollintoview", "text", "html", "evaluate",
   "logs-start", "logs", "resize", "ua", "wait",
 ];
 
 // Quantos argumentos (depois do nome do portal) cada verbo exige
-const MIN_ARGS = { click: 1, fill: 2, type: 1, key: 1, hover: 1, focus: 1, select: 2, check: 1, uncheck: 1, upload: 2, scroll: 2, scrollintoview: 1, evaluate: 1, resize: 2 };
+const MIN_ARGS = { click: 1, fill: 2, type: 1, key: 1, hover: 1, focus: 1, select: 2, drag: 2, uncheck: 1, upload: 2, scroll: 2, scrollintoview: 1, evaluate: 1, resize: 2 };
 
 const HELP = `maestri portal create URL ["Nome"] [--size WxH]    Cria um portal à direita de você, conectado e aberto na URL
 maestri portal edit "Portal" --url URL                 Aponta o portal para outra URL
@@ -30,7 +30,8 @@ maestri portal type "Portal" [SEL] "texto"               acrescenta (sem SEL, no
 maestri portal key "Portal" "Enter|Tab|Escape|ctrl+a|shift+tab|..."
 maestri portal selectall|clear "Portal" [SEL]
 maestri portal select "Portal" SEL "Texto da opção"
-maestri portal check|uncheck "Portal" SEL
+maestri portal check|uncheck "Portal" SEL           (check sem SEL só espia: imprime o caminho de um screenshot)
+maestri portal drag "Portal" DE PARA                    arrasta de um elemento/ponto até outro (SEL = @eN, CSS ou x,y)
 maestri portal upload "Portal" SEL arquivo...            (não use click em input de arquivo)
 maestri portal scroll "Portal" up|down|left|right PX [x,y|@ref]
 

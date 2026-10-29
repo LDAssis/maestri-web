@@ -9,6 +9,7 @@ import Fastify from "fastify";
 import { CanvasStore } from "../src/canvas.js";
 import { SessionManager } from "../src/sessions.js";
 import { registerRoutinesApi, nextRun, parseDuration, parseSchedule, type TypeAndWait } from "../src/routines.js";
+import { rmTmp } from "./rmtmp.js";
 
 const P = "proj-r";
 const dataDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-routines-test-")));
@@ -140,7 +141,7 @@ before(async () => {
 
 after(async () => {
   await app.fastify.close();
-  fs.rmSync(dataDir, { recursive: true, force: true });
+  rmTmp(dataDir);
 });
 
 // --- Parsing e cálculo do próximo disparo ---
@@ -259,7 +260,7 @@ test("migração: arquivo antigo (minutos, sem alvo/opções, histórico ok/erro
   assert.deepEqual(r.history, [{ at: "2026-01-01T00:00:00.000Z", status: "ok", output: "saida" }, { at: "2026-01-01T00:15:00.000Z", status: "error", reason: "boom" }]);
   assert.deepEqual(list.find((x: any) => x.id === "rt-cafe0001").schedule, { type: "daily", time: "07:30" });
   await other.fastify.close();
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmTmp(dir);
 });
 
 test("rodar agora: executa no terminal, captura a saída e NÃO mexe em contadores nem na próxima execução", async () => {
@@ -385,16 +386,19 @@ test("until: último dia é inclusivo; passou do dia = conclui sem disparar", as
 test("pre-run: stdout entra em {{output}}, roda no cwd do alvo com as variáveis; saída ≠ 0 ou timeout pulam", async () => {
   const typed: string[] = [];
   impl = async (_s, _sess, input) => (typed.push(input), { output: "ok", timedOut: false });
+  // Windows: o sh é o do Git Bash; pwd -P dá /tmp/..., pwd -W dá C:/... (mesmo diretório)
+  const win = process.platform === "win32";
+  const cwdOut = win ? dataDir.replaceAll("\\", "/") : dataDir;
   const r = await make({
     name: "Resumo",
     text: "Resuma:\n{{output}}\n---\n{{output}}",
-    preRun: 'echo "$MAESTRI_WORKSPACE_NAME|$MAESTRI_WORKSPACE_DIR|$MAESTRI_ROUTINE_NAME|$MAESTRI_TERMINAL_NAME|$(pwd -P)"; echo $ {x}',
+    preRun: `echo "$MAESTRI_WORKSPACE_NAME|$MAESTRI_WORKSPACE_DIR|$MAESTRI_ROUTINE_NAME|$MAESTRI_TERMINAL_NAME|$(pwd ${win ? "-W" : "-P"})"; echo $ {x}`,
   });
   assert.equal((await api("POST", `/routines/${r.id}/run`)).json().status, "started");
   await until(() => typed.length === 1, "digitou");
   const input = typed[0];
   assert.match(input, /^\x1b\[200~Resuma:\n/);
-  assert.ok(input.includes(`Meu Projeto|${dataDir}|Resumo|Agente|${dataDir}`), input);
+  assert.ok(input.includes(`Meu Projeto|${dataDir}|Resumo|Agente|${cwdOut}`), input);
   assert.equal(input.split("Meu Projeto").length, 3, "{{output}} trocado nas duas ocorrências");
   assert.doesNotMatch(input, /\{\{output\}\}/);
   await until(async () => (await one(r.id)).history.length === 1, "histórico");

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-team-test-")));
 process.env.REPO_PATH = repo;
@@ -86,7 +87,7 @@ before(async () => {
 
 after(async () => {
   await fastify.close();
-  fs.rmSync(repo, { recursive: true, force: true });
+  rmTmp(repo);
 });
 
 // ---------- presets ----------
@@ -591,4 +592,25 @@ test("andares: band create --floor reúne quem alcanço no andar (de fora) e a b
   assert.match((await M("band", "add", "ExpBand", "Peer")).stderr, /andar da banda/);
   assert.match((await M("band", "create", "NoFloor", "--floor", "Fantasma")).stderr, /Andar "Fantasma" não encontrado/);
   await ok(M("band", "dissolve", "ExpBand"));
+});
+
+test("role delete: recusa em uso (lista quem), --force desatribui e apaga, sem uso apaga direto", async () => {
+  await ok(M("role", "create", "Descartavel", "Prompt temporario."));
+  await ok(M("recruit", "UsaDescartavel", "--preset", "shell", "--role", "Descartavel"));
+  const user = await byTitle("UsaDescartavel");
+  assert.ok(user.data.roleId);
+
+  const refused = await M("role", "delete", "Descartavel");
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /ainda é usado por: UsaDescartavel/);
+  assert.match((await ok(M("role", "show", "Descartavel"))).stdout, /Prompt temporario/, "role segue existindo");
+
+  assert.match((await ok(M("role", "delete", "Descartavel", "--force"))).stdout, /apagado.*1 terminal/);
+  assert.match((await M("role", "show", "Descartavel")).stderr, /não encontrado/);
+  assert.equal((await byTitle("UsaDescartavel")).data.roleId, null, "terminal perdeu o role");
+
+  await ok(M("role", "create", "SemUso", "x"));
+  assert.match((await ok(M("role", "delete", "SemUso"))).stdout, /apagado\./);
+  assert.match((await M("role", "delete", "SemUso")).stderr, /não encontrado/);
+  assert.equal((await M("role", "delete")).code, 1);
 });

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import Fastify from "fastify";
 import { registerFilesApi, safeRelPath } from "../src/files.js";
+import { rmTmp, noSymlink } from "./rmtmp.js";
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-files-test-")));
 const repo = path.join(tmp, "repo");
@@ -47,16 +48,16 @@ before(async () => {
   write("bin.dat", Buffer.from([1, 2, 0, 3, 4]));
   write("grande.txt", Buffer.alloc(1024 * 1024 + 1, 97));
   write("limite.txt", Buffer.alloc(1024 * 1024, 98));
-  fs.symlinkSync(path.join(outside, "segredo.txt"), path.join(repo, "link-arquivo"));
-  fs.symlinkSync(outside, path.join(repo, "link-dir"));
-  fs.symlinkSync("a.txt", path.join(repo, "link-interno"));
-  fs.symlinkSync(path.join(repo, "src"), path.join(repo, "link-src"));
+  if (!noSymlink) fs.symlinkSync(path.join(outside, "segredo.txt"), path.join(repo, "link-arquivo"));
+  if (!noSymlink) fs.symlinkSync(outside, path.join(repo, "link-dir"));
+  if (!noSymlink) fs.symlinkSync("a.txt", path.join(repo, "link-interno"));
+  if (!noSymlink) fs.symlinkSync(path.join(repo, "src"), path.join(repo, "link-src"));
   await fastify.ready();
 });
 
 after(async () => {
   await fastify.close();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  rmTmp(tmp);
 });
 
 test("lista rastreados e não rastreados (sem ignorados) com status", async () => {
@@ -121,7 +122,7 @@ test("conteúdo: traversal, absolutos e .git são rejeitados (400)", async () =>
   assert.equal((await get("/files/content?path=..%5Cfora%5Csegredo.txt")).statusCode, 400);
 });
 
-test("conteúdo: symlink que sai da raiz é bloqueado; interno é permitido", async () => {
+test("conteúdo: symlink que sai da raiz é bloqueado; interno é permitido", { skip: noSymlink }, async () => {
   for (const p of ["link-arquivo", "link-dir/segredo.txt"]) {
     const r = await content(p);
     assert.equal(r.statusCode, 403, p);

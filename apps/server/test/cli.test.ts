@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.mkdtempSync(path.join(os.tmpdir(), "maestri-cli-test-"));
 process.env.REPO_PATH = repo;
@@ -101,7 +102,7 @@ after(async () => {
   worker.close();
   proj.close();
   await fastify.close();
-  fs.rmSync(repo, { recursive: true, force: true });
+  rmTmp(repo);
 });
 
 test("--help funciona sem ambiente do Maestri", async () => {
@@ -293,4 +294,19 @@ test("recruit com claude+role passa o papel por arquivo, nunca interpolado no co
   assert.equal(n.data.role, role); // curto o bastante para virar o papel exibido
   assert.equal(fs.readFileSync(path.join(repo, ".maestri-roles", `${n.id}.md`), "utf-8"), role);
   await maestri("maestro", ["dismiss", "Seguro"]); // antes dos 600ms do cmd inicial
+});
+
+test("help <comando> é igual a <comando> --help (e comando desconhecido falha)", async () => {
+  const env = { MAESTRI_API_URL: "", MAESTRI_PROJECT_ID: "", MAESTRI_NODE_ID: "" };
+  for (const cmd of ["ask", "note", "portal", "role", "workspace", "floor"]) {
+    const a = await maestri("x", ["help", cmd], env);
+    const b = await maestri("x", [cmd, "--help"], env);
+    assert.equal(a.code, 0, a.stderr);
+    assert.ok(a.stdout.trim().length > 20, cmd);
+    assert.equal(a.stdout, b.stdout, cmd);
+  }
+  const unknown = await maestri("x", ["help", "inexistente"], env);
+  assert.equal(unknown.code, 1);
+  assert.match(unknown.stderr, /Comando desconhecido: inexistente/);
+  assert.equal((await maestri("x", ["help"], env)).stdout, (await maestri("x", [], env)).stdout, "help sem argumento = ajuda geral");
 });

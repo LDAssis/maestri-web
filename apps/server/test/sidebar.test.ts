@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-sidebar-test-")));
 process.env.REPO_PATH = repo;
@@ -24,7 +25,7 @@ before(async () => {
 });
 after(async () => {
   await fastify.close();
-  fs.rmSync(repo, { recursive: true, force: true });
+  rmTmp(repo);
 });
 
 test("grupos: criar, duplicado, renomear (leva workspaces e pastas) e apagar", async () => {

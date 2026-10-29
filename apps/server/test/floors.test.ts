@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-floors-test-")));
 const git = (cwd: string, ...args: string[]) =>
@@ -77,7 +78,7 @@ before(async () => {
 after(async () => {
   sockets.forEach((s) => s.close());
   await fastify.close();
-  fs.rmSync(repo, { recursive: true, force: true });
+  rmTmp(repo);
 });
 
 test("parseProgress aceita 2/5, 40% e 0.4 e rejeita o resto", () => {
@@ -397,8 +398,8 @@ test("workspaces: list/create/rename/move com grupos e pastas", async () => {
     await fail("maestro", ["workspace", "create", "Dup", "--dir", dirA], /conflita/);
     await ok("maestro", ["workspace", "create", "B", "--dir", dirB]);
   } finally {
-    fs.rmSync(dirA, { recursive: true, force: true });
-    fs.rmSync(dirB, { recursive: true, force: true });
+    rmTmp(dirA);
+    rmTmp(dirB);
     await ok("maestro", ["floor", "delete", "F1"]).catch(() => {});
   }
 });

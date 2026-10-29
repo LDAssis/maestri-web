@@ -98,7 +98,7 @@ export default function CliConfigModal({
             Comando de Auto-Inicialização do Nó
           </label>
           <div className="text-[10px] text-slate-500 mb-1.5">
-            Executado automaticamente assim que a sessão do terminal ConPTY for aberta.
+            Executado automaticamente assim que a sessão do terminal for aberta.
           </div>
           <input
             type="text"
