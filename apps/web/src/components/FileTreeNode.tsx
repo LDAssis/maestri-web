@@ -78,7 +78,7 @@ interface Downloader {
   busy: string | null; // caminho em preparação ("" = projeto)
   error: string;
   clearError: () => void;
-  start: (path: string, opts?: { excludeHeavy?: boolean }) => void;
+  start: (path: string, opts?: { excludeHeavy?: boolean; excludeSecrets?: boolean }) => void;
 }
 
 // Pede um link de uso único ao servidor e dispara o download pelo navegador
@@ -87,7 +87,7 @@ function useDownloader(projectId: string, root: string): Downloader {
   const [error, setError] = useState("");
   const busyRef = useRef(false);
   const start = useCallback(
-    async (path: string, opts: { excludeHeavy?: boolean } = {}) => {
+    async (path: string, opts: { excludeHeavy?: boolean; excludeSecrets?: boolean } = {}) => {
       if (busyRef.current) return;
       busyRef.current = true;
       setBusy(path);
@@ -96,7 +96,7 @@ function useDownloader(projectId: string, root: string): Downloader {
         const res = await apiFetch(`/api/projects/${projectId}/files/download-link`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ root, path, excludeHeavy: opts.excludeHeavy ?? true }),
+          body: JSON.stringify({ root, path, excludeHeavy: opts.excludeHeavy ?? true, excludeSecrets: opts.excludeSecrets ?? true }),
         });
         const body = await res.json().catch(() => ({}));
         if (!res.ok || !body?.url) {
@@ -297,6 +297,7 @@ export default function FileTreeNode({ id, data, selected }: { id: string; data:
   const [viewing, setViewing] = useState<string | null>(null);
   const dl = useDownloader(projectId, root);
   const [includeHeavy, setIncludeHeavy] = useState(false);
+  const [includeSecrets, setIncludeSecrets] = useState(false);
   const [projMenu, setProjMenu] = useState(false);
   const [ctx, setCtx] = useState<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
   const onMenu = useCallback((e: React.MouseEvent, path: string, isDir: boolean) => {
@@ -384,7 +385,7 @@ export default function FileTreeNode({ id, data, selected }: { id: string; data:
           </select>
           <div className="relative flex items-center">
             <button
-              onClick={() => dl.start("", { excludeHeavy: !includeHeavy })}
+              onClick={() => dl.start("", { excludeHeavy: !includeHeavy, excludeSecrets: !includeSecrets })}
               onContextMenu={(e) => (e.preventDefault(), setProjMenu((v) => !v))}
               disabled={dl.busy !== null}
               className="flex items-center gap-1 rounded px-1 py-1 text-slate-400 hover:bg-white/10 hover:text-white disabled:opacity-60"
@@ -403,8 +404,12 @@ export default function FileTreeNode({ id, data, selected }: { id: string; data:
                   <input type="checkbox" checked={includeHeavy} onChange={(e) => setIncludeHeavy(e.target.checked)} className="mt-0.5 accent-indigo-500" />
                   <span>Incluir node_modules e .git<span className="block text-[10px] text-slate-500">Também .next, dist, build… Pode ficar bem maior.</span></span>
                 </label>
+                <label className="mt-2 flex cursor-pointer items-start gap-2 text-[11px] text-slate-300">
+                  <input type="checkbox" checked={includeSecrets} onChange={(e) => setIncludeSecrets(e.target.checked)} className="mt-0.5 accent-rose-500" />
+                  <span>Incluir arquivos .env<span className="block text-[10px] text-slate-500">Podem conter senhas e chaves de API.</span></span>
+                </label>
                 <button
-                  onClick={() => (setProjMenu(false), dl.start("", { excludeHeavy: !includeHeavy }))}
+                  onClick={() => (setProjMenu(false), dl.start("", { excludeHeavy: !includeHeavy, excludeSecrets: !includeSecrets }))}
                   disabled={dl.busy !== null}
                   className="mt-2 w-full rounded-md bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
                 >

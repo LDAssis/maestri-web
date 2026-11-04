@@ -27,6 +27,9 @@ write(".git/config", "[core]");
 write("dist/out.js", "x");
 write(".worktrees/andar-x/y.txt", "y");
 write("andar-fake/ok.txt", "ok");
+write(".env", "API_KEY=segredo-env");
+write("src/.env.local", "TOKEN=segredo-local");
+write(".env.example", "API_KEY=");
 fs.writeFileSync(path.join(outside, "segredo.txt"), "SEGREDO");
 // Symlinks exigem privilégio no Windows: sem eles, os casos de link são pulados
 let hasLinks = true;
@@ -137,6 +140,7 @@ test("zip do projeto exclui node_modules/.git/dist/.worktrees e links para fora"
   assert.match(String(r.headers["content-disposition"]), /\.zip/);
   const names = zipNames(r.rawPayload);
   assert.deepEqual(names, [
+    "meu projeto/.env.example",
     "meu projeto/a.txt",
     "meu projeto/andar-fake/ok.txt",
     "meu projeto/blob.bin",
@@ -147,6 +151,17 @@ test("zip do projeto exclui node_modules/.git/dist/.worktrees e links para fora"
   ]);
   assert.ok(!r.rawPayload.includes("SEGREDO"));
   assert.equal((await dl(j.url)).statusCode, 404);
+});
+
+test(".env fica fora do zip por padrão; excludeSecrets=false inclui; arquivo .env sozinho continua baixável", async () => {
+  const def = zipNames((await dl((await link({ path: "" })).json().url)).rawPayload);
+  assert.ok(!def.includes("meu projeto/.env") && !def.includes("meu projeto/src/.env.local"), def.join(","));
+  assert.ok(def.includes("meu projeto/.env.example"));
+  const withEnv = zipNames((await dl((await link({ path: "", excludeSecrets: false })).json().url)).rawPayload);
+  for (const n of ["meu projeto/.env", "meu projeto/src/.env.local"]) assert.ok(withEnv.includes(n), n);
+  const one = await link({ path: ".env" });
+  assert.equal(one.statusCode, 200);
+  assert.equal((await dl(one.json().url)).body, "API_KEY=segredo-env");
 });
 
 test("zip de subpasta e excludeHeavy=false inclui node_modules e .git", async () => {

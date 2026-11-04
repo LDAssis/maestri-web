@@ -13,6 +13,8 @@ interface Deps {
 }
 
 const HEAVY = new Set(["node_modules", ".next", ".worktrees", "dist", "build", ".turbo", ".cache", ".git"]);
+// Segredos fora do .zip por padrão: .env e .env.* (exceto modelos como .env.example)
+export const isSecretFile = (name: string) => /^.env(..+)?$/i.test(name) && !/.(example|sample|template|dist)$/i.test(name);
 const MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_ENTRIES = 200_000;
 const MIME: Record<string, string> = {
@@ -28,6 +30,7 @@ interface Entry {
   real: string; // realpath do alvo
   name: string;
   excludeHeavy: boolean;
+  excludeSecrets: boolean;
   expires: number;
 }
 
@@ -45,7 +48,7 @@ function disposition(name: string) {
 }
 
 // Arquivos regulares a incluir (relativo, absoluto). Symlinks: só arquivos cujo destino fica dentro da raiz; diretórios-link não são seguidos.
-function* walk(dir: string, rootReal: string, excludeHeavy: boolean, rel = ""): Generator<{ rel: string; abs: string; size: number }> {
+function* walk(dir: string, rootReal: string, excludeHeavy: boolean, excludeSecrets: boolean, rel = ""): Generator<{ rel: string; abs: string; size: number }> {
   let names: fs.Dirent[];
   try {
     names = fs.readdirSync(dir, { withFileTypes: true });
@@ -54,9 +57,10 @@ function* walk(dir: string, rootReal: string, excludeHeavy: boolean, rel = ""): 
   }
   for (const d of names) {
     if (excludeHeavy && HEAVY.has(d.name)) continue;
+    if (excludeSecrets && !d.isDirectory() && isSecretFile(d.name)) continue;
     const abs = path.join(dir, d.name);
     const r = rel ? `${rel}/${d.name}` : d.name;
-    if (d.isDirectory()) yield* walk(abs, rootReal, excludeHeavy, r);
+    if (d.isDirectory()) yield* walk(abs, rootReal, excludeHeavy, excludeSecrets, r);
     else if (d.isFile()) {
       try {
         yield { rel: r, abs, size: fs.statSync(abs).size };
@@ -83,6 +87,7 @@ export function registerDownloadsApi({ fastify, projectRepo }: Deps) {
       const body = req.body && typeof req.body === "object" ? req.body : {};
       const { repo, root, dir } = resolveRoot(projectRepo, String(req.params.p), body.root);
       const excludeHeavy = body.excludeHeavy !== false;
+      const excludeSecrets = body.excludeSecrets !== false;
       const p = body.path;
       if (p !== undefined && typeof p !== "string") throw new ApiError(400, "Path inválido.");
       const rel = p ? safeRelPath(p) : "";
@@ -97,18 +102,18 @@ export function registerDownloadsApi({ fastify, projectRepo }: Deps) {
       let entry: Omit<Entry, "expires">;
       let size: number | undefined;
       if (st.isFile()) {
-        entry = { kind: "file", dir, real, name: path.basename(rel), excludeHeavy };
+        entry = { kind: "file", dir, real, name: path.basename(rel), excludeHeavy, excludeSecrets };
         size = st.size;
       } else if (st.isDirectory()) {
         let total = 0;
         let count = 0;
-        for (const f of walk(real, dir, excludeHeavy)) {
+        for (const f of walk(real, dir, excludeHeavy, excludeSecrets)) {
           total += f.size;
           if (total > MAX_BYTES || ++count > MAX_ENTRIES)
             throw new ApiError(413, `A pasta é grande demais para baixar (limite de 2 GB${excludeHeavy ? "" : "; tente excluir node_modules e .git"}).`);
         }
         const base = rel ? path.basename(rel) : root === "main" ? path.basename(repo) : root;
-        entry = { kind: "zip", dir, real, name: `${base || "projeto"}.zip`, excludeHeavy };
+        entry = { kind: "zip", dir, real, name: `${base || "projeto"}.zip`, excludeHeavy, excludeSecrets };
       } else throw new ApiError(400, "O caminho não é arquivo nem pasta.");
       sweep();
       const token = crypto.randomBytes(32).toString("hex");
@@ -151,7 +156,7 @@ export function registerDownloadsApi({ fastify, projectRepo }: Deps) {
     });
     reply.raw.on("close", () => archive.destroy());
     const prefix = e.name.replace(/\.zip$/, "");
-    for (const f of walk(e.real, e.dir, e.excludeHeavy)) archive.file(f.abs, { name: `${prefix}/${f.rel}` });
+    for (const f of walk(e.real, e.dir, e.excludeHeavy, e.excludeSecrets)) archive.file(f.abs, { name: `${prefix}/${f.rel}` });
     archive.finalize().catch(() => {});
     reply.header("Content-Type", "application/zip");
     return reply.send(archive);
