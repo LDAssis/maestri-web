@@ -15,6 +15,7 @@ interface ProjectSettingsModalProps {
   projectId: string;
   projectName: string;
   onSettingsChanged?: () => void;
+  onDeleteProject?: () => void;
 }
 
 export default function ProjectSettingsModal({
@@ -23,6 +24,7 @@ export default function ProjectSettingsModal({
   projectId,
   projectName,
   onSettingsChanged,
+  onDeleteProject,
 }: ProjectSettingsModalProps) {
   const [activeTab, setActiveTab] = useState<"project" | "global">("project");
   const [loading, setLoading] = useState(false);
@@ -363,6 +365,28 @@ export default function ProjectSettingsModal({
               >
                 <Plus className="h-4 w-4" />
               </button>
+            </div>
+          )}
+
+          {/* Zona de perigo: só nas configurações do projeto */}
+          {activeTab === "project" && onDeleteProject && (
+            <div className="mt-2 rounded-xl border border-rose-900/60 bg-rose-950/10 p-3">
+              <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-rose-400">
+                <ShieldAlert className="h-3.5 w-3.5" /> Zona de perigo
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-200">Excluir este projeto</div>
+                  <div className="text-[11px] text-slate-400">Apaga o canvas, as notas, os andares e as rotinas de &quot;{projectName}&quot;. Não dá para desfazer.</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={onDeleteProject}
+                  className="flex shrink-0 items-center gap-1.5 rounded-lg border border-rose-800 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-600 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Excluir projeto…
+                </button>
+              </div>
             </div>
           )}
         </div>

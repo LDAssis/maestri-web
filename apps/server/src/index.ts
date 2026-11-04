@@ -19,6 +19,8 @@ import { registerWorkspacesApi } from "./workspacesApi.js";
 import { SessionHistory } from "./sessionHistory.js";
 import { AccountStore } from "./accounts.js";
 import { registerAccountsApi } from "./accountsApi.js";
+import { registerCliToolsApi } from "./cliToolsApi.js";
+import { registerProjectDeleteApi } from "./projectDeleteApi.js";
 import { CrossLinks } from "./crossLinks.js";
 import { AttachmentStore } from "./attachments.js";
 import { registerAttachmentsApi } from "./attachmentsApi.js";
@@ -239,6 +241,7 @@ const prPoll = setInterval(() => {
 prPoll.unref();
 fastify.addHook("onClose", async () => clearInterval(prPoll));
 registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds: () => projects.map((p) => p.id), settings: settingsAccess });
+registerCliToolsApi({ fastify, accounts, wsAuthorized });
 registerTeamApi({
   fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, dataDir, nodeApi, floors, accounts, links: crossLinks, workspaces: { nameOf: (id) => projects.find((p) => p.id === id)?.name, idOf: (name) => projects.find((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase())?.id },
   settings: settingsAccess,
@@ -387,27 +390,8 @@ fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }
   return { ok: true, project: newProject };
 });
 
-fastify.delete<{ Params: { id: string } }>("/api/projects/:id", async (req, reply) => {
-  const idx = projects.findIndex((p) => p.id === req.params.id);
-  if (idx === -1) {
-    return reply.status(404).send({ error: "Projeto não encontrado." });
-  }
-  const canvasFile = canvasFileFor(req.params.id);
-  projects.splice(idx, 1);
-  saveProjects();
-  for (const p of projects) canvas.notify(p.id, { type: "sidebar" });
-  sessions.killProject(req.params.id);
-  portals.closeProject(req.params.id);
-  canvas.drop(req.params.id);
-  if (canvasFile) fs.rmSync(canvasFile, { force: true });
-  routines.removeProject(req.params.id);
-  floors.drop(req.params.id);
-  sessionHistory.dropProject(req.params.id);
-  crossLinks.dropProject(req.params.id);
-  fs.rmSync(path.join(dataDir, `prefs_${req.params.id}.json`), { force: true });
-  attachments.dropProject(req.params.id);
-  return { ok: true };
-});
+// DELETE /api/projects/:id e GET /api/projects/:id/delete-info (projectDeleteApi.ts)
+registerProjectDeleteApi({ fastify, projects, defaultRepo, dataDir, canvas, sessions, portals, routines, floors, sessionHistory, crossLinks, attachments, saveProjects });
 
 // Estado do Canvas por Projeto
 fastify.get<{ Params: { id: string } }>("/api/projects/:id/canvas", async (req, reply) => {
