@@ -1,12 +1,12 @@
 "use client";
 
-import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
 import dynamic from "next/dynamic";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronRight, File, Folder, FolderTree, RefreshCw, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, File, Folder, FolderTree, Loader2, RefreshCw, X } from "lucide-react";
 import DeleteNodeButton from "./DeleteNodeButton";
-import { apiFetch } from "@/lib/api";
+import { API_URL, apiFetch } from "@/lib/api";
 import { ProjectIdContext } from "@/lib/projectContext";
 import { useProjectEvents } from "@/lib/useProjectEvents";
 
@@ -23,6 +23,8 @@ export interface FileTreeNodeData extends Record<string, unknown> {
 interface FileEntry {
   path: string;
   status?: string;
+  dir?: boolean; // entrada de pasta (só as recolhidas vêm assim)
+  collapsed?: boolean; // pasta pesada não listada (ex.: node_modules)
 }
 
 interface TreeDir {
@@ -31,12 +33,15 @@ interface TreeDir {
   dirs: Map<string, TreeDir>;
   files: FileEntry[];
   changed: boolean;
+  ignored?: boolean; // tudo dentro é ignorado pelo .gitignore
+  collapsed?: boolean;
 }
 
 const STATUS_COLOR: Record<string, string> = {
   M: "text-amber-300",
   A: "text-emerald-400",
   "?": "text-emerald-400",
+  I: "text-slate-500",
   D: "text-rose-400",
 };
 
@@ -50,23 +55,76 @@ const languageOf = (p: string) => LANG[p.split(".").pop()?.toLowerCase() || ""] 
 function buildTree(files: FileEntry[]): TreeDir {
   const root: TreeDir = { name: "", path: "", dirs: new Map(), files: [], changed: false };
   for (const f of files) {
-    const parts = f.path.split("/");
+    const parts = f.path.replace(/\/$/, "").split("/");
+    const last = f.dir ? parts.length : parts.length - 1;
     let dir = root;
-    for (let i = 0; i < parts.length - 1; i++) {
+    for (let i = 0; i < last; i++) {
       const p = parts.slice(0, i + 1).join("/");
       let next = dir.dirs.get(parts[i]);
       if (!next) dir.dirs.set(parts[i], (next = { name: parts[i], path: p, dirs: new Map(), files: [], changed: false }));
-      if (f.status) next.changed = true;
+      if (f.status && f.status !== "I") next.changed = true;
+      next.ignored = (next.ignored ?? true) && f.status === "I";
+      if (f.dir && i === last - 1 && f.collapsed) next.collapsed = true;
       dir = next;
     }
-    dir.files.push(f);
+    if (!f.dir) dir.files.push(f);
   }
   return root;
 }
 
 const byName = (a: string, b: string) => a.localeCompare(b);
 
-function Viewer({ projectId, root, path, onClose }: { projectId: string; root: string; path: string; onClose: () => void }) {
+interface Downloader {
+  busy: string | null; // caminho em preparação ("" = projeto)
+  error: string;
+  clearError: () => void;
+  start: (path: string, opts?: { excludeHeavy?: boolean }) => void;
+}
+
+// Pede um link de uso único ao servidor e dispara o download pelo navegador
+function useDownloader(projectId: string, root: string): Downloader {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const busyRef = useRef(false);
+  const start = useCallback(
+    async (path: string, opts: { excludeHeavy?: boolean } = {}) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      setBusy(path);
+      setError("");
+      try {
+        const res = await apiFetch(`/api/projects/${projectId}/files/download-link`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ root, path, excludeHeavy: opts.excludeHeavy ?? true }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body?.url) {
+          setError(res.status === 413 ? body?.error || "Pasta grande demais para baixar (mais de 2 GB)." : body?.error || `Servidor respondeu ${res.status}`);
+          return;
+        }
+        const a = document.createElement("a");
+        a.href = `${API_URL}${body.url}`;
+        a.download = body.name || "";
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } catch {
+        setError("Servidor indisponível");
+      } finally {
+        busyRef.current = false;
+        setBusy(null);
+      }
+    },
+    [projectId, root]
+  );
+  return { busy, error, clearError: () => setError(""), start };
+}
+
+const dlBtn = "shrink-0 rounded p-0.5 text-slate-500 hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400";
+
+function Viewer({ projectId, root, path, onClose, dl }: { projectId: string; root: string; path: string; onClose: () => void; dl: Downloader }) {
   const [state, setState] = useState<{ content?: string; binary?: boolean; error?: string }>({});
   useEffect(() => {
     let cancelled = false;
@@ -103,10 +161,26 @@ function Viewer({ projectId, root, path, onClose }: { projectId: string; root: s
       >
         <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2 text-xs">
           <span className="truncate font-mono text-slate-200">{root} · {path}</span>
-          <button autoFocus onClick={onClose} aria-label="Fechar visualizador" className="p-1 text-slate-400 hover:text-white">
-            <X className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              onClick={() => dl.start(path)}
+              disabled={dl.busy !== null}
+              className="flex items-center gap-1 rounded-md border border-slate-700 px-2 py-0.5 text-slate-200 hover:bg-white/10 disabled:opacity-60"
+            >
+              {dl.busy === path ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+              {dl.busy === path ? "Preparando…" : "Baixar"}
+            </button>
+            <button autoFocus onClick={onClose} aria-label="Fechar visualizador" className="p-1 text-slate-400 hover:text-white">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
+        {dl.error && (
+          <div role="alert" className="flex items-center justify-between gap-2 border-b border-rose-900/50 bg-rose-950/30 px-3 py-1.5 text-xs text-rose-300">
+            <span>{dl.error}</span>
+            <button onClick={dl.clearError} aria-label="Dispensar erro"><X className="h-3 w-3" /></button>
+          </div>
+        )}
         <div className="min-h-0 flex-1">
           {state.error ? (
             <div role="alert" className="p-4 text-xs text-rose-300">{state.error}</div>
@@ -136,6 +210,8 @@ function DirView({
   toggle,
   onOpenFile,
   forceOpen,
+  dl,
+  onMenu,
 }: {
   dir: TreeDir;
   depth: number;
@@ -143,41 +219,66 @@ function DirView({
   toggle: (p: string) => void;
   onOpenFile: (p: string) => void;
   forceOpen: boolean;
+  dl: Downloader;
+  onMenu: (e: React.MouseEvent, path: string, isDir: boolean) => void;
 }) {
+  const dlIcon = (path: string, isDir: boolean) => (
+    <button
+      type="button"
+      onClick={(e) => (e.stopPropagation(), dl.start(path))}
+      disabled={dl.busy !== null}
+      aria-label={isDir ? `Baixar pasta ${path} (.zip)` : `Baixar ${path}`}
+      title={isDir ? "Baixar pasta (.zip)" : "Baixar"}
+      className={`${dlBtn} ${dl.busy === path ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
+    >
+      {dl.busy === path ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+    </button>
+  );
   const pad = { paddingLeft: depth * 12 + 4 };
   return (
     <>
       {Array.from(dir.dirs.values()).sort((a, b) => byName(a.name, b.name)).map((d) => {
-        const isOpen = forceOpen || open.has(d.path);
+        const isOpen = !d.collapsed && (forceOpen || open.has(d.path));
         return (
           <div key={d.path}>
+            <div className={`group flex items-center pr-1 hover:bg-white/5 ${d.ignored ? "opacity-50 hover:opacity-80" : ""}`} onContextMenu={(e) => onMenu(e, d.path, true)}>
             <button
-              onClick={() => toggle(d.path)}
-              aria-expanded={isOpen}
+              onClick={() => !d.collapsed && toggle(d.path)}
+              aria-expanded={d.collapsed ? undefined : isOpen}
               style={pad}
-              className="flex w-full items-center gap-1 py-0.5 text-left text-slate-300 hover:bg-white/5"
+              title={d.collapsed ? "Pasta pesada não listada (ex.: node_modules)" : undefined}
+              className={`flex min-w-0 flex-1 items-center gap-1 py-0.5 text-left text-slate-300 ${d.collapsed ? "cursor-default" : ""}`}
             >
-              {isOpen ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+              {d.collapsed ? <span className="h-3 w-3 shrink-0" /> : isOpen ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
               <Folder className="h-3 w-3 shrink-0 text-indigo-400" />
               <span className="truncate">{d.name}</span>
               {d.changed && <span className="h-1.5 w-1.5 rounded-full bg-amber-300" aria-label="contém alterações" />}
+              {d.ignored && <span className="ml-auto hidden pr-1 font-sans text-[10px] text-slate-400 group-hover:inline">ignorado</span>}
             </button>
-            {isOpen && <DirView dir={d} depth={depth + 1} open={open} toggle={toggle} onOpenFile={onOpenFile} forceOpen={forceOpen} />}
+            {dlIcon(d.path, true)}
+            </div>
+            {isOpen && <DirView dir={d} depth={depth + 1} open={open} toggle={toggle} onOpenFile={onOpenFile} forceOpen={forceOpen} dl={dl} onMenu={onMenu} />}
           </div>
         );
       })}
       {[...dir.files].sort((a, b) => byName(a.path, b.path)).map((f) => (
-        <button
-          key={f.path}
-          onClick={() => onOpenFile(f.path)}
-          style={{ paddingLeft: depth * 12 + 20 }}
-          className="flex w-full items-center gap-1 py-0.5 text-left text-slate-400 hover:bg-white/5 hover:text-white"
-          title={f.path}
-        >
-          <File className="h-3 w-3 shrink-0" />
-          <span className="truncate">{f.path.split("/").pop()}</span>
-          {f.status && <span className={`ml-auto pr-1 font-mono text-[10px] ${STATUS_COLOR[f.status] || "text-slate-400"}`}>{f.status}</span>}
-        </button>
+        <div key={f.path} className={`group flex items-center pr-1 hover:bg-white/5 ${f.status === "I" ? "opacity-50 hover:opacity-80" : ""}`} onContextMenu={(e) => onMenu(e, f.path, false)}>
+          <button
+            onClick={() => onOpenFile(f.path)}
+            style={{ paddingLeft: depth * 12 + 20 }}
+            className="flex min-w-0 flex-1 items-center gap-1 py-0.5 text-left text-slate-400 hover:text-white"
+            title={f.path}
+          >
+            <File className="h-3 w-3 shrink-0" />
+            <span className="truncate">{f.path.split("/").pop()}</span>
+            {f.status === "I" ? (
+              <span className="ml-auto hidden pr-1 font-sans text-[10px] text-slate-400 group-hover:inline">ignorado</span>
+            ) : (
+              f.status && <span className={`ml-auto pr-1 font-mono text-[10px] ${STATUS_COLOR[f.status] || "text-slate-400"}`}>{f.status}</span>
+            )}
+          </button>
+          {dlIcon(f.path, false)}
+        </div>
       ))}
     </>
   );
@@ -194,6 +295,28 @@ export default function FileTreeNode({ id, data, selected }: { id: string; data:
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [viewing, setViewing] = useState<string | null>(null);
+  const dl = useDownloader(projectId, root);
+  const [includeHeavy, setIncludeHeavy] = useState(false);
+  const [projMenu, setProjMenu] = useState(false);
+  const [ctx, setCtx] = useState<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
+  const onMenu = useCallback((e: React.MouseEvent, path: string, isDir: boolean) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtx({ x: e.clientX, y: e.clientY, path, isDir });
+  }, []);
+  useEffect(() => {
+    if (!ctx) return;
+    const close = () => setCtx(null);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", close);
+    };
+  }, [ctx]);
 
   const load = useCallback(async () => {
     try {
@@ -259,12 +382,49 @@ export default function FileTreeNode({ id, data, selected }: { id: string; data:
               <option key={n} value={n}>{n}</option>
             ))}
           </select>
+          <div className="relative flex items-center">
+            <button
+              onClick={() => dl.start("", { excludeHeavy: !includeHeavy })}
+              onContextMenu={(e) => (e.preventDefault(), setProjMenu((v) => !v))}
+              disabled={dl.busy !== null}
+              className="flex items-center gap-1 rounded px-1 py-1 text-slate-400 hover:bg-white/10 hover:text-white disabled:opacity-60"
+              aria-label="Baixar projeto (.zip)"
+              title="Baixar projeto (.zip)"
+            >
+              {dl.busy === "" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+              {dl.busy === "" && <span className="text-[10px]">Preparando…</span>}
+            </button>
+            <button onClick={() => setProjMenu((v) => !v)} aria-label="Opções do download" aria-expanded={projMenu} className="rounded p-0.5 text-slate-500 hover:bg-white/10 hover:text-white">
+              <ChevronDown className="h-3 w-3" />
+            </button>
+            {projMenu && (
+              <div className="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-slate-700 bg-slate-950 p-2 font-sans shadow-xl">
+                <label className="flex cursor-pointer items-start gap-2 text-[11px] text-slate-300">
+                  <input type="checkbox" checked={includeHeavy} onChange={(e) => setIncludeHeavy(e.target.checked)} className="mt-0.5 accent-indigo-500" />
+                  <span>Incluir node_modules e .git<span className="block text-[10px] text-slate-500">Também .next, dist, build… Pode ficar bem maior.</span></span>
+                </label>
+                <button
+                  onClick={() => (setProjMenu(false), dl.start("", { excludeHeavy: !includeHeavy }))}
+                  disabled={dl.busy !== null}
+                  className="mt-2 w-full rounded-md bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+                >
+                  Baixar projeto (.zip)
+                </button>
+              </div>
+            )}
+          </div>
           <button onClick={load} className="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-white" aria-label="Recarregar arquivos" title="Recarregar">
             <RefreshCw className="h-3 w-3" />
           </button>
           <DeleteNodeButton id={id} />
         </div>
       </div>
+      {dl.error && (
+        <div role="alert" className="nodrag flex shrink-0 items-center justify-between gap-2 border-b border-rose-900/50 bg-rose-950/30 px-3 py-1.5 font-sans text-[11px] text-rose-300">
+          <span>{dl.error}</span>
+          <button onClick={dl.clearError} aria-label="Dispensar erro"><X className="h-3 w-3" /></button>
+        </div>
+      )}
       <div className="nodrag px-2 py-1.5 border-b border-slate-800 shrink-0">
         <input
           value={filter}
@@ -281,10 +441,30 @@ export default function FileTreeNode({ id, data, selected }: { id: string; data:
         {files && files.length > 0 && tree.files.length + tree.dirs.size === 0 && (
           <div className="px-3 py-2 text-slate-500 font-sans">Nenhum arquivo casa com o filtro.</div>
         )}
-        {files && <DirView dir={tree} depth={0} open={open} toggle={toggle} onOpenFile={setViewing} forceOpen={Boolean(q)} />}
+        {files && <DirView dir={tree} depth={0} open={open} toggle={toggle} onOpenFile={setViewing} forceOpen={Boolean(q)} dl={dl} onMenu={onMenu} />}
         {truncated && <div className="px-3 py-1 text-amber-300 font-sans">Lista truncada em 20000 arquivos.</div>}
       </div>
-      {viewing && <Viewer projectId={projectId} root={root} path={viewing} onClose={() => setViewing(null)} />}
+      {viewing && <Viewer projectId={projectId} root={root} path={viewing} onClose={() => setViewing(null)} dl={dl} />}
+      {ctx &&
+        createPortal(
+          <div
+            role="menu"
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{ left: Math.min(ctx.x, window.innerWidth - 190), top: Math.min(ctx.y, window.innerHeight - 50) }}
+            className="fixed z-[70] w-44 rounded-lg border border-slate-700 bg-slate-950 py-1 text-xs shadow-xl"
+          >
+            <button
+              role="menuitem"
+              autoFocus
+              onClick={() => (dl.start(ctx.path), setCtx(null))}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-slate-200 hover:bg-white/10"
+            >
+              <Download className="h-3 w-3" />
+              {ctx.isDir ? "Baixar pasta (.zip)" : "Baixar"}
+            </button>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

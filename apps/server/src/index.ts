@@ -29,6 +29,7 @@ import { registerFloorsApi } from "./floorsApi.js";
 import { FloorStore, floorOf } from "./floors.js";
 import { registerRoutinesApi } from "./routines.js";
 import { registerFilesApi } from "./files.js";
+import { registerDownloadsApi, isPublicDownload } from "./fileDownload.js";
 import { sweepBands } from "./team.js";
 import { registerPortalApi } from "./portalApi.js";
 import { setPortalSelfPorts } from "./portals.js";
@@ -71,7 +72,7 @@ fastify.get("/api/health", async () => ({ ok: true, authRequired: !!authToken })
 fastify.addHook("onRequest", async (req, reply) => {
   if (!authToken || req.method === "OPTIONS") return;
   const pathname = req.url.split("?")[0];
-  if (!pathname.startsWith("/api/") || pathname === "/api/health") return;
+  if (!pathname.startsWith("/api/") || pathname === "/api/health" || isPublicDownload(req.method, pathname)) return;
   const match = /^Bearer (.+)$/.exec(req.headers.authorization || "");
   if (!tokenMatches(match?.[1])) {
     return reply.code(401).send({ error: "Token ausente ou inválido" });
@@ -255,6 +256,7 @@ registerRolesApi({ fastify, canvas, projectRepo, createFloorFor, globalRoot: pat
 registerGlobalRolesApi({ fastify, canvas, dataDir, projectRepo, projectIds: () => projects.map((p) => p.id) });
 const routines = registerRoutinesApi({ fastify, sessions, canvas, projectRepo, projectName: (id) => projects.find((p) => p.id === id)?.name, floorCwd: (p, n, nodes) => floors.cwdForNode(p, n, nodes), dataDir, typeAndWait, isChatBusy: (p, n) => chatBusy.has(`${p}:${n}`) });
 registerFilesApi({ fastify, projectRepo });
+registerDownloadsApi({ fastify, projectRepo });
 registerWorkspacesApi({ fastify, canvas, projects, saveProjects, dataDir, writeJson: writeJsonAtomic, floors, nodeApi, createFloor: floorsApi.createFloor as any });
 
 // Endpoints de Projetos

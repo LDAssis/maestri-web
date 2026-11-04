@@ -59,7 +59,7 @@ after(async () => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-test("lista rastreados e não rastreados (sem ignorados) com status", async () => {
+test("lista rastreados, não rastreados e ignorados (status I)", async () => {
   const r = await get("/files");
   assert.equal(r.statusCode, 200);
   const { root, files, truncated } = r.json();
@@ -73,7 +73,7 @@ test("lista rastreados e não rastreados (sem ignorados) com status", async () =
   assert.equal(by["remover.txt"], "D");
   assert.ok("src/b.ts" in by && by["src/b.ts"] === undefined, "limpo não tem status");
   assert.ok("espaço ç.txt" in by, "nomes com espaço/acento");
-  assert.ok(!("ignorado.log" in by) && !(".worktrees" in by));
+  assert.equal(by["ignorado.log"], "I");
   assert.deepEqual(files.map((f: any) => f.path), [...files.map((f: any) => f.path)].sort());
   assert.equal((await get("/files?root=main")).json().files.length, files.length);
 });
@@ -143,13 +143,14 @@ test("conteúdo: binário, 413 acima de 1 MB, 404 e diretório", async () => {
   assert.equal((await content("src")).statusCode, 400);
 });
 
-test("repositório que não é git dá erro 500 legível, não derruba", async () => {
+test("pasta que não é git é listada pelo sistema de arquivos (fallback)", async () => {
   const f = Fastify();
   const plain = path.join(tmp, "plain");
-  fs.mkdirSync(plain);
+  fs.mkdirSync(path.join(plain, "sub"), { recursive: true });
+  fs.writeFileSync(path.join(plain, "sub", "a.txt"), "a");
   registerFilesApi({ fastify: f, projectRepo: () => plain });
   const r = await f.inject({ method: "GET", url: `/api/projects/${P}/files` });
-  assert.equal(r.statusCode, 500);
-  assert.match(r.json().error, /git|repository/i);
+  assert.equal(r.statusCode, 200);
+  assert.ok(r.json().files.some((x: any) => x.path === "sub/a.txt"));
   await f.close();
 });
