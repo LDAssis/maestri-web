@@ -3,13 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { isInside } from "./projectDirs.js";
+import { listByWalk, listIgnored, type ListedFile } from "./fileList.js";
 
 interface Deps {
   fastify: FastifyInstance;
   projectRepo: (projectId: string) => string | null;
 }
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
   }
@@ -44,21 +45,26 @@ function statusLetter(xy: string) {
   return "M";
 }
 
+// Projeto + raiz (main ou andar) -> realpath do diretório; lança ApiError
+export function resolveRoot(projectRepo: (id: string) => string | null, projectId: string, rootParam: unknown) {
+  if (!/^[\w-]+$/.test(projectId)) throw new ApiError(400, "Ids inválidos.");
+  const repo = projectRepo(projectId);
+  if (!repo) throw new ApiError(404, "Projeto não encontrado.");
+  const root = rootParam === undefined ? "main" : rootParam;
+  if (typeof root !== "string" || (root !== "main" && !NAME_RE.test(root))) throw new ApiError(400, "Raiz inválida (main ou nome de um andar).");
+  const d = root === "main" ? repo : path.join(repo, ".worktrees", root);
+  if (root !== "main" && !(fs.existsSync(d) && fs.statSync(d).isDirectory())) throw new ApiError(404, `Andar "${root}" não encontrado.`);
+  const dir = fs.realpathSync(d);
+  if (!isInside(fs.realpathSync(repo), dir)) throw new ApiError(404, `Andar "${root}" não encontrado.`);
+  return { repo, root, dir };
+}
+
 export function registerFilesApi({ fastify, projectRepo }: Deps) {
   const wrap = (fn: (c: { repo: string; root: string; dir: string }, req: any) => any) =>
     async (req: any, reply: FastifyReply) => {
       try {
-        const projectId = String(req.params.p);
-        if (!/^[\w-]+$/.test(projectId)) throw new ApiError(400, "Ids inválidos.");
-        const repo = projectRepo(projectId);
-        if (!repo) throw new ApiError(404, "Projeto não encontrado.");
-        const root = req.query?.root === undefined ? "main" : req.query.root;
-        if (typeof root !== "string" || (root !== "main" && !NAME_RE.test(root))) throw new ApiError(400, "Raiz inválida (main ou nome de um andar).");
-        const dir = root === "main" ? repo : path.join(repo, ".worktrees", root);
-        if (root !== "main" && !(fs.existsSync(dir) && fs.statSync(dir).isDirectory())) throw new ApiError(404, `Andar "${root}" não encontrado.`);
-        const real = fs.realpathSync(dir);
-        if (!isInside(fs.realpathSync(repo), real)) throw new ApiError(404, `Andar "${root}" não encontrado.`);
-        return await fn({ repo, root, dir: real }, req);
+        const { repo, root, dir } = resolveRoot(projectRepo, String(req.params.p), req.query?.root);
+        return await fn({ repo, root, dir }, req);
       } catch (e: any) {
         if (e instanceof ApiError) return reply.status(e.status).send({ error: e.message });
         req.log.error(e);
@@ -67,25 +73,31 @@ export function registerFilesApi({ fastify, projectRepo }: Deps) {
     };
 
   fastify.get("/api/projects/:p/files", wrap(async ({ root, dir }) => {
-    const [tracked, status] = await Promise.all([
-      git(dir, ["ls-files", "-co", "--exclude-standard", "-z"]),
-      git(dir, ["status", "--porcelain", "-z"]),
-    ]);
-    const statuses = new Map<string, string>();
-    const entries = status.split("\0");
-    for (let i = 0; i < entries.length; i++) {
-      const e = entries[i];
-      if (e.length < 4) continue;
-      const xy = e.slice(0, 2);
-      statuses.set(e.slice(3), statusLetter(xy));
-      if (xy.includes("R") || xy.includes("C")) i++; // próximo token é o caminho de origem
+    let list: ListedFile[];
+    try {
+      const [tracked, status] = await Promise.all([
+        git(dir, ["ls-files", "-co", "--exclude-standard", "-z"]),
+        git(dir, ["status", "--porcelain", "-z"]),
+      ]);
+      const statuses = new Map<string, string>();
+      const entries = status.split("\0");
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
+        if (e.length < 4) continue;
+        const xy = e.slice(0, 2);
+        statuses.set(e.slice(3), statusLetter(xy));
+        if (xy.includes("R") || xy.includes("C")) i++; // próximo token é o caminho de origem
+      }
+      const paths = new Set(tracked.split("\0").filter(Boolean));
+      for (const [p, s] of statuses) if (s === "D") paths.add(p); // removidos do índice não aparecem no ls-files
+      list = [...paths].map((p) => (statuses.has(p) ? { path: p, status: statuses.get(p)! } : { path: p }));
+      list.push(...(await listIgnored(dir, FILES_MAX + 1).catch(() => [])));
+    } catch {
+      list = listByWalk(dir, FILES_MAX); // não é repositório git
     }
-    const paths = new Set(tracked.split("\0").filter(Boolean));
-    for (const [p, s] of statuses) if (s === "D") paths.add(p); // removidos do índice não aparecem no ls-files
-    const sorted = [...paths].sort();
-    const truncated = sorted.length > FILES_MAX;
-    const files = sorted.slice(0, FILES_MAX).map((p) => (statuses.has(p) ? { path: p, status: statuses.get(p)! } : { path: p }));
-    return { root, files, ...(truncated ? { truncated: true } : {}) };
+    list.sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
+    const truncated = list.length > FILES_MAX;
+    return { root, files: list.slice(0, FILES_MAX), ...(truncated ? { truncated: true } : {}) };
   }));
 
   fastify.get("/api/projects/:p/files/content", wrap(async ({ dir }, req) => {

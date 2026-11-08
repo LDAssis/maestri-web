@@ -63,7 +63,7 @@ function spawnPty(cwd: string, cols: number, rows: number, extraEnv: Record<stri
   return pty.spawn(defaultShell, shellArgs, { name: "xterm-256color", cols, rows, cwd, env });
 }
 
-function killGroup(p: pty.IPty) {
+export function killGroup(p: pty.IPty) {
   const { pid } = p;
   try {
     p.kill();

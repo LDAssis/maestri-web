@@ -3,7 +3,10 @@
 import React, { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import ProjectSettingsModal from "@/components/ProjectSettingsModal";
+import CliAuthModal from "@/components/CliAuthModal";
+import DeleteProjectModal from "@/components/DeleteProjectModal";
 import {
+  KeyRound,
   Layers,
   Cpu,
   Users,
@@ -72,7 +75,7 @@ const readLastProject = () => {
 
 // Recarrega a lista de projetos quando o servidor avisa que a barra lateral mudou (CLI ou outro usuário)
 function SidebarSync({ projectId, onChange }: { projectId: string; onChange: () => void }) {
-  useProjectEvents(projectId, (t) => t === "sidebar" && onChange());
+  useProjectEvents(projectId, (t) => (t === "sidebar" || t === "project-deleted") && onChange());
   return null;
 }
 
@@ -99,6 +102,8 @@ function App({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isCliAuthOpen, setIsCliAuthOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [isOrganizeOpen, setIsOrganizeOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDesc, setNewProjectDesc] = useState("");
@@ -244,6 +249,15 @@ function App({
             </button>
 
             <button
+              onClick={() => setIsCliAuthOpen(true)}
+              className="p-3 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/50 transition"
+              title="CLIs & Logins"
+              aria-label="CLIs e logins"
+            >
+              <KeyRound className="h-5 w-5" />
+            </button>
+
+            <button
               onClick={() => setIsSettingsOpen(true)}
               className="p-3 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/50 transition"
               title="Configurações (Globais e do Projeto)"
@@ -351,6 +365,14 @@ function App({
             <PresenceStack me={user.id} projects={projects} onGoTo={goToPeer} />
             <ProfileMenu user={user} onChange={setUser} onLogout={logout} />
             <button
+              onClick={() => setIsCliAuthOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-xs font-medium text-slate-300 hover:text-white transition"
+              title="Instalar CLIs e fazer login"
+            >
+              <KeyRound className="h-3.5 w-3.5 text-indigo-400" />
+              <span>CLIs & Logins</span>
+            </button>
+            <button
               onClick={() => setIsSettingsOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-xs font-medium text-slate-300 hover:text-white transition"
               title="Configurações de inicialização dos agentes"
@@ -448,7 +470,20 @@ function App({
       </div>
 
       {activeProject && <SidebarSync projectId={activeProject.id} onChange={fetchProjects} />}
-      {isOrganizeOpen && activeProject && <SidebarManager projectId={activeProject.id} projects={projects} onClose={() => setIsOrganizeOpen(false)} onChanged={fetchProjects} />}
+      {isOrganizeOpen && activeProject && <SidebarManager projectId={activeProject.id} projects={projects} onClose={() => setIsOrganizeOpen(false)} onChanged={fetchProjects} onDeleteProject={(p) => setDeleteTarget({ id: p.id, name: p.name })} />}
+      {deleteTarget && (
+        <DeleteProjectModal
+          projectId={deleteTarget.id}
+          projectName={deleteTarget.name}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={async () => {
+            setDeleteTarget(null);
+            setIsSettingsOpen(false);
+            setIsOrganizeOpen(false);
+            await fetchProjects(); // se o excluído era o aberto, cai no primeiro que sobrou
+          }}
+        />
+      )}
 
       {/* Modal Criar Novo Projeto */}
       {isNewProjectModalOpen && (
@@ -521,8 +556,10 @@ function App({
           projectId={activeProject?.id || ""}
           projectName={activeProject?.name || "Projeto"}
           onClose={() => setIsSettingsOpen(false)}
+          onDeleteProject={() => activeProject && setDeleteTarget({ id: activeProject.id, name: activeProject.name })}
         />
       )}
+      <CliAuthModal isOpen={isCliAuthOpen} onClose={() => setIsCliAuthOpen(false)} />
       <PresenceToasts />
     </div>
     </PresenceProvider>

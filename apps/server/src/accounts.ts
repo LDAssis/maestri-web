@@ -81,12 +81,17 @@ export class AccountStore {
     return real === DEFAULT_ACCOUNT ? undefined : real;
   }
 
-  // Variável de ambiente que o terminal recebe ao iniciar
-  envFor(cmd: string | undefined, account: unknown): Record<string, string> {
-    const program = programOf(cmd);
-    if ((program !== "claude" && program !== "codex") || typeof account !== "string" || !account) return {};
+  // Variável de ambiente de uma conta (programa já conhecido); "Default"/inexistente = sem variável
+  envForProgram(program: AccountProgram, account: unknown): Record<string, string> {
+    if (typeof account !== "string" || !account) return {};
     const real = this.find(program, account);
     if (!real || real === DEFAULT_ACCOUNT) return {};
     return { [ENV_VAR[program]]: this.dir(program, real) };
+  }
+
+  // Variável de ambiente que o terminal recebe ao iniciar
+  envFor(cmd: string | undefined, account: unknown): Record<string, string> {
+    const program = programOf(cmd);
+    return program === "claude" || program === "codex" ? this.envForProgram(program, account) : {};
   }
 }

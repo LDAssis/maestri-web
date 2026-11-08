@@ -13,7 +13,7 @@ const J = { "Content-Type": "application/json" };
 const dest = (group: string | null, folder: string | null) => JSON.stringify({ group, folder });
 
 // Gerência da barra lateral de workspaces: grupos, pastas, mover e fixar
-export default function SidebarManager({ projectId, projects, onClose, onChanged }: { projectId: string; projects: ProjectLite[]; onClose: () => void; onChanged: () => void }) {
+export default function SidebarManager({ projectId, projects, onClose, onChanged, onDeleteProject }: { projectId: string; projects: ProjectLite[]; onClose: () => void; onChanged: () => void; onDeleteProject?: (p: ProjectLite) => void }) {
   const confirm = useConfirm();
   const [sb, setSb] = useState<Sidebar>({ groups: [], folders: [] });
   const [error, setError] = useState("");
@@ -156,6 +156,11 @@ export default function SidebarManager({ projectId, projects, onClose, onChanged
                   </React.Fragment>
                 ))}
               </select>
+              {onDeleteProject && (
+                <button aria-label={`Excluir projeto ${p.name}`} title="Excluir projeto" className={`${ibtn} hover:!text-rose-400`} onClick={() => onDeleteProject(p)}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
             </li>
           ))}
         </ul>
