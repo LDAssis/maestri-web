@@ -24,7 +24,17 @@ export function apiFetch(path: string, init: RequestInit = {}) {
   const token = getToken();
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  return fetch(`${API_URL}${path}`, { ...init, headers });
+  return fetch(`${API_URL}${path}`, { ...init, headers }).then((res) => {
+    // Sessão expirada/revogada: volta ao login (não vale para as rotas públicas de entrada)
+    if (res.status === 401 && token && !/^\/api\/(auth\/(login|setup|state)|invites)/.test(path)) {
+      setToken("");
+      try {
+        localStorage.removeItem("maestri.user");
+      } catch {}
+      if (typeof location !== "undefined") location.reload();
+    }
+    return res;
+  });
 }
 
 export function wsUrl(path: string, params: Record<string, string> = {}) {

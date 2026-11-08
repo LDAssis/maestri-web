@@ -5,8 +5,10 @@ import dynamic from "next/dynamic";
 import ProjectSettingsModal from "@/components/ProjectSettingsModal";
 import CliAuthModal from "@/components/CliAuthModal";
 import DeleteProjectModal from "@/components/DeleteProjectModal";
+import AdminUsersModal from "@/components/AdminUsersModal";
 import {
   KeyRound,
+  ShieldCheck,
   Layers,
   Cpu,
   Users,
@@ -103,6 +105,7 @@ function App({
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCliAuthOpen, setIsCliAuthOpen] = useState(false);
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [isOrganizeOpen, setIsOrganizeOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
@@ -256,6 +259,17 @@ function App({
             >
               <KeyRound className="h-5 w-5" />
             </button>
+
+            {user.role === "admin" && (
+              <button
+                onClick={() => setIsAdminOpen(true)}
+                className="p-3 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/50 transition"
+                title="Usuários e acessos"
+                aria-label="Usuários e acessos"
+              >
+                <ShieldCheck className="h-5 w-5" />
+              </button>
+            )}
 
             <button
               onClick={() => setIsSettingsOpen(true)}
@@ -560,6 +574,7 @@ function App({
         />
       )}
       <CliAuthModal isOpen={isCliAuthOpen} onClose={() => setIsCliAuthOpen(false)} />
+      {user.role === "admin" && <AdminUsersModal isOpen={isAdminOpen} onClose={() => setIsAdminOpen(false)} me={user} />}
       <PresenceToasts />
     </div>
     </PresenceProvider>

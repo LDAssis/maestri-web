@@ -32,6 +32,9 @@ import { FloorStore, floorOf } from "./floors.js";
 import { registerRoutinesApi } from "./routines.js";
 import { registerFilesApi } from "./files.js";
 import { registerDownloadsApi, isPublicDownload } from "./fileDownload.js";
+import { AuthService } from "./auth/service.js";
+import { registerAuthApi } from "./auth/authApi.js";
+import { registerAdminApi } from "./auth/adminApi.js";
 import { sweepBands } from "./team.js";
 import { registerPortalApi } from "./portalApi.js";
 import { setPortalSelfPorts } from "./portals.js";
@@ -60,25 +63,29 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
 // Token opcional: com ele, /api/* (exceto health) e WS exigem autenticação e o Origin é dispensado
 const authToken = process.env.MAESTRI_TOKEN || "";
 
-const tokenMatches = (given: unknown) => {
-  if (!authToken || typeof given !== "string") return false;
-  const a = Buffer.from(given);
-  const b = Buffer.from(authToken);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-};
-
 await fastify.register(cors, { origin: authToken ? true : allowedOrigins });
 
-fastify.get("/api/health", async () => ({ ok: true, authRequired: !!authToken }));
+fastify.get("/api/health", async () => ({ ok: true, authRequired: !!authToken, setupRequired: authService.users.count() === 0 }));
+
+// Rotas públicas (login/configuração/convites); o resto de /api/* exige sessão de usuário OU o token interno (agentes/CLI)
+const isPublicAuthRoute = (method: string, pathname: string) =>
+  (method === "GET" && (pathname === "/api/auth/state" || /^\/api\/invites\/[^/]+$/.test(pathname))) ||
+  (method === "POST" && (pathname === "/api/auth/setup" || pathname === "/api/auth/login" || /^\/api\/invites\/[^/]+\/accept$/.test(pathname)));
 
 fastify.addHook("onRequest", async (req, reply) => {
-  if (!authToken || req.method === "OPTIONS") return;
-  const pathname = req.url.split("?")[0];
-  if (!pathname.startsWith("/api/") || pathname === "/api/health" || isPublicDownload(req.method, pathname)) return;
-  const match = /^Bearer (.+)$/.exec(req.headers.authorization || "");
-  if (!tokenMatches(match?.[1])) {
-    return reply.code(401).send({ error: "Token ausente ou inválido" });
+  if (!authToken) {
+    // sem MAESTRI_TOKEN (dev em loopback): tudo aberto, com privilégio interno
+    req.authInternal = true;
+    req.authUser = null;
+    return;
   }
+  if (req.method === "OPTIONS") return;
+  const pathname = req.url.split("?")[0];
+  if (!pathname.startsWith("/api/") || pathname === "/api/health" || isPublicDownload(req.method, pathname) || isPublicAuthRoute(req.method, pathname)) return;
+  const match = /^Bearer (.+)$/.exec(req.headers.authorization || "");
+  const who = authService.authenticate(match?.[1]);
+  if (!who) return reply.code(401).send({ error: "Token ausente ou inválido" });
+  authService.attachReq(req, who);
 });
 await fastify.register(websocket);
 
@@ -89,6 +96,11 @@ const dataDir = path.resolve(defaultRepo, ".maestri_data");
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
+
+// Contas, sessões e convites (Fase 1). O MAESTRI_TOKEN segue valendo como token interno dos agentes/CLI.
+export const authService = new AuthService(dataDir, authToken);
+registerAuthApi({ fastify, auth: authService });
+registerAdminApi({ fastify, auth: authService });
 
 export interface Project {
   id: string;
@@ -463,9 +475,14 @@ function wsAuthorized(socket: WebSocket, req: FastifyRequest, url: URL) {
   });
 
   if (authToken) {
-    if (!tokenMatches(url.searchParams.get("token"))) {
+    const who = authService.authenticate(url.searchParams.get("token"));
+    if (!who) {
       socket.close(4401, "Token inválido");
       return false;
+    }
+    if (!who.internal) {
+      authService.trackSocket(who.user.id, who.sessionId, socket); // fecha quando a sessão cai
+      (socket as any).authUser = who.user;
     }
   } else {
     const origin = req.headers.origin;
@@ -519,7 +536,7 @@ fastify.get<{ Params: { id: string } }>("/ws/project/:id", { websocket: true }, 
 fastify.get("/ws/presence", { websocket: true }, (socket, req) => {
   const url = new URL(req.url, "http://localhost");
   if (!wsAuthorized(socket, req, url)) return;
-  presence.attach(socket);
+  presence.attach(socket, (socket as any).authUser ?? null);
 });
 
 const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(host);
