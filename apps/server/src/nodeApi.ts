@@ -53,11 +53,54 @@ export const submitDelayMs = () => {
   const v = process.env.MAESTRI_SUBMIT_DELAY_MS;
   return v !== undefined && v.trim() !== "" && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : 250;
 };
+// Pausa antes do Enter: a base (MAESTRI_SUBMIT_DELAY_MS) + ~1 ms a cada 10 caracteres, teto de 2 s (se a base já passa disso, vale a base).
+// Colagens grandes levam mais tempo para o TUI processar; um \r que chega antes vira quebra de linha dentro do texto.
+export const submitPauseMs = (len: number) => {
+  const base = submitDelayMs();
+  return Math.max(base, Math.min(2000, base + Math.floor(len / 10)));
+};
+// Janela em que se observa a saída depois do Enter (MAESTRI_SUBMIT_VERIFY_MS, padrão 1500; 0 desliga a verificação).
+export const submitVerifyMs = () => {
+  const v = process.env.MAESTRI_SUBMIT_VERIFY_MS;
+  return v !== undefined && v.trim() !== "" && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : 1500;
+};
+const SUBMIT_RETRIES = 2; // Enters extras, no máximo
+const squash = (s: string) => stripAnsi(s).replace(/\s+/g, "");
+
 export async function typePrompt(sessions: SessionManager, session: Session, text: string) {
   const typed = sanitizeTyped(text); // sem ESC/controles: nada fecha o bracketed paste nem injeta teclas
-  sessions.write(session.projectId, session.nodeId, typed.includes("\n") ? `\x1b[200~${typed}\x1b[201~` : typed);
-  await new Promise((r) => setTimeout(r, submitDelayMs()));
-  sessions.write(session.projectId, session.nodeId, "\r");
+  // Acompanha o quadro atual da tela (saída contínua mais recente) e se um indicador de ocupado apareceu depois do 1º Enter.
+  let burst = "";
+  let last = 0;
+  let sawBusy = false;
+  let enterSent = false;
+  const listener = (d: string) => {
+    const now = Date.now();
+    if (now - last > 300) burst = "";
+    burst = (burst + d).slice(-8000);
+    last = now;
+    if (enterSent && busyIndicator(burst)) sawBusy = true;
+  };
+  session.listeners.add(listener);
+  try {
+    sessions.write(session.projectId, session.nodeId, typed.includes("\n") ? `\x1b[200~${typed}\x1b[201~` : typed);
+    await new Promise((r) => setTimeout(r, submitPauseMs(typed.length)));
+    enterSent = true;
+    sessions.write(session.projectId, session.nodeId, "\r");
+    // Verificação: sem sinal de envio (ocupado) e com o quadro ainda mostrando o fim do texto, o Enter virou quebra de linha
+    // dentro da colagem (ou foi engolido): manda outro. Enter extra numa caixa vazia é inofensivo (Claude Code/Codex/shell).
+    const verifyMs = submitVerifyMs();
+    const tail = squash(typed).slice(-16);
+    if (!verifyMs || !tail) return;
+    for (let attempt = 0; attempt < SUBMIT_RETRIES && !session.dead; attempt++) {
+      const until = Date.now() + verifyMs;
+      while (!sawBusy && Date.now() < until && !session.dead) await new Promise((r) => setTimeout(r, 50));
+      if (sawBusy || session.dead || !squash(burst).includes(tail)) return;
+      sessions.write(session.projectId, session.nodeId, "\r");
+    }
+  } finally {
+    session.listeners.delete(listener);
+  }
 }
 
 // Escreve no PTY e espera ele ficar quieto (depois de produzir saída); devolve só a saída nova.
