@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useContext, useEffect, useRef, useState } from "react";
-import { Handle, Position, NodeResizer, useReactFlow } from "@xyflow/react";
+import { Handle, Position, NodeResizer, useReactFlow, useStoreApi } from "@xyflow/react";
 import { Globe, RefreshCw, ExternalLink, ShieldCheck, ArrowLeft, ArrowRight, Radio } from "lucide-react";
 import DeleteNodeButton from "./DeleteNodeButton";
 import { usePresenceStore } from "@/lib/presence";
@@ -26,7 +26,11 @@ interface LiveMeta {
 }
 
 // Mostra a sessão Chromium do servidor (frames JPEG) e repassa clique, digitação e rolagem do usuário
-function useLiveSession(projectId: string, nodeId: string, enabled: boolean) {
+// `viewEl` é a área da imagem: serve para pausar quando ninguém vê e para informar ao servidor o tamanho exibido
+function useLiveSession(projectId: string, nodeId: string, enabled: boolean, viewEl: React.RefObject<HTMLElement>) {
+  const storeApi = useStoreApi();
+  // Pausa (≠ queda): fora da área visível do canvas ou aba escondida o WS fecha e o servidor para a captura
+  const [seen, setSeen] = useState(true);
   const [frame, setFrame] = useState<string | null>(null);
   const [meta, setMeta] = useState<LiveMeta | null>(null);
   const [status, setStatus] = useState<LiveStatus>("conectando");
@@ -34,17 +38,60 @@ function useLiveSession(projectId: string, nodeId: string, enabled: boolean) {
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    if (!enabled || !projectId) return;
+    if (!enabled) return;
+    const el = viewEl.current;
+    const io = el && typeof IntersectionObserver !== "undefined" ? new IntersectionObserver((es) => ((inView = es[es.length - 1].isIntersecting), update())) : null;
+    let inView = !io;
+    let tabOn = document.visibilityState !== "hidden";
+    const update = () => setSeen(inView && tabOn);
+    const onVis = () => ((tabOn = document.visibilityState !== "hidden"), update());
+    if (el) io?.observe(el);
+    document.addEventListener("visibilitychange", onVis);
+    update();
+    return () => {
+      io?.disconnect();
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [enabled, viewEl]);
+
+  useEffect(() => {
+    if (!enabled || !projectId || !seen) return;
     let closed = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let lastUrl: string | null = null;
+
+    // Tamanho EXIBIDO da imagem em pixels de tela (o rect já inclui o zoom do canvas) × devicePixelRatio, com debounce
+    let viewTimer: ReturnType<typeof setTimeout> | undefined;
+    const sendView = () => {
+      clearTimeout(viewTimer);
+      viewTimer = setTimeout(() => {
+        const ws = wsRef.current;
+        const r = viewEl.current?.getBoundingClientRect();
+        if (!ws || ws.readyState !== WebSocket.OPEN || !r || !r.width || !r.height) return;
+        const dpr = window.devicePixelRatio || 1;
+        ws.send(JSON.stringify({ type: "view", maxWidth: Math.round(r.width * dpr), maxHeight: Math.round(r.height * dpr) }));
+      }, 300);
+    };
+    // Resize do nó muda o layout (ResizeObserver); zoom não muda: ouve só o zoom no store, sem re-render
+    const ro = typeof ResizeObserver !== "undefined" && viewEl.current ? new ResizeObserver(sendView) : null;
+    if (viewEl.current) ro?.observe(viewEl.current);
+    let zoom = storeApi.getState().transform[2];
+    const unsub = storeApi.subscribe((s) => {
+      if (s.transform[2] !== zoom) {
+        zoom = s.transform[2];
+        sendView();
+      }
+    });
 
     const connect = () => {
       setStatus("conectando");
       const ws = new WebSocket(wsUrl("/ws/portal", { project: projectId, node: nodeId }));
       ws.binaryType = "blob";
       wsRef.current = ws;
-      ws.onopen = () => setStatus("online");
+      ws.onopen = () => {
+        setStatus("online");
+        sendView();
+      };
       ws.onmessage = (ev) => {
         if (typeof ev.data === "string") {
           try {
@@ -72,12 +119,15 @@ function useLiveSession(projectId: string, nodeId: string, enabled: boolean) {
     return () => {
       closed = true;
       clearTimeout(retry);
+      clearTimeout(viewTimer);
+      ro?.disconnect();
+      unsub();
       wsRef.current?.close();
       wsRef.current = null;
       if (lastUrl) URL.revokeObjectURL(lastUrl);
       setFrame(null);
     };
-  }, [enabled, projectId, nodeId]);
+  }, [enabled, projectId, nodeId, seen, viewEl, storeApi]);
 
   const send = useCallback((msg: Record<string, unknown>) => {
     const ws = wsRef.current;
@@ -123,9 +173,9 @@ export default function PortalNode({
   const presence = usePresenceStore();
   const projectId = useContext(ProjectIdContext);
   const live = data.live === true;
-  const session = useLiveSession(projectId, id, live);
-  const urlFocused = useRef(false);
   const viewRef = useRef<HTMLDivElement>(null);
+  const session = useLiveSession(projectId, id, live, viewRef);
+  const urlFocused = useRef(false);
   const wheelAcc = useRef({ x: 0, y: 0, dx: 0, dy: 0, timer: 0 as unknown as ReturnType<typeof setTimeout> });
 
   // A barra de URL reflete a página automatizada (a menos que o usuário esteja digitando)

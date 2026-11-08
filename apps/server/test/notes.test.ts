@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.mkdtempSync(path.join(os.tmpdir(), "maestri-notes-test-"));
 process.env.REPO_PATH = repo;
@@ -66,7 +67,7 @@ before(async () => {
 });
 after(async () => {
   await fastify.close();
-  fs.rmSync(repo, { recursive: true, force: true });
+  rmTmp(repo);
 });
 
 test("note read numera linhas e aceita intervalo", async () => {
@@ -241,4 +242,24 @@ test("notas e fichários criados por um agente de um andar nascem nesse andar", 
   await put(baseNodes(), baseEdges());
   await ok("maestro", ["note", "create", "No térreo"]);
   assert.equal((await byTitle("No térreo")).data.floor, undefined);
+});
+
+test("note delete --stack apaga o fichário e as páginas; recusa fichário inexistente ou com nota travada", async () => {
+  await put(baseNodes(), baseEdges());
+  await ok("maestro", ["note", "stack", "Filha", "Pilha"]);
+  await ok("maestro", ["note", "stack", "Neta", "Pilha"]);
+  assert.ok(await byTitle("Pilha"));
+  assert.match(await ok("maestro", ["note", "delete", "--stack", "pilha"]), /Fichário "Pilha" removido \(2 página/);
+  assert.equal(await byTitle("Pilha"), undefined);
+  assert.equal(await byTitle("Filha"), undefined);
+  assert.equal(await byTitle("Neta"), undefined);
+  assert.ok(await byTitle("Raiz"), "outras notas ficam");
+  await fail("maestro", ["note", "delete", "--stack", "Pilha"], /Fichário "Pilha" não encontrado/);
+
+  await put(baseNodes(), baseEdges());
+  await ok("maestro", ["note", "stack", "Filha", "Trava"]);
+  const page = await byTitle("Filha");
+  await put((await canvasState()).nodes.map((n: any) => (n.id === page.id ? { ...n, data: { ...n.data, locked: true } } : n)), (await canvasState()).edges);
+  await fail("maestro", ["note", "delete", "--stack", "Trava"], /travada/);
+  assert.ok(await byTitle("Trava"), "fichário intacto");
 });

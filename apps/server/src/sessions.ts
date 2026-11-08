@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WebSocket } from "ws";
-import { captureResume, resumeCommand } from "./resume.js";
+import { captureResume, resumeCommand, withModel, withUsageSettings } from "./resume.js";
+import { usageEnabled, userStatusLine } from "./usage.js";
 import { ensureAgentContext } from "./agentContext.js";
 import type { SessionHistory } from "./sessionHistory.js";
 
@@ -28,14 +29,19 @@ const enrichedPath = [binDir, ...extraPaths, process.env.PATH || ""].join(path.d
 
 const SCROLLBACK_MAX = 200 * 1024;
 
+// Statusline do claude que reporta o uso (rate limits) ao servidor: o próprio bin/maestri, com / também no Windows (o claude roda via bash)
+const usageSettings = JSON.stringify({ statusLine: { type: "command", command: `${path.join(binDir, "maestri").replace(/\\/g, "/")} usage-report` } });
+
 export interface Session {
   projectId: string;
   nodeId: string;
   pty: pty.IPty;
   scrollback: string;
   clients: Set<WebSocket>;
+  sizes: Map<WebSocket, { cols: number; rows: number }>; // tamanho que cabe no nó de cada cliente que já reportou
   cwd: string;
   cmd: string;
+  baseCmd: string; // comando como veio do nó (sem modelo nem retomada): a base para remontar ao reiniciar
   createdAt: string;
   cols: number;
   rows: number;
@@ -50,7 +56,7 @@ export interface Session {
 
 function spawnPty(cwd: string, cols: number, rows: number, extraEnv: Record<string, string>) {
   const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : isWindows ? ["-NoLogo"] : [];
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...(isWindows ? { Path: enrichedPath } : {}),
     PATH: enrichedPath,
@@ -60,8 +66,15 @@ function spawnPty(cwd: string, cols: number, rows: number, extraEnv: Record<stri
   };
   // Instruções do canvas para o claude/codex/opencode/agy que rodar neste terminal (inclui contas por config dir)
   ensureAgentContext(env);
+  // statusLine do usuário (mesma config do claude deste terminal): o usage-report encadeia nela em vez de substituí-la
+  const userSl = usageEnabled(env) ? userStatusLine(env) : undefined;
+  if (userSl) env.MAESTRI_USER_STATUSLINE = userSl;
+  else delete env.MAESTRI_USER_STATUSLINE;
   return pty.spawn(defaultShell, shellArgs, { name: "xterm-256color", cols, rows, cwd, env });
 }
+
+// Controle em frame BINÁRIO (a saída do PTY segue em texto): tamanho aplicado ao PTY
+const sizeMsg = (s: Session) => Buffer.from(JSON.stringify({ type: "size", cols: s.cols, rows: s.rows }));
 
 export function killGroup(p: pty.IPty) {
   const { pid } = p;
@@ -93,6 +106,7 @@ export class SessionManager {
       history?: SessionHistory; // terminais já iniciados / linha de retomada capturada
       resume?: (projectId: string) => boolean; // retomar sessão ao relançar (padrão: ligado)
       env?: (projectId: string, nodeId: string) => Record<string, string>; // ex.: conta de CLI do nó
+      model?: (projectId: string, nodeId: string) => string | undefined; // data.model do nó (vazio = padrão do CLI)
       // Terminal ficou ocioso depois de produzir saída (fim de um "turno" do agente); usado p/ detectar PRs dos andares
       onIdle?: (projectId: string, nodeId: string) => void;
     },
@@ -105,8 +119,14 @@ export class SessionManager {
       MAESTRI_NODE_ID: nodeId,
       MAESTRI_TOKEN: this.cli.token,
       // Caminho absoluto do CLI: o recurso quando `maestri` não é encontrado no PATH ("$MAESTRI_CLI")
-      MAESTRI_CLI: path.join(binDir, isWindows ? "maestri.cmd" : "maestri"),
+      MAESTRI_CLI: path.join(binDir, "maestri"), // sem .cmd: só existe o script sh (Git Bash no Windows)
     };
+  }
+
+  // Comando do nó + modelo (data.model) + statusline de uso (claude); a retomada vem depois
+  private compose(projectId: string, nodeId: string, base: string) {
+    const cmd = withModel(base, this.cli.model?.(projectId, nodeId));
+    return usageEnabled(process.env) ? withUsageSettings(cmd, usageSettings) : cmd;
   }
 
   private key(projectId: string, nodeId: string) {
@@ -189,7 +209,7 @@ export class SessionManager {
     const cols = 80;
     const rows = 24;
     const h = this.cli.history;
-    let cmd = opts.cmd;
+    let cmd = this.compose(projectId, nodeId, opts.cmd);
     if (h) {
       if (opts.fresh) h.reset(projectId, nodeId);
       else if (h.started(projectId, nodeId) && this.cli.resume?.(projectId) !== false) cmd = resumeCommand(cmd, h.resume(projectId, nodeId));
@@ -197,9 +217,9 @@ export class SessionManager {
     }
     const p = spawnPty(opts.cwd, cols, rows, { ...this.env(projectId, nodeId), ...(this.cli.env?.(projectId, nodeId) ?? {}) });
     s = {
-      projectId, nodeId, pty: p, clients: new Set(), cwd: opts.cwd, cmd,
+      projectId, nodeId, pty: p, clients: new Set(), sizes: new Map(), cwd: opts.cwd, cmd, baseCmd: opts.cmd,
       createdAt: new Date().toISOString(), cols, rows, dead: false, listeners: new Set(), lastOutputAt: 0, tail: "",
-      scrollback: `\r\n\x1b[32m[Maestri Web - ConPTY Ativo]\x1b[0m Terminal pronto em: ${opts.cwd}\r\n`,
+      scrollback: `\r\n\x1b[32m[Maestri Web - ${isWindows ? "ConPTY" : "PTY"} Ativo]\x1b[0m Terminal pronto em: ${opts.cwd}\r\n`,
     };
     this.sessions.set(k, s);
     this.wire(s, p);
@@ -233,6 +253,7 @@ export class SessionManager {
     const session = s;
     try {
       socket.send(session.scrollback);
+      socket.send(sizeMsg(session));
     } catch {}
     session.clients.add(socket);
 
@@ -242,9 +263,8 @@ export class SessionManager {
         if (text.startsWith('{"type":"resize"')) {
           const { cols, rows } = JSON.parse(text);
           if (Number.isFinite(cols) && Number.isFinite(rows)) {
-            session.cols = Math.min(500, Math.max(10, Math.floor(cols)));
-            session.rows = Math.min(200, Math.max(5, Math.floor(rows)));
-            session.pty.resize(session.cols, session.rows);
+            session.sizes.set(socket, { cols: Math.min(500, Math.max(10, Math.floor(cols))), rows: Math.min(200, Math.max(5, Math.floor(rows))) });
+            this.applySize(session);
           }
           return;
         }
@@ -255,7 +275,34 @@ export class SessionManager {
     });
 
     // Fechar um cliente não mata o PTY
-    socket.on("close", () => session.clients.delete(socket));
+    socket.on("close", () => {
+      session.clients.delete(socket);
+      session.sizes.delete(socket);
+      this.applySize(session);
+    });
+  }
+
+  // Estilo tmux: o PTY compartilhado usa o MENOR tamanho entre os clientes que já reportaram; quando muda, avisa todos
+  private applySize(s: Session) {
+    if (!s.sizes.size) return;
+    const sizes = [...s.sizes.values()];
+    const cols = Math.min(...sizes.map((z) => z.cols));
+    const rows = Math.min(...sizes.map((z) => z.rows));
+    if (cols === s.cols && rows === s.rows) return;
+    s.cols = cols;
+    s.rows = rows;
+    try {
+      s.pty.resize(cols, rows);
+    } catch {}
+    this.broadcastBinary(s, sizeMsg(s));
+  }
+
+  private broadcastBinary(s: Session, data: Buffer) {
+    for (const c of s.clients) {
+      try {
+        if (c.readyState === 1 /* OPEN */) c.send(data, { binary: true });
+      } catch {}
+    }
   }
 
   list(projectId: string) {
@@ -290,6 +337,8 @@ export class SessionManager {
     if (cwd) s.cwd = cwd;
     const old = s.pty;
     // reiniciar o agente também retoma a conversa (se ligado no projeto)
+    // remonta a partir do comando do nó: o modelo pode ter mudado (a flag que nós mesmos pusemos não pode travar a troca)
+    s.cmd = this.compose(projectId, nodeId, s.baseCmd);
     if (this.cli.history && this.cli.resume?.(projectId) !== false) s.cmd = resumeCommand(s.cmd, this.cli.history.resume(projectId, nodeId));
     const p = spawnPty(s.cwd, s.cols, s.rows, { ...this.env(projectId, nodeId), ...(this.cli.env?.(projectId, nodeId) ?? {}) });
     s.pty = p;

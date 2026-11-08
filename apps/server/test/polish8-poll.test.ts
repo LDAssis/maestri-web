@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { rmTmp, installFakeBin } from "./rmtmp.js";
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-polish8poll-test-")));
 const repo = path.join(tmp, "repo");
@@ -23,7 +24,7 @@ git(repo, "add", "-A");
 git(repo, "commit", "-m", "init");
 const bin = (name: string, body: string) => fs.writeFileSync(path.join(fakeBin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 bin("notify-send", `for a in "$@"; do printf '%s\\n' "$a" >> "${notifyLog}"; done; echo "---" >> "${notifyLog}"`);
-bin("gh", `echo "$@" >> "${ghDir}/gh.log"\n[ -f "${ghDir}/unauth" ] && { echo "gh auth login" >&2; exit 4; }\ncase "$2" in\n  list) f="${ghDir}/list-$4.json"; [ -f "$f" ] && cat "$f" || echo "[]" ;;\nesac`);
+installFakeBin(fakeBin, "gh", `echo "$@" >> "${ghDir}/gh.log"\n[ -f "${ghDir}/unauth" ] && { echo "gh auth login" >&2; exit 4; }\ncase "$2" in\n  list) f="${ghDir}/list-$4.json"; [ -f "$f" ] && cat "$f" || echo "[]" ;;\nesac`);
 process.env.PATH = `${fakeBin}${path.delimiter}${process.env.PATH}`;
 process.env.REPO_PATH = repo;
 process.env.NODE_ENV = "test";
@@ -75,7 +76,7 @@ before(async () => {
 
 after(async () => {
   await fastify.close();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  rmTmp(tmp);
 });
 
 test("o intervalo do servidor detecta o PR de um andar git sem agente rodando e avisa (canvas + SO); sem andar git não chama o gh", async () => {
@@ -86,7 +87,7 @@ test("o intervalo do servidor detecta o PR de um andar git sem agente rodando e 
   fs.writeFileSync(path.join(ghDir, "list-feat-poll.json"), JSON.stringify([{ number: 21, url: "https://github.com/acme/app/pull/21", title: "Aberto" }]));
   await until(async () => (await floorsNow()).find((f) => f.name === "Poll")?.pullRequest?.number === 21, "intervalo detectou o PR");
   await until(() => events.some((e) => e.type === "notify" && e.text === "Andar Poll agora segue o PR #21"), "toast");
-  await until(() => fs.existsSync(notifyLog) && fs.readFileSync(notifyLog, "utf8").includes("Andar Poll agora segue o PR #21"), "notificação do SO");
+  if (process.platform !== "win32") await until(() => fs.existsSync(notifyLog) && fs.readFileSync(notifyLog, "utf8").includes("Andar Poll agora segue o PR #21"), "notificação do SO");
   assert.equal(events.filter((e) => e.type === "notify" && /Poll agora segue/.test(e.text)).length, 1, "avisa uma vez só");
   // quem já segue um PR não é mais consultado
   const calls = fs.readFileSync(path.join(ghDir, "gh.log"), "utf8").split("\n").filter(Boolean).length;

@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useGlobalRoles, useRoles } from "@/lib/useRoles";
+import ModelPicker, { MODEL_CLIS, MODEL_ERROR, useModels, validModel } from "./ModelPicker";
 
 // Presets do servidor (embutidos + cliPresets das configurações); o mesmo que `maestri preset list`
 interface PresetItem {
@@ -43,10 +44,15 @@ export default function NewAgentSheet({
   const [preset, setPreset] = useState("claude");
   const [cmd, setCmd] = useState("");
   const [roleId, setRoleId] = useState("");
+  const [model, setModel] = useState("");
   const [worktree, setWorktree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  // presets personalizados rodam como shell: sem seletor de modelo
+  const chosenPreset = presets.find((p) => p.id === preset);
+  const modelCli = chosenPreset?.builtin && MODEL_CLIS.includes(preset) ? preset : undefined;
+  const models = useModels(projectId, modelCli);
 
   useEffect(() => {
     apiFetch(`/api/projects/${projectId}/presets`)
@@ -90,6 +96,7 @@ export default function NewAgentSheet({
     const t = title.trim();
     if (!t || t.length > 64) return setError("Título: 1 a 64 caracteres.");
     const chosen = presets.find((p) => p.id === preset) ?? FALLBACK[0];
+    if (modelCli && model.trim() && !validModel(model.trim())) return setError(MODEL_ERROR);
     setBusy(true);
     setError("");
     try {
@@ -108,6 +115,7 @@ export default function NewAgentSheet({
           ...(chosen.icon && { icon: chosen.icon }),
           ...(chosen.chat && { chatFirst: true }),
           ...(roleId && { roleId }),
+          ...(modelCli && model.trim() && { model: model.trim() }),
           ...(position && { position }),
           ...(floor && { floor }),
           ...(worktree && { worktree: true }),
@@ -155,7 +163,10 @@ export default function NewAgentSheet({
                   type="button"
                   role="radio"
                   aria-checked={preset === p.id}
-                  onClick={() => setPreset(p.id)}
+                  onClick={() => {
+                    setPreset(p.id);
+                    setModel("");
+                  }}
                   className={`rounded-lg border px-1 py-2 text-[11px] font-medium transition ${
                     preset === p.id ? "border-indigo-500 bg-indigo-600/30 text-white" : "border-slate-800 bg-slate-900 text-slate-300 hover:border-slate-600"
                   }`}
@@ -169,6 +180,14 @@ export default function NewAgentSheet({
             <label className="block text-[11px] text-slate-300">
               Comando inicial (opcional)
               <input value={cmd} maxLength={500} onChange={(e) => setCmd(e.target.value)} placeholder="ex: npm run dev" className={`${field} mt-1 font-mono`} />
+            </label>
+          )}
+          {modelCli && (
+            <label className="block text-[11px] text-slate-300">
+              Modelo
+              <div className="mt-1">
+                <ModelPicker value={model} onChange={setModel} list={models} className={field} />
+              </div>
             </label>
           )}
           <label className="block text-[11px] text-slate-300">

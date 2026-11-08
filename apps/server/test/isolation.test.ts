@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
+import { rmTmp, noSymlink } from "./rmtmp.js";
 
 const real = (p: string) => fs.realpathSync(p);
 const tmp = real(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-iso-test-")));
@@ -46,7 +47,7 @@ before(async () => {
 });
 after(async () => {
   await fastify.close();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  rmTmp(tmp);
 });
 
 const pathsOf = (list: any[]) => list.map((p) => real(p.repoPath));
@@ -122,8 +123,10 @@ test("POST /projects com repoPath: 400 se inexistente/arquivo/tipo errado; 409 s
     assert.match(r.json().error, /conflita com o projeto/);
   }
   const link = path.join(tmp, "link-para-A");
-  fs.symlinkSync(A, link);
-  assert.equal((await post(link)).statusCode, 409, "symlink para a pasta de outro projeto");
+  if (!noSymlink) {
+    fs.symlinkSync(A, link);
+    assert.equal((await post(link)).statusCode, 409, "symlink para a pasta de outro projeto");
+  }
 
   const free = real(fs.mkdtempSync(path.join(tmp, "livre-")));
   const ok = await post(free);
@@ -178,7 +181,7 @@ test("andares, roles e arquivos de um projeto não aparecem no outro", async () 
   await api("DELETE", `/projects/${X.id}/worktrees/so-no-x?force=1`);
 });
 
-test("files: andar que é symlink para fora do repo é recusado", async () => {
+test("files: andar que é symlink para fora do repo é recusado", { skip: noSymlink }, async () => {
   const P = (await api("POST", "/projects", { name: "Symlink" })).json().project;
   fs.mkdirSync(path.join(P.repoPath, ".worktrees"), { recursive: true });
   fs.symlinkSync(outside, path.join(P.repoPath, ".worktrees", "fuga"));
@@ -188,7 +191,7 @@ test("files: andar que é symlink para fora do repo é recusado", async () => {
 test("resolveInside: só caminhos dentro da raiz (inclusive via symlink); o resto cai na raiz", () => {
   const root = real(fs.mkdtempSync(path.join(tmp, "root-")));
   fs.mkdirSync(path.join(root, "dentro"));
-  fs.symlinkSync(outside, path.join(root, "fuga"));
+  if (!noSymlink) fs.symlinkSync(outside, path.join(root, "fuga"));
   fs.writeFileSync(path.join(root, "arquivo"), "x");
   assert.equal(resolveInside(root, path.join(root, "dentro")), path.join(root, "dentro"));
   assert.equal(resolveInside(root, "dentro"), path.join(root, "dentro"), "relativo resolve contra a raiz");
@@ -203,12 +206,17 @@ async function shellCwd(projectId: string, cwdParam: string) {
   let out = "";
   ws.on("message", (m) => (out += m.toString()));
   await new Promise((r) => ws.on("open", r));
-  ws.send("echo CWD=[$(pwd -P)]\r");
+  // 80 colunas + prompt longo: o readline quebra o eco com retorno de carro e o regex casaria o comando digitado
+  ws.send(JSON.stringify({ type: "resize", cols: 500, rows: 24 }));
+  // Windows: o PTY roda Git Bash, que imprime /tmp/...; pwd -W dá o caminho nativo
+  const win = process.platform === "win32";
+  ws.send(`echo CWD=[$(pwd ${win ? "-W" : "-P"})]\r`);
   const end = Date.now() + 20000;
-  const m = () => /CWD=\[([^\]]+)\]/.exec(out.replace(/\$\(pwd -P\)/g, ""));
+  const m = () => /CWD=\[([^\]]+)\]/.exec(out.replace(/\$\(pwd -[PW]\)/g, ""));
   while (!m() && Date.now() < end) await sleep(50);
   ws.close();
-  return m()?.[1];
+  const cwd = m()?.[1];
+  return cwd && win ? path.normalize(cwd) : cwd;
 }
 
 test("WS terminal: cwd de outro projeto (ou fora) cai no repoPath do próprio; andar próprio é permitido", async () => {
@@ -221,8 +229,10 @@ test("WS terminal: cwd de outro projeto (ou fora) cai no repoPath do próprio; a
   assert.equal(await shellCwd(X.id, "/tmp"), xr, "cwd fora de qualquer projeto");
   fs.mkdirSync(path.join(xr, "sub"));
   assert.equal(await shellCwd(X.id, path.join(xr, "sub")), path.join(xr, "sub"), "subpasta própria");
-  fs.symlinkSync(real(Y.repoPath), path.join(xr, "ponte"));
-  assert.equal(await shellCwd(X.id, path.join(xr, "ponte")), xr, "symlink para o projeto Y");
+  if (!noSymlink) {
+    fs.symlinkSync(real(Y.repoPath), path.join(xr, "ponte"));
+    assert.equal(await shellCwd(X.id, path.join(xr, "ponte")), xr, "symlink para o projeto Y");
+  }
   assert.equal(await shellCwd(X.id, `${xr}/../${path.basename(real(Y.repoPath))}`), xr, "../ para o projeto Y");
 
   await api("POST", `/projects/${X.id}/canvas`, { nodes: [{ id: "ag", type: "agentTerminal", position: { x: 0, y: 0 }, data: { title: "A" } }], edges: [] });

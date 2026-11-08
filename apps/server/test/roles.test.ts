@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-roles-test-")));
 const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo, encoding: "utf8" }).trim();
@@ -60,8 +61,8 @@ before(async () => {
 after(async () => {
   ws.close();
   await fastify.close();
-  fs.rmSync(repo, { recursive: true, force: true });
-  fs.rmSync(fakeBin, { recursive: true, force: true });
+  rmTmp(repo);
+  rmTmp(fakeBin);
 });
 
 function maestri(nodeId: string, args: string[]) {
@@ -142,7 +143,7 @@ test("roles: lê pastas do app nativo e ignora inválidas sem tocar nos outros a
   assert.equal((await api("PUT", `/roles/${id}`, { prompt: "editado" })).statusCode, 200);
   assert.equal(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8"), "gerado pelo nativo");
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "role.json"), "utf8")).icon, "person.text.rectangle");
-  fs.rmSync(dir, { recursive: true });
+  rmTmp(dir);
 });
 
 test("agents: preset, role, posição e id/dados do nó", async () => {
@@ -223,7 +224,7 @@ test("agents: worktree:true cria o andar e o prompt usa caminho absoluto", async
 });
 
 test("agents: título que colide com branch existente gera nome de andar com sufixo", async () => {
-  fs.rmSync(path.join(repo, ".worktrees"), { recursive: true, force: true });
+  rmTmp(path.join(repo, ".worktrees"));
   git("worktree", "prune");
   git("branch", "agent/ocupado");
   const r = await api("POST", "/agents", { title: "Ocupado", preset: "shell", worktree: true });

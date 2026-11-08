@@ -5,6 +5,7 @@ import { isText, lc } from "./nodeApi.js";
 import { ApiError, SIZES, freePosition } from "./agents.js";
 import { newNodeData } from "./floors.js";
 import { isBand, myBands } from "./team.js";
+import { LEGACY_COLORS, ICON_ALIASES } from "./agentSetup.js";
 
 type Obj = Record<string, any>;
 
@@ -14,6 +15,45 @@ export const ICONS = [
   "terminal", "bot", "code", "cpu", "brain", "rocket", "shield", "bug", "flask", "palette", "database", "globe",
   "search", "wrench", "book", "pen", "star", "heart", "zap", "flag", "crown", "sparkles", "lightbulb",
 ] as const;
+
+// Tipo de nó de cada flag de desambiguação (arrange: sem --portal; connect aceita todas)
+export const KIND_TYPES: Record<string, string> = { agent: "agentTerminal", note: "stickyNote", band: "band", fichario: "noteStack", portal: "portal" };
+
+// Cor aproximada de cada cor do Web, para converter hex (#RRGGBB) do app nativo na mais próxima
+const COLOR_RGB: Record<string, [number, number, number]> = {
+  amber: [245, 158, 11], indigo: [99, 102, 241], emerald: [16, 185, 129], rose: [244, 63, 94],
+  sky: [14, 165, 233], violet: [139, 92, 246], orange: [249, 115, 22], slate: [100, 116, 139],
+};
+export type Look = { value: string | null; note?: string };
+
+// Cor do Web, nome do app nativo (blue, charcoal...), hex (#RRGGBB -> a mais próxima) ou "default" (null = volta ao padrão)
+export function resolveColor(raw: unknown): Look {
+  const s = String(raw).trim();
+  const k = s.toLowerCase();
+  if (k === "default") return { value: null };
+  if ((COLORS as readonly string[]).includes(k)) return { value: k };
+  if (LEGACY_COLORS[k]) return { value: LEGACY_COLORS[k], note: `cor "${s}" (nativa) virou "${LEGACY_COLORS[k]}"` };
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(s);
+  if (m) {
+    const h = m[1].length === 3 ? m[1].replace(/./g, "$&$&") : m[1];
+    const rgb = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+    const dist = (c: number[]) => c.reduce((a, v, i) => a + (v - rgb[i]) ** 2, 0);
+    const best = Object.keys(COLOR_RGB).sort((a, b) => dist(COLOR_RGB[a]) - dist(COLOR_RGB[b]))[0];
+    return { value: best, note: `cor ${s} virou "${best}" (a mais próxima do Web)` };
+  }
+  throw new ApiError(400, `Cor inválida. Web: ${COLORS.join(", ")}. Nativo (convertido): blue, red, green, orange, purple, pink, cyan, yellow, white, charcoal, midnight. Também hex (#RRGGBB, vira a mais próxima) ou "default".`);
+}
+
+// Ícone do Web, nome SF Symbols do app nativo (convertido), um emoji (o Web não o desenha: vira "sparkles") ou "default"
+export function resolveIcon(raw: unknown): Look {
+  const s = String(raw).trim();
+  const k = s.toLowerCase();
+  if (k === "default") return { value: null };
+  if ((ICONS as readonly string[]).includes(k)) return { value: k };
+  if (ICON_ALIASES[k]) return { value: ICON_ALIASES[k], note: `ícone "${s}" (nativo) virou "${ICON_ALIASES[k]}"` };
+  if (/^\p{Extended_Pictographic}/u.test(s)) return { value: "sparkles", note: `emoji ${s} não é desenhado no Web: usei o ícone padrão "sparkles"` };
+  throw new ApiError(400, `Ícone inválido. Web: ${ICONS.join(", ")}. Nativo (convertido): ${Object.keys(ICON_ALIASES).join(", ")}. Também um emoji (vira "sparkles") ou "default".`);
+}
 
 const DEFAULT_STACK = "Fichário";
 const TITLE_MAX = 40;
@@ -48,12 +88,6 @@ export function registerNotesApi({ fastify, canvas, nodeApi }: Deps) {
 
   const assertUnlocked = (n: Obj, what: string) => {
     if (n.data?.locked === true) throw new ApiError(423, `A nota "${nt(n)}" está travada (locked): não é possível ${what}. Peça ao usuário para destravá-la no canvas.`);
-  };
-  const checkColor = (color: unknown) => {
-    if (color !== undefined && !(COLORS as readonly string[]).includes(String(color))) throw new ApiError(400, `Cor inválida. Opções: ${COLORS.join(", ")}.`);
-  };
-  const checkIcon = (icon: unknown) => {
-    if (icon !== undefined && !(ICONS as readonly string[]).includes(String(icon))) throw new ApiError(400, `Ícone inválido. Opções: ${ICONS.join(", ")}.`);
   };
 
   // Troca o conteúdo; se o título acompanha a primeira linha (nota sem nome fixo), renomeia e devolve o novo nome
@@ -140,6 +174,16 @@ export function registerNotesApi({ fastify, canvas, nodeApi }: Deps) {
     return { ok: true };
   }));
 
+  // note delete --stack: apaga o fichário e as páginas dele (recusa se alguma estiver travada)
+  fastify.delete(`${base}/stacks/:target`, wrap((c: Ctx, req: any) => {
+    const stack = findStack(c, String(req.params.target ?? ""));
+    if (!stack) throw new ApiError(404, `Fichário "${req.params.target}" não encontrado entre os alcançáveis (veja "maestri list").`);
+    const pages = c.nodes.filter((n) => n.data?.stackId === stack.id);
+    for (const p of pages) assertUnlocked(p, "apagar o fichário");
+    apply(c, { kind: "removeNodes", ids: [stack.id, ...pages.map((p) => p.id)] });
+    return { ok: true, stack: nt(stack), pages: pages.length };
+  }));
+
   fastify.post(`${base}/notes`, wrap((c: Ctx, req: any) => {
     const { title, text, name, stack, color } = req.body ?? {};
     // Forma antiga: { title, text } — o título vira nome fixo
@@ -148,7 +192,7 @@ export function registerNotesApi({ fastify, canvas, nodeApi }: Deps) {
     if (title !== undefined && (!isText(title, 200) || !title.trim())) throw new ApiError(400, "Título inválido.");
     if (name !== undefined && (!isText(name, 200) || !name.trim())) throw new ApiError(400, "Nome inválido.");
     if (stack !== undefined && stack !== true && (!isText(stack, 200) || !stack.trim())) throw new ApiError(400, "Nome de fichário inválido.");
-    checkColor(color);
+    const noteColor = color === undefined ? undefined : resolveColor(color).value ?? undefined;
     const pinned = String(name ?? title ?? "").trim();
     const base0 = pinned || titleFromContent(content) || "Nova nota";
     const finalTitle = uniqueTitle(c.nodes, "stickyNote", base0);
@@ -156,7 +200,7 @@ export function registerNotesApi({ fastify, canvas, nodeApi }: Deps) {
     const node = {
       id, type: "stickyNote", position: freePosition(visible(c), c.me, SIZES.stickyNote, "left"), style: { width: 280, height: 200 },
       data: {
-        title: finalTitle, color: color ?? "amber", author: `🤖 ${nt(c.me)}`, content, ...newNodeData(c.me),
+        title: finalTitle, color: noteColor ?? "amber", author: `🤖 ${nt(c.me)}`, content, ...newNodeData(c.me),
         ...(pinned ? { pinnedName: true } : { autoTitle: true }),
       },
     };
@@ -208,23 +252,32 @@ export function registerNotesApi({ fastify, canvas, nodeApi }: Deps) {
   }));
 
   fastify.post(`${base}/arrange`, wrap((c: Ctx, req: any) => {
-    const { target, name, icon, color } = req.body ?? {};
+    const { target, name, icon, color, kind } = req.body ?? {};
     if (name === undefined && icon === undefined && color === undefined) throw new ApiError(400, "Informe --name, --icon e/ou --color.");
     if (name !== undefined && (!isText(name, 64) || !name.trim())) throw new ApiError(400, "Nome inválido (até 64 caracteres).");
-    checkIcon(icon);
-    checkColor(color);
+    const ic = icon === undefined ? undefined : resolveIcon(icon);
+    const co = color === undefined ? undefined : resolveColor(color);
+    // --agent|--note|--band|--fichario: desambigua nomes repetidos entre tipos
+    if (kind !== undefined && (kind === "portal" || !KIND_TYPES[String(kind)])) throw new ApiError(400, "Tipo inválido. Use --agent, --note, --band ou --fichario.");
+    const type = kind === undefined ? undefined : KIND_TYPES[String(kind)];
     // Sem alvo = o próprio nó
     if (target !== undefined && (!isText(target, 200) || !target.trim())) throw new ApiError(400, "Informe o nome do alvo.");
-    const self = target === undefined || lc(target) === lc(nt(c.me));
+    const self = target === undefined || (lc(target) === lc(nt(c.me)) && (!type || type === c.me.type));
     // Banda (só Maestro): resolve entre as bandas a que pertenço ou estou ligado
-    const bandHit = self ? undefined : myBands(c.nodes, c.edges, c.me.id).find((b) => lc(nt(b)) === lc(target));
-    const t = self ? c.me : bandHit ?? resolveTarget(c, target);
+    const bandHit = self || (type && type !== "band") ? undefined : myBands(c.nodes, c.edges, c.me.id).find((b) => lc(nt(b)) === lc(target));
+    let t: Obj;
+    try {
+      t = self ? c.me : bandHit ?? resolveTarget(c, target, type);
+    } catch (e) {
+      if (!type && e instanceof ApiError && /ambíguo/.test(e.message)) throw new ApiError(e.status, `${e.message} Diga o tipo logo depois do nome: --agent, --note, --band ou --fichario.`);
+      throw e;
+    }
     if (!self && t.type === "agentTerminal") requireMaestro(c, "alterar o estilo de outro agente");
     if (isBand(t)) requireMaestro(c, "alterar o estilo de uma banda");
     if (!["agentTerminal", "stickyNote", "noteStack", "band"].includes(t.type)) throw new ApiError(400, "Só agentes, notas, fichários e bandas aceitam arrange.");
     const data: Obj = {};
-    if (icon !== undefined) data.icon = icon;
-    if (color !== undefined) data.color = color;
+    if (ic) data.icon = ic.value;
+    if (co) data.color = co.value;
     if (name !== undefined) {
       const n0 = name.trim();
       if (t.type === "agentTerminal") {
@@ -237,6 +290,7 @@ export function registerNotesApi({ fastify, canvas, nodeApi }: Deps) {
     }
     if (t.type === "stickyNote" && t.data?.locked === true && data.title) assertUnlocked(t, "renomeá-la");
     patch(c, t.id, data);
-    return { ok: true, title: data.title ?? nt(t) };
+    const converted = [ic?.note, co?.note].filter(Boolean);
+    return { ok: true, title: data.title ?? nt(t), ...(converted.length && { converted }) };
   }));
 }

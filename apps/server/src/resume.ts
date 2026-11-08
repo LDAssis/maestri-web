@@ -96,7 +96,8 @@ function resumeDirect(cmd: string, saved?: { program: string; id: string }): str
   }
   if (program === "codex") {
     // já tem subcomando (resume, exec...) ou prompt posicional: não mexe
-    if (strippedRest.some((t) => !t.value.startsWith("-") && !isAssign(t))) return cmd;
+    // (o valor de -m/--model não conta como prompt posicional)
+    if (strippedRest.some((t, i) => !t.value.startsWith("-") && !isAssign(t) && !(i > 0 && ["-m", "--model"].includes(strippedRest[i - 1].value)))) return cmd;
     return `${head} resume ${id ?? "--last"}${tail}`;
   }
   if (has(strippedRest, ["--continue", "-c", "--session", "-s"])) return cmd;
@@ -131,4 +132,60 @@ export function captureResume(text: string): { program: string; id: string } | n
     for (const m of clean.matchAll(re)) if (!found || m.index! > found.at) found = { program, id: m[1], at: m.index! };
   }
   return found && { program: found.program, id: found.id };
+}
+
+// ---- Modelo do agente (data.model do nó) ----
+// Valor permitido: letras/dígitos e . _ : / @ -, começando por letra ou dígito (nunca vira outra flag nem escapa do shell)
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$/;
+export const validModel = (v: unknown): v is string => typeof v === "string" && MODEL_RE.test(v);
+
+const MODEL_FLAGS: Record<string, { flags: string[]; arg: (m: string) => string }> = {
+  claude: { flags: ["--model"], arg: (m) => `--model ${m}` },
+  codex: { flags: ["-m", "--model"], arg: (m) => `-m ${m}` },
+  opencode: { flags: ["-m", "--model"], arg: (m) => `-m ${m}` }, // formato provider/modelo
+  agy: { flags: ["--model"], arg: (m) => `--model=${m}` },
+};
+const shQuote = (s: string) => (/^[A-Za-z0-9._:/@-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\''`)}'`);
+
+function withModelDirect(cmd: string, model: string): string {
+  const toks = tokenize(cmd);
+  let idx = 0;
+  while (idx < toks.length && (isAssign(toks[idx]) || WRAPPERS.has(path.basename(toks[idx].value)))) idx++;
+  const prog = toks[idx];
+  if (!prog) return cmd;
+  const spec = MODEL_FLAGS[path.basename(prog.value).replace(/\.(exe|cmd)$/i, "")];
+  if (!spec) return cmd;
+  // o comando já escolheu um modelo: vale o do comando
+  if (toks.slice(idx + 1).some((t) => spec.flags.some((f) => t.value === f || t.value.startsWith(`${f}=`)))) return cmd;
+  return `${cmd.slice(0, prog.end)} ${spec.arg(shQuote(model))}${cmd.slice(prog.end)}`;
+}
+
+// Acrescenta a flag de modelo do CLI (detectado pelo executável) logo depois do programa; shell/desconhecido ficam como estão.
+// Entra em `sh -c "..."` como a retomada faz. Valor inválido não vira comando.
+// claude: --settings '<json>' logo depois do programa (a statusLine que reporta o uso). Fora de sh -c (o JSON não cabe no quoting).
+// Um comando que já traz --settings fica como está.
+export function withUsageSettings(cmd: string, settings: string | undefined | null): string {
+  if (!cmd || !settings) return cmd;
+  const loc = locate(cmd);
+  if (loc.shell || loc.program !== "claude") return cmd;
+  const toks = tokenize(cmd);
+  let idx = 0;
+  while (idx < toks.length && (isAssign(toks[idx]) || WRAPPERS.has(path.basename(toks[idx].value)))) idx++;
+  const prog = toks[idx];
+  if (!prog || toks.slice(idx + 1).some((t) => t.value === "--settings" || t.value.startsWith("--settings="))) return cmd;
+  return `${cmd.slice(0, prog.end)} --settings ${shQuote(settings)}${cmd.slice(prog.end)}`;
+}
+
+export function withModel(cmd: string, model: string | undefined | null): string {
+  if (!cmd || !model || !validModel(model)) return cmd;
+  const loc = locate(cmd);
+  if (loc.shell) {
+    const { inner } = loc.shell;
+    const next = withModelDirect(inner.value, model);
+    if (next === inner.value) return cmd;
+    const q = inner.raw[0] === "'" ? "'" : '"';
+    if (next.includes(q) || next.includes("\\")) return cmd;
+    return `${cmd.slice(0, inner.start)}${q}${next}${q}${cmd.slice(inner.end)}`;
+  }
+  return withModelDirect(cmd, model);
 }

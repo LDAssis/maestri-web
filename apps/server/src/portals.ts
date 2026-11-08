@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { chromium, type Browser, type BrowserContext, type Page, type Locator } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type Page, type Locator, type CDPSession } from "playwright-core";
 import type { WebSocket } from "ws";
 import type { CanvasStore } from "./canvas.js";
 import { ApiError } from "./agents.js";
@@ -13,7 +13,7 @@ export const DEFAULT_VIEWPORT = { w: 1280, h: 800 };
 const ACTION_TIMEOUT = 5000;
 const NAV_TIMEOUT = 20_000;
 const MAX_POPUPS = 8; // popups abertos ao mesmo tempo por portal raiz
-const FRAME_MS = Number(process.env.MAESTRI_PORTAL_FRAME_MS) || 700;
+const FRAME_MS = Number(process.env.MAESTRI_PORTAL_FRAME_MS) || 150; // intervalo mínimo entre frames enviados
 const SNAPSHOT_MAX = 300;
 
 // Presets de user agent (o mesmo conjunto do Maestri nativo); desktop = sem override
@@ -93,8 +93,12 @@ interface Entry {
   logs: string[];
   logging: boolean;
   watchers: Set<WebSocket>;
-  timer?: NodeJS.Timeout;
-  capturing: boolean;
+  views: Map<WebSocket, { w: number; h: number }>; // tamanho pedido por cada observador ({type:"view"})
+  cast?: { cdp: CDPSession; page: Page; size: string }; // screencast ativo (só enquanto há observadores)
+  castQ: Promise<unknown>; // liga/desliga/reinicia o screencast em ordem
+  held?: { jpg: Buffer; ack: () => void }; // frame esperando o intervalo mínimo
+  heldTimer?: NodeJS.Timeout;
+  lastSentAt: number;
   lastFrame?: Buffer;
   lastMeta?: string;
   queue: Promise<unknown>;
@@ -202,7 +206,7 @@ export class PortalManager {
   private register(projectId: string, nodeId: string, ctx: BrowserContext, page: Page, owner: boolean, viewport: { w: number; h: number }, parent?: string) {
     const e: Entry = {
       key: this.key(projectId, nodeId), projectId, nodeId, ctx, owner, page, ua: null, viewport,
-      logs: [], logging: false, watchers: new Set(), capturing: false, queue: Promise.resolve(), popups: 1, parent,
+      logs: [], logging: false, watchers: new Set(), views: new Map(), castQ: Promise.resolve(), lastSentAt: 0, queue: Promise.resolve(), popups: 1, parent,
     };
     this.entries.set(e.key, e);
     this.attachPage(e, page);
@@ -223,6 +227,7 @@ export class PortalManager {
       if (url && node && node.data?.url !== url) this.patchNode(e, { url });
       void this.pushFrame(e);
     });
+    page.on("load", () => void this.pushFrame(e));
     page.on("popup", (pop) => void this.adoptPopup(e, pop));
     page.on("close", () => {
       if (e.page !== page) return; // página antiga (troca de contexto pelo ua)
@@ -290,14 +295,14 @@ export class PortalManager {
   }
 
   private stopWatching(e: Entry) {
-    if (e.timer) clearInterval(e.timer);
-    e.timer = undefined;
     for (const ws of e.watchers) {
       try {
         ws.close(1000, "Portal fechado");
       } catch {}
     }
     e.watchers.clear();
+    e.views.clear();
+    this.syncCast(e);
   }
 
   // Nós removidos do canvas (ou projeto apagado): fecha as páginas e, no fim, o navegador
@@ -363,29 +368,71 @@ export class PortalManager {
     return JSON.stringify({ type: "meta", url: e.page.url(), title, w: e.viewport.w, h: e.viewport.h });
   }
 
-  // Captura um JPEG e manda aos observadores (só se algo mudou)
-  async pushFrame(e: Entry, force = false) {
-    if (!e.watchers.size || e.capturing || e.page.isClosed()) return;
-    e.capturing = true;
-    try {
-      const jpg = await e.page.screenshot({ type: "jpeg", quality: 55, timeout: 4000 });
-      const meta = await this.meta(e);
-      const same = !force && e.lastFrame?.equals(jpg) && e.lastMeta === meta;
-      if (same) return;
+  // Manda url/título aos observadores, só quando mudam (navegação, load, depois de ações)
+  async pushFrame(e: Entry) {
+    if (!e.watchers.size || e.page.isClosed()) return;
+    const meta = await this.meta(e);
+    if (meta === e.lastMeta) return;
+    e.lastMeta = meta;
+    for (const ws of e.watchers) if (ws.readyState === 1) ws.send(meta);
+  }
+
+  // Maior tamanho pedido entre os observadores; sem pedido, o viewport
+  private castSize(e: Entry) {
+    let w = 0;
+    let h = 0;
+    for (const v of e.views.values()) (w = Math.max(w, v.w)), (h = Math.max(h, v.h));
+    return w && h ? `${w}x${h}` : `${e.viewport.w}x${e.viewport.h}`;
+  }
+
+  private syncCast(e: Entry) {
+    e.castQ = e.castQ.then(() => this.applyCast(e)).catch(() => {});
+  }
+
+  // Screencast do CDP: sem observadores ou página parada, nenhum frame
+  private async applyCast(e: Entry) {
+    const want = e.watchers.size > 0 && !e.page.isClosed();
+    const size = want ? this.castSize(e) : "";
+    if (e.cast && (!want || e.cast.page !== e.page || e.cast.size !== size)) {
+      const { cdp } = e.cast;
+      e.cast = undefined;
+      clearTimeout(e.heldTimer);
+      e.heldTimer = undefined;
+      e.held = undefined;
+      await cdp.send("Page.stopScreencast").catch(() => {});
+      await cdp.detach().catch(() => {});
+    }
+    if (!want || e.cast) return;
+    const [maxWidth, maxHeight] = size.split("x").map(Number);
+    const cdp = await e.page.context().newCDPSession(e.page);
+    cdp.on("Page.screencastFrame", ({ data, sessionId }: { data: string; sessionId: number }) => {
+      const ack = () => void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
+      if (e.cast?.cdp !== cdp) return ack();
+      this.onFrame(e, Buffer.from(data, "base64"), ack);
+    });
+    e.cast = { cdp, page: e.page, size };
+    await cdp.send("Page.startScreencast", { format: "jpeg", quality: 55, maxWidth, maxHeight, everyNthFrame: 1 });
+  }
+
+  // No máximo 1 frame a cada FRAME_MS; o excedente espera (o mais novo vence) e o ack só sai quando o frame é enviado
+  private onFrame(e: Entry, jpg: Buffer, ack: () => void) {
+    e.held?.ack();
+    e.held = { jpg, ack };
+    if (e.heldTimer) return;
+    e.heldTimer = setTimeout(() => {
+      e.heldTimer = undefined;
+      const h = e.held;
+      e.held = undefined;
+      if (!h) return;
+      e.lastSentAt = Date.now();
+      e.lastFrame = h.jpg;
       for (const ws of e.watchers) {
-        if (ws.readyState !== 1) continue;
         try {
-          if (e.lastMeta !== meta) ws.send(meta);
-          ws.send(jpg, { binary: true });
+          if (ws.readyState === 1) ws.send(h.jpg, { binary: true });
         } catch {}
       }
-      e.lastFrame = jpg;
-      e.lastMeta = meta;
-    } catch {
-      // página navegando/fechando: o próximo ciclo tenta de novo
-    } finally {
-      e.capturing = false;
-    }
+      h.ack();
+    }, Math.max(0, FRAME_MS - (Date.now() - e.lastSentAt)));
   }
 
   // Cliente do canvas passa a observar a sessão (abre a página se preciso)
@@ -406,6 +453,7 @@ export class PortalManager {
       } catch {
         return;
       }
+      if (msg?.type === "view") return this.setView(e, socket, msg);
       void this.userInput(e, msg).catch((err) => say({ type: "error", error: err?.message ?? String(err) }));
     };
     socket.on("message", (raw: Buffer | string) => {
@@ -416,10 +464,8 @@ export class PortalManager {
       closed = true;
       if (!entry) return;
       entry.watchers.delete(socket);
-      if (!entry.watchers.size && entry.timer) {
-        clearInterval(entry.timer);
-        entry.timer = undefined;
-      }
+      entry.views.delete(socket);
+      this.syncCast(entry);
     });
 
     let e: Entry;
@@ -435,11 +481,23 @@ export class PortalManager {
     if (closed) return;
     entry = e;
     e.watchers.add(socket);
-    e.lastFrame = undefined;
-    e.lastMeta = undefined;
-    if (!e.timer) e.timer = setInterval(() => void this.pushFrame(e), FRAME_MS);
-    void this.pushFrame(e, true);
+    // Quem chega agora recebe url/título e o último frame na hora (a página pode estar parada); os outros já têm
+    e.lastMeta = await this.meta(e);
+    try {
+      socket.send(e.lastMeta);
+      if (e.lastFrame) socket.send(e.lastFrame, { binary: true });
+    } catch {}
+    this.syncCast(e);
     for (const raw of queued.splice(0)) handle(e, raw);
+  }
+
+  // {type:"view", maxWidth, maxHeight}: tamanho máximo (px) em que este observador quer os frames
+  private setView(e: Entry, socket: WebSocket, m: Obj) {
+    const [w, h] = [Number(m.maxWidth), Number(m.maxHeight)];
+    if (![w, h].every((n) => Number.isInteger(n))) return;
+    const clamp = (n: number) => Math.min(4096, Math.max(200, n));
+    e.views.set(socket, { w: clamp(w), h: clamp(h) });
+    this.syncCast(e);
   }
 
   // Cliques, digitação, rolagem e navegação feitos pelo usuário no nó
@@ -516,7 +574,9 @@ export class PortalManager {
     e.page = page;
     e.ua = ua;
     this.attachPage(e, page);
+    e.cast = undefined; // o CDP antigo morre junto com o contexto
     await old.close().catch(() => {});
+    this.syncCast(e);
     if (httpUrl(url)) await this.goto(e, url);
   }
 }
@@ -581,6 +641,15 @@ async function target(e: Entry, sel: string | undefined): Promise<Target> {
 const need = (args: string[], n: number, usage: string) => {
   if (args.length < n) throw new ApiError(400, `uso: ${usage}`);
 };
+
+// Ponto central do alvo (x,y direto, ou o centro do elemento)
+async function centerOf(e: Entry, sel: string | undefined) {
+  const t = await target(e, sel);
+  if (t.point) return t.point;
+  const box = await t.loc.boundingBox({ timeout: ACTION_TIMEOUT });
+  if (!box) throw new ApiError(400, `elemento sem posição na tela: ${sel}`);
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
 
 async function focusTarget(e: Entry, sel: string | undefined) {
   if (!sel) return;
@@ -783,11 +852,23 @@ const COMMANDS: Record<string, Handler> = {
     return "ok";
   },
 
+  // Sem alvo: espiar (screenshot, devolve o caminho), como o nativo; com alvo, marca a caixa
   async check(_m, e, a) {
-    need(a, 1, 'check "Portal" <seletor>');
+    if (!a.length) return COMMANDS.screenshot(_m, e, a);
     const t = await target(e, a[0]);
     if (!t.loc) throw new ApiError(400, "check não aceita coordenadas.");
     await t.loc.check({ timeout: ACTION_TIMEOUT });
+    return "ok";
+  },
+
+  // drag <de> <para>: pressiona em um ponto/elemento, arrasta em passos (para bibliotecas de drag-and-drop) e solta no outro
+  async drag(_m, e, a) {
+    need(a, 2, 'drag "Portal" <de> <para>');
+    const [from, to] = [await centerOf(e, a[0]), await centerOf(e, a[1])];
+    await e.page.mouse.move(from.x, from.y);
+    await e.page.mouse.down();
+    await e.page.mouse.move(to.x, to.y, { steps: 10 });
+    await e.page.mouse.up();
     return "ok";
   },
 

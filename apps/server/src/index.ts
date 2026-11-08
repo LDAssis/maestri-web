@@ -16,6 +16,8 @@ import { registerCommApi } from "./commApi.js";
 import { registerTeamApi } from "./teamApi.js";
 import { registerNotesApi } from "./notesApi.js";
 import { registerWorkspacesApi } from "./workspacesApi.js";
+import { registerModelsApi } from "./models.js";
+import { UsageStore, registerUsageApi } from "./usage.js";
 import { SessionHistory } from "./sessionHistory.js";
 import { AccountStore } from "./accounts.js";
 import { registerAccountsApi } from "./accountsApi.js";
@@ -183,6 +185,10 @@ const sessions = new SessionManager({
     const n = canvas.state(projectId).nodes?.find((x) => x.id === nodeId);
     return accounts.envFor(n?.data?.baseCmd ?? n?.data?.defaultCmd, n?.data?.account);
   },
+  model: (projectId, nodeId) => {
+    const m = canvas.state(projectId).nodes?.find((x) => x.id === nodeId)?.data?.model;
+    return typeof m === "string" && m ? m : undefined;
+  },
 });
 const presence = new PresenceHub();
 const canvas = new CanvasStore(canvasFileFor, writeJsonAtomic, (projectId, ids) => {
@@ -200,6 +206,10 @@ const canvas = new CanvasStore(canvasFileFor, writeJsonAtomic, (projectId, ids) 
   sweepBands(canvas, projectId, "sweep");
   sessionHistory.dropNodes(projectId, ids);
 });
+// Mudou data.model de um agente que está rodando: reinicia o terminal (remonta o comando com o modelo novo e retoma a conversa)
+canvas.onModelChange = (projectId, nodeId) => {
+  if (sessions.get(projectId, nodeId)) sessions.restart(projectId, nodeId);
+};
 
 fastify.addHook("onClose", async () => {
   canvas.flushAll();
@@ -257,7 +267,11 @@ registerGlobalRolesApi({ fastify, canvas, dataDir, projectRepo, projectIds: () =
 const routines = registerRoutinesApi({ fastify, sessions, canvas, projectRepo, projectName: (id) => projects.find((p) => p.id === id)?.name, floorCwd: (p, n, nodes) => floors.cwdForNode(p, n, nodes), dataDir, typeAndWait, isChatBusy: (p, n) => chatBusy.has(`${p}:${n}`) });
 registerFilesApi({ fastify, projectRepo });
 registerDownloadsApi({ fastify, projectRepo });
-registerWorkspacesApi({ fastify, canvas, projects, saveProjects, dataDir, writeJson: writeJsonAtomic, floors, nodeApi, createFloor: floorsApi.createFloor as any });
+registerModelsApi({ fastify, projectRepo });
+const usageStore = new UsageStore(path.join(dataDir, "usage.json"), writeJsonAtomic);
+registerUsageApi({ fastify, canvas, projectRepo, store: usageStore });
+fastify.addHook("onClose", async () => usageStore.flush());
+registerWorkspacesApi({ fastify, canvas, projects, saveProjects, dataDir, writeJson: writeJsonAtomic, floors, nodeApi, sessions, createFloor: floorsApi.createFloor as any });
 
 // Endpoints de Projetos
 

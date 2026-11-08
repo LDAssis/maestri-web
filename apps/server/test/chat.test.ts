@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.mkdtempSync(path.join(os.tmpdir(), "maestri-chat-test-"));
 process.env.REPO_PATH = repo;
@@ -90,6 +91,8 @@ before(async () => {
   });
   assert.equal(res.statusCode, 200);
   agent = await connect(`/ws/terminal?project=${P}&node=agent&token=tok-chat`);
+  // PTY de 80 colunas + prompt longo: o readline quebra a linha ecoada com retorno de carro e os testes que casam texto no eco falham
+  agent.send(JSON.stringify({ type: "resize", cols: 500, rows: 24 }));
   proj = await connect(`/ws/project/${P}?token=tok-chat&clientId=browser`);
   await until(() => agent.raw.length > 0 && proj.got.length > 0, "sessão e snapshot");
   // Espera o shell executar um comando de verdade: antes disso só o eco do tty chega e a captura (quiet 600ms) encerra sem a saída
@@ -106,7 +109,7 @@ after(async () => {
   agent.close();
   proj.close();
   await fastify.close();
-  fs.rmSync(repo, { recursive: true, force: true });
+  rmTmp(repo);
 });
 
 test("envio grava user, marca chatBusy, responde 202, captura a saída e grava terminal", async () => {

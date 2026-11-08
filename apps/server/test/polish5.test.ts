@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { rmTmp } from "./rmtmp.js";
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-polish5-test-")));
 const repo = path.join(tmp, "principal");
@@ -80,7 +81,7 @@ before(async () => {
 
 after(async () => {
   await fastify.close();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  rmTmp(tmp);
 });
 
 // ---------- acordar agentes ----------

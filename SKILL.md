@@ -29,10 +29,11 @@ maestri note write "Notas" "texto"                       # substitui o conteúdo
 maestri note append "Notas" "mais uma linha"             # acrescenta
 maestri note edit "Notas" "antigo" "novo"                # troca um trecho (precisa aparecer exatamente uma vez)
 maestri note delete "Notas"                              # remove a nota (destrutivo: só se o usuário pedir)
+maestri note delete --stack "Fichário"                   # apaga o fichário e as notas dele (destrutivo; recusa se houver nota travada)
 maestri note create ["conteúdo"] [--name "Nome"] [--stack ["Fichário"]] [--color C]   # nome = 1ª linha, a menos que --name fixe; imprime o nome exato
 maestri note stack "Notas" ["Fichário"]                  # guarda a nota num fichário (cria se preciso)
 maestri note unstack "Notas"                             # tira do fichário
-maestri arrange ["Nome"] [--name N] [--icon I] [--color C]   # renomeia/estiliza você, uma nota ou (Maestro) um agente; sem args mostra; --help lista ícones/cores
+maestri arrange ["Nome"] [--name N] [--icon I] [--color C] [--agent|--note|--band|--fichario]   # renomeia/estiliza você, uma nota ou (Maestro) um agente; sem args mostra; --help lista ícones/cores; a flag de tipo só é preciso quando o mesmo nome existe em mais de um tipo
 maestri note create "Decisões" "texto"                   # forma antiga: título fixo + texto
 
 maestri portal navigate "Preview" "http://localhost:3000"   # só http/https (veja "Portais" abaixo para a automação completa)
@@ -62,6 +63,8 @@ maestri portal click "Preview" @e1                       # seletor: @eN, CSS (#i
 maestri portal fill "Preview" @e2 "texto"                # substitui; type acrescenta (sem seletor: elemento focado)
 maestri portal key "Preview" "Enter"                     # Tab, Escape, Backspace, setas, Space, ctrl+a, shift+tab...
 maestri portal select "Preview" @e5 "Texto da opção"     # check/uncheck @e6; upload @e4 ./arquivo.pdf
+maestri portal check "Preview"                           # sem alvo só espia: imprime o caminho de um screenshot
+maestri portal drag "Preview" @e3 @e7                    # arrasta de um elemento/ponto até outro (@eN, CSS ou x,y)
 maestri portal scroll "Preview" down 300 [x,y|@ref]      # scrollintoview @e10
 maestri portal text|html|evaluate|info|screenshot "Preview" ...   # screenshot imprime o caminho do PNG
 maestri portal logs-start "Preview"; maestri portal logs "Preview"   # console (logs devolve e limpa)
@@ -122,9 +125,15 @@ maestri recruit "Hawk" --role "Code Reviewer"          # sem --preset = cópia s
 maestri recruit "Lynx" --preset "Codex" --dir sub/pkg --color rose --icon bot
 maestri recruit "Codex" --preset "Codex" --replace "Claude"   # troca o processo NO MESMO nó (cordas, posição e rotinas ficam)
 maestri connect "Reviewer" "Tester"                    # agente↔agente; nota/portal só no mesmo andar; portal só com agente
+maestri connect "Soundcheck" "Setlist" --note           # nome repetido entre tipos: --agent|--band|--note|--fichario|--portal logo DEPOIS do nome que ela qualifica
 maestri preset list | show "X" | create "X" --command "claude --model opus" --maestro on | set "X" --chat on | delete "X"
-maestri role list | show "X" | create "X" "prompt" [--scope global] | edit "X" "antigo" "novo" | write "X" "prompt" | assign "Hawk" "X"
+maestri role list | show "X" | create "X" "prompt" [--scope global] | edit "X" "antigo" "novo" | write "X" "prompt" | assign "Hawk" "X" | delete "X" [--force]
 maestri band create "Squad" [--without-me]  |  band add|remove|dissolve "Squad" ["Agente"]
+maestri recruit "Hawk" --preset claude --model opus        # --model: claude --model, codex/opencode -m (provider/modelo), agy --model=; muda também pelo chip do nó
+maestri partitura list | insert "Time" [--floor F] [--workspace W]   # time salvo: coloca ao lado de você, liga aos Maestros dele (senão a todos), inicia os terminais; a resposta diz quem receber ask
+maestri partitura create "Time" ["Agente" ...] [--without-me] [--commands on|off] [--note-text on|off] [--chat-history on|off] [--description D] [--icon I] [--color C] [--scope current|global]
+maestri partitura update "Time" ["Agente" ...] [--name N] [...mesmas opções]   |   partitura delete "Time"   # só a pedido do usuário
+maestri floor create "Nome" --partitura "Time"            # cria o andar e já coloca o time nele
 ```
 Antes de recrutar rode `maestri list`: se já há alguém com o role certo, delegue com `ask`. Bandas só quando o usuário pedir. Presets novos ficam nas configurações globais; roles `--scope global` ficam no diretório de dados do servidor. `--floor "Andar"` põe o recruta/banda no andar (cwd = checkout do andar); recrutas, bandas e portais nascem no andar de quem os criou.
 
@@ -140,7 +149,7 @@ maestri floor create ["Nome"] --pull-request N|URL [--copy] [--copy-ground]     
 maestri floor land "Nome" [--into BRANCH] [--delete-branch] [--keep-floor]                # só Maestro, do térreo; só se o usuário pedir
 maestri floor delete "Nome" [--keep-branch] [--force]                                      # só Maestro, do térreo; só se o usuário pedir
 maestri floor unload "Nome"                                                                # só Maestro; não o seu andar
-maestri workspace list | create "Nome" --dir PATH [--from "Origem"] [--group G] [--folder F] | rename "A" "B" | move "Nome" --group G | --folder F | --root   # só Maestro
+maestri workspace list | create "Nome" --dir PATH [--from "Origem"] [--group G] [--folder F] | rename "A" "B" | move "Nome" --group G | --folder F | --root | unload "Nome"   # só Maestro; unload encerra os terminais (não o seu workspace)
 ```
 `floor land` recusa (sem alterar nada) se houver trabalho não commitado no andar ou no térreo, ou conflito de merge; peça ao
 agente do andar para commitar antes. Workspaces não têm delete pela CLI.
@@ -173,7 +182,7 @@ quer um andar para a tarefa descrita. Como reagir (você precisa ser o Maestro; 
 Andares de PR: o seletor de andar mostra o PR (estado, review, checks), mescla com `gh pr merge` (merge, squash ou rebase; com checks
 falhando/pendentes pede confirmação) e passa a seguir sozinho o PR aberto para a branch do andar (detecção pelo `gh pr list --head`).
 `maestri workspace create --from` recria os andares git do origem como andares git no destino (a resposta lista o que caiu para sem git).
-`maestri arrange` também aceita uma banda (Maestro): nome, ícone e cor. `maestri note create` põe a nota à esquerda do seu terminal.
+`maestri arrange` também aceita uma banda (Maestro): nome, ícone e cor. Ícones e cores aceitam também os nomes do app nativo, convertidos para o mais próximo do Web (a resposta diz qual usou): SF Symbols como `sparkle`, `gearshape`, `server.rack`, `bolt`, `doc.text` (→ `sparkles`, `wrench`, `database`, `zap`, `book`); cores `blue`/`cyan`→`sky`, `purple`→`violet`, `pink`/`red`→`rose`, `green`→`emerald`, `yellow`→`amber`, `white`/`charcoal`→`slate`, `midnight`→`indigo`; hex `#RRGGBB` vira a cor do Web mais próxima; um emoji vira o ícone `sparkles` (o Web não o desenha); `default` volta ao padrão. Valor inválido lista as duas formas. `maestri note create` põe a nota à esquerda do seu terminal.
 
 ## CLI: PATH, flags e workspaces
 Se `maestri` não for encontrado no PATH, use `"$MAESTRI_CLI"` (caminho absoluto do binário, sempre definido no terminal). Flags desconhecidas falham ("Flag desconhecida: --x") — nunca adivinhe uma flag; para um texto que comece com `--`, ponha `--` antes dele (`maestri send "A" -- "--foo"`).

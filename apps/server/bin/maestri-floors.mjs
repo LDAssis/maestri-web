@@ -2,7 +2,7 @@
 // Carregado automaticamente por bin/maestri.
 
 const FLOOR_HELP = `maestri floor list
-maestri floor create "Nome" [--branch NOME] [--existing-branch] [--copy] [--no-git] [--copy-ground]   (Maestro)
+maestri floor create "Nome" [--branch NOME] [--existing-branch] [--copy] [--no-git] [--copy-ground] [--partitura P]   (Maestro)
 maestri floor create ["Nome"] --pull-request NUMERO|URL [--copy] [--copy-ground]                (Maestro; usa o gh)
 maestri floor land "Nome" [--into BRANCH] [--delete-branch] [--keep-floor]                     (Maestro, só do térreo)
 maestri floor delete "Nome" [--keep-branch] [--force]                                          (Maestro, só do térreo)
@@ -20,8 +20,10 @@ const WORKSPACE_HELP = `maestri workspace list
 maestri workspace create "Nome" --dir PATH [--from "Origem"] [--group G] [--folder F] [--root]
 maestri workspace rename "Antigo" "Novo"
 maestri workspace move "Nome" --group G | --folder F | --root | --pin | --unpin
+maestri workspace unload "Nome"
 Só o Maestro. Workspace = projeto. O diretório de create precisa existir; --from copia o layout do canvas com ids novos,
-reescrevendo caminhos sob o diretório de origem (sem sessões). Não há delete pela CLI.`;
+reescrevendo caminhos sob o diretório de origem (sem sessões). Não há delete pela CLI.
+unload encerra os terminais do workspace (o canvas fica; ask/send/check os acordam de novo); não vale para o seu próprio workspace.`;
 
 const bar = (p) => (p == null ? "" : ` [${"█".repeat(Math.round(p * 10))}${"░".repeat(10 - Math.round(p * 10))}] ${Math.round(p * 100)}%`);
 const statusLine = (s) => (s ? ` — ${s.state}${bar(s.progress)}${s.text ? `: ${s.text}` : ""}` : "");
@@ -37,12 +39,21 @@ export function register({ call, need, CliError }) {
       }
     } else if (sub === "create") {
       if (flags["pull-request"] === undefined) need(pos, 2, 'floor create "Nome" [--branch NOME] [--existing-branch] [--copy] [--no-git] [--copy-ground]');
+      // --partitura P: confere antes de criar (não deixa andar sobrando) e coloca o time no andar novo
+      if (flags.partitura !== undefined) {
+        const { partituras } = await call("GET", "/partituras");
+        if (!partituras.some((p) => p.name.toLowerCase() === String(flags.partitura).toLowerCase())) throw new CliError(`Partitura "${flags.partitura}" não encontrada (veja "maestri partitura list").`);
+      }
       const r = await call("POST", "/floors", {
         name, branch: flags.branch, existingBranch: flags["existing-branch"], noGit: flags["no-git"], copyGround: flags["copy-ground"],
         copy: flags.copy, pullRequest: flags["pull-request"],
       });
       const f = r.floor;
       console.log(`Andar "${f.name}" criado${f.git ? ` ${f.copy ? "(clone isolado) " : ""}na branch ${f.branch} (${f.path})` : ""}; ${f.nodes} nó(s).${r.note ? ` ${r.note}` : ""}`);
+      if (flags.partitura !== undefined) {
+        const p = await call("POST", "/partituras/insert", { name: flags.partitura, floor: f.name });
+        console.log(`Partitura "${p.name}" colocada no andar "${p.floor}": ${p.agents} agente(s).${p.reachable.length ? ` Para dar ask: ${p.reachable.map((n) => `"${n}"`).join(", ")}.` : ""}`);
+      }
     } else if (sub === "land") {
       need(pos, 2, 'floor land "Nome" [--into BRANCH] [--delete-branch] [--keep-floor]');
       const r = await call("POST", "/floors/land", { name, into: flags.into, deleteBranch: flags["delete-branch"], keepFloor: flags["keep-floor"] });
@@ -106,18 +117,22 @@ export function register({ call, need, CliError }) {
       const moved = flags.group !== undefined || flags.folder !== undefined || flags.root;
       if (moved) console.log(`Workspace "${name}" movido para ${r.group ? `o grupo "${r.group}"` : "a raiz"}${r.folder ? `, pasta "${r.folder}"` : ""}${flags.pin ? " e fixado" : flags.unpin ? " e desafixado" : ""}.`);
       else console.log(`Workspace "${name}" ${flags.pin ? "fixado" : "desafixado"}.`);
-    } else throw new CliError('Uso: maestri workspace list|create|rename|move ... (veja "maestri workspace --help")');
+    } else if (sub === "unload") {
+      need(pos, 2, 'workspace unload "Nome"');
+      const r = await call("POST", "/workspaces/unload", { name });
+      console.log(`Workspace "${r.name}" descarregado (${r.terminals} terminal(is) encerrado(s)).`);
+    } else throw new CliError('Uso: maestri workspace list|create|rename|move|unload ... (veja "maestri workspace --help")');
   }
 
   return {
     commands: { floor, workspace },
     help: { floor: FLOOR_HELP, workspace: WORKSPACE_HELP },
-    flags: ["--branch", "--into", "--dir", "--from", "--group", "--folder", "--state", "--progress", "--floor", "--pull-request"],
+    flags: ["--branch", "--into", "--dir", "--from", "--group", "--folder", "--state", "--progress", "--floor", "--pull-request", "--partitura"],
     boolFlags: ["--existing-branch", "--copy", "--no-git", "--copy-ground", "--delete-branch", "--keep-floor", "--keep-branch", "--force", "--clear", "--root", "--pin", "--unpin"],
     summary: [
       "Andares e workspaces:",
       '  floor list|create|land|delete|status|unload   Andares do canvas (veja "maestri floor --help"); status é de qualquer agente',
-      '  workspace list|create|rename|move             (Maestro) Workspaces/projetos na barra lateral (veja "maestri workspace --help")',
+      '  workspace list|create|rename|move|unload      (Maestro) Workspaces/projetos na barra lateral (veja "maestri workspace --help")',
     ],
   };
 }

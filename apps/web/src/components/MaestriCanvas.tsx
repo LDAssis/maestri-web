@@ -21,9 +21,10 @@ import {
   ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { wsUrl } from "@/lib/api";
+import { apiFetch, wsUrl } from "@/lib/api";
 import { ProjectIdContext } from "@/lib/projectContext";
 import { usePresenceStore } from "@/lib/presence";
+import { UsageIndicator } from "./UsageMeter";
 import { PresenceLayer } from "./PresenceUI";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
@@ -55,6 +56,12 @@ import RolesPanel from "./RolesPanel";
 import { CommandPalette, ContextMenu, ShortcutsHelp, MenuState } from "./CanvasOverlays";
 import { Download, Upload, Plus, UserCog, RefreshCw, StickyNote, Globe, FolderTree, FileDiff, Bell, PenTool } from "lucide-react";
 
+// crypto.randomUUID só existe em contexto seguro (HTTPS/localhost); no http://IP-da-rede cai no getRandomValues
+const uid = () =>
+  typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+
 interface MaestriCanvasProps {
   projectId: string;
   projectName: string;
@@ -72,7 +79,6 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
       data: {
         title: "Agente 01: Arquiteto",
         role: "Planejamento e Orquestração",
-        model: "Claude 3.5 Sonnet",
         status: "running",
         branch: "main/planning",
         isMaestro: true,
@@ -100,7 +106,6 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
       data: {
         title: "Agente 02: Backend Coder",
         role: "Implementação API & Banco",
-        model: "Claude 3.5 Sonnet",
         status: "idle",
         branch: "agent/backend-oauth",
         defaultCmd: "echo 'Backend Coder pronto. Clique no botão [claude] para iniciar:'",
@@ -114,7 +119,6 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
       data: {
         title: "Agente 03: Frontend Coder",
         role: "Telas e Componentes UI",
-        model: "GPT-4o",
         status: "idle",
         branch: "agent/frontend-oauth",
         defaultCmd: "echo 'Frontend Coder pronto. Clique no botão [opencode] para iniciar:'",
@@ -138,7 +142,6 @@ const defaultPartituraFullstack: { nodes: Node<any>[]; edges: Edge[] } = {
       data: {
         title: "Agente 04: QA & Code Reviewer",
         role: "Validação Cruzada de Diffs",
-        model: "Gemini 1.5 Pro",
         status: "waiting",
         branch: "stage/review-gate",
         defaultCmd: "git status",
@@ -300,8 +303,11 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
   const flowRef = useRef<ReactFlowInstance | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const nodesRef = useRef<Node<any>[]>([]);
+  // Posições já entregues por getSpawnPosition que ainda não chegaram ao `nodes` do closure (cliques/atalhos antes do próximo render)
+  const spawnedRef = useRef<Node<any>[]>([]);
   const edgesRef = useRef<Edge[]>([]);
   nodesRef.current = nodes;
+  spawnedRef.current = []; // o render já traz os nós criados: reservas de posição não precisam mais
   edgesRef.current = edges;
 
   // Títulos dos nós para o painel de presença ("digitando no Agente 01")
@@ -441,6 +447,16 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
           pushNotification(msg.from, String(msg.text ?? ""));
         } else if (msg.type === "error") {
           console.warn("Op recusada pelo servidor:", msg.error);
+          // patch de data.model recusado: o chip não pode ficar com o valor local; volta ao do servidor (só data.model, sem mexer em posição)
+          if (/^Modelo inválido/.test(String(msg.error))) {
+            apiFetch(`/api/projects/${projectId}/canvas`)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((c) => {
+                const srv = new Map<string, unknown>((c?.nodes ?? []).map((n: any) => [n.id, n.data?.model]));
+                if (srv.size) setNodes((nds) => nds.map((n) => (srv.has(n.id) && (n.data as any)?.model !== srv.get(n.id) ? { ...n, data: { ...n.data, model: srv.get(n.id) } } : n)));
+              })
+              .catch(() => {});
+          }
         }
       };
 
@@ -565,30 +581,48 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     [setEdges, sendOp]
   );
 
-  // Centro da viewport atual (nó centralizado), deslocado em passos de 40px até não sobrepor outro nó
+  // Centro da viewport atual (nó centralizado); se estiver coberto, o primeiro espaço livre DENTRO da área visível
+  // (grade de 40px, do centro para fora). Sem espaço livre, fica no centro sobreposto: nunca nasce fora da tela.
   const getSpawnPosition = (w: number, h: number) => {
+    const pos = pickSpawnPosition(w, h);
+    spawnedRef.current.push({ id: `spawn-${spawnedRef.current.length}`, position: pos, style: { width: w, height: h }, data: {} } as Node<any>);
+    return pos;
+  };
+  const pickSpawnPosition = (w: number, h: number) => {
     const rect = containerRef.current?.getBoundingClientRect();
     const flow = flowRef.current;
     if (!rect || !flow) return { x: 300, y: 200 };
-    const c = flow.screenToFlowPosition({
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-    });
+    const tl = flow.screenToFlowPosition({ x: rect.left, y: rect.top });
+    const br = flow.screenToFlowPosition({ x: rect.right, y: rect.bottom });
+    const c = flow.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
     const size = (n: Node<any>) => ({
       w: Number(n.measured?.width ?? n.style?.width ?? 300) || 300,
       h: Number(n.measured?.height ?? n.style?.height ?? 200) || 200,
     });
-    let pos = { x: c.x - w / 2, y: c.y - h / 2 };
-    // Empurra para a direita do nó que cobre a posição até achar espaço livre (x só cresce, então termina)
-    for (;;) {
-      const { x, y } = pos;
-      const hit = nodes.find((n) => {
+    const center = { x: c.x - w / 2, y: c.y - h / 2 };
+    const free = (x: number, y: number) =>
+      ![...nodesRef.current, ...spawnedRef.current].some((n) => {
         const s = size(n);
         return x < n.position.x + s.w && x + w > n.position.x && y < n.position.y + s.h && y + h > n.position.y;
       });
-      if (!hit) return pos;
-      pos = { x: hit.position.x + size(hit).w + 40, y };
-    }
+    if (free(center.x, center.y)) return center;
+    const m = 20;
+    const cands: { x: number; y: number }[] = [];
+    for (let x = tl.x + m; x + w <= br.x - m; x += 40) for (let y = tl.y + m; y + h <= br.y - m; y += 40) cands.push({ x, y });
+    cands.sort((p, q) => Math.hypot(p.x - center.x, p.y - center.y) - Math.hypot(q.x - center.x, q.y - center.y));
+    const spot = cands.find((p) => free(p.x, p.y));
+    if (spot) return spot;
+    // Sem espaço livre (zoom alto): cascata na diagonal a partir do centro, só com os passos que cabem na área visível.
+    // Cada nó já na diagonal avança uma vaga; esgotada a cascata, ela recomeça deslocada 8px (3 voltas), para nenhum
+    // nó cobrir exatamente o outro.
+    const steps = Math.max(1, Math.floor((Math.min(br.x - m - w - center.x, br.y - m - h - center.y) - 16) / 24) + 1);
+    const onDiagonal = [...nodesRef.current, ...spawnedRef.current].filter((n) => {
+      const dx = n.position.x - center.x;
+      const dy = n.position.y - center.y;
+      return Math.abs(dx - dy) < 4 && dx > -4 && dx < steps * 24 + 16;
+    }).length;
+    const d = 24 * (onDiagonal % steps) + 8 * (Math.floor(onDiagonal / steps) % 3);
+    return { x: center.x + d, y: center.y + d };
   };
 
   // Criação de agente passa pela folha (preset/role/andar); a posição vem do clique ou do centro da viewport
@@ -604,7 +638,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
   };
 
   const addStickyNote = (at?: { x: number; y: number }) => {
-    const newId = `note-${Date.now().toString().slice(-4)}`;
+    const newId = `note-${uid()}`;
     const newNode: Node<StickyNoteData> = {
       id: newId,
       type: "stickyNote",
@@ -679,7 +713,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
   };
 
   const addPortal = (at?: { x: number; y: number }) => {
-    const newId = `portal-${Date.now().toString().slice(-4)}`;
+    const newId = `portal-${uid()}`;
     const newNode: Node<PortalNodeData> = {
       id: newId,
       type: "portal",
@@ -945,6 +979,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
           title={connState === "online" ? "Online" : "Reconectando..."}
         ></span>
         <span>Espaço Isolado: <strong className="text-white font-semibold">{projectName}</strong></span>
+        <UsageIndicator projectId={projectId} />
       </div>
 
       {/* Dica de interação */}

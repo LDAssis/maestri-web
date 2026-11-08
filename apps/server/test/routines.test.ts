@@ -8,7 +8,9 @@ import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import { CanvasStore } from "../src/canvas.js";
 import { SessionManager } from "../src/sessions.js";
+import { typePrompt } from "../src/nodeApi.js";
 import { registerRoutinesApi, nextRun, parseDuration, parseSchedule, type TypeAndWait } from "../src/routines.js";
+import { rmTmp } from "./rmtmp.js";
 
 const P = "proj-r";
 const dataDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-routines-test-")));
@@ -26,6 +28,10 @@ async function until(cond: () => boolean | Promise<boolean>, what: string, ms = 
   }
 }
 
+// O que a rotina digita chega ao typeAndWait como { prompt } (o Enter vai separado, em typePrompt); os stubs veem a forma antiga em fio:
+// texto (multi-linha em bracketed paste) + \r
+const wire = (i: string | { prompt: string }) => (typeof i === "string" ? i : `${i.prompt.includes("\n") ? `\x1b[200~${i.prompt}\x1b[201~` : i.prompt}\r`);
+
 // Mesmo contrato do typeAndWait do nodeApi: escreve e espera o PTY ficar quieto
 const realTypeAndWait: TypeAndWait = async (sessions, session, input, timeoutS, aborted = () => false) => {
   let out = "";
@@ -38,7 +44,8 @@ const realTypeAndWait: TypeAndWait = async (sessions, session, input, timeoutS, 
   const started = Date.now();
   let timedOut = false;
   try {
-    sessions.write(session.projectId, session.nodeId, input);
+    if (typeof input === "string") sessions.write(session.projectId, session.nodeId, input);
+    else await typePrompt(sessions, session, input.prompt);
     while (!aborted()) {
       await sleep(50);
       if (last && Date.now() - last >= 500) break;
@@ -140,7 +147,7 @@ before(async () => {
 
 after(async () => {
   await app.fastify.close();
-  fs.rmSync(dataDir, { recursive: true, force: true });
+  rmTmp(dataDir);
 });
 
 // --- Parsing e cálculo do próximo disparo ---
@@ -259,7 +266,7 @@ test("migração: arquivo antigo (minutos, sem alvo/opções, histórico ok/erro
   assert.deepEqual(r.history, [{ at: "2026-01-01T00:00:00.000Z", status: "ok", output: "saida" }, { at: "2026-01-01T00:15:00.000Z", status: "error", reason: "boom" }]);
   assert.deepEqual(list.find((x: any) => x.id === "rt-cafe0001").schedule, { type: "daily", time: "07:30" });
   await other.fastify.close();
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmTmp(dir);
 });
 
 test("rodar agora: executa no terminal, captura a saída e NÃO mexe em contadores nem na próxima execução", async () => {
@@ -280,7 +287,7 @@ test("rodar agora: executa no terminal, captura a saída e NÃO mexe em contador
 
 test("rodar agora: terminal parado é pulado (com motivo); o disparo agendado sobe o terminal", async () => {
   const stub: string[] = [];
-  impl = async (_s, _sess, input) => (stub.push(input), { output: "ok", timedOut: false });
+  impl = async (_s, _sess, input) => (stub.push(wire(input)), { output: "ok", timedOut: false });
   const r = await make({ nodeId: "cold" });
   const res = await api("POST", `/routines/${r.id}/run`);
   assert.equal(res.statusCode, 202);
@@ -301,7 +308,7 @@ test("rodar agora: terminal parado é pulado (com motivo); o disparo agendado so
 
 test("tick só roda o que venceu e está ligado; PUT liga/desliga; mudar o agendamento zera contadores", async () => {
   const runs: string[] = [];
-  impl = async (_s, _sess, input) => (runs.push(input), { output: "ok", timedOut: false });
+  impl = async (_s, _sess, input) => (runs.push(wire(input)), { output: "ok", timedOut: false });
   const r = await make();
   app.routines.tick();
   await sleep(30);
@@ -384,17 +391,20 @@ test("until: último dia é inclusivo; passou do dia = conclui sem disparar", as
 
 test("pre-run: stdout entra em {{output}}, roda no cwd do alvo com as variáveis; saída ≠ 0 ou timeout pulam", async () => {
   const typed: string[] = [];
-  impl = async (_s, _sess, input) => (typed.push(input), { output: "ok", timedOut: false });
+  impl = async (_s, _sess, input) => (typed.push(wire(input)), { output: "ok", timedOut: false });
+  // Windows: o sh é o do Git Bash; pwd -P dá /tmp/..., pwd -W dá C:/... (mesmo diretório)
+  const win = process.platform === "win32";
+  const cwdOut = win ? dataDir.replaceAll("\\", "/") : dataDir;
   const r = await make({
     name: "Resumo",
     text: "Resuma:\n{{output}}\n---\n{{output}}",
-    preRun: 'echo "$MAESTRI_WORKSPACE_NAME|$MAESTRI_WORKSPACE_DIR|$MAESTRI_ROUTINE_NAME|$MAESTRI_TERMINAL_NAME|$(pwd -P)"; echo $ {x}',
+    preRun: `echo "$MAESTRI_WORKSPACE_NAME|$MAESTRI_WORKSPACE_DIR|$MAESTRI_ROUTINE_NAME|$MAESTRI_TERMINAL_NAME|$(pwd ${win ? "-W" : "-P"})"; echo $ {x}`,
   });
   assert.equal((await api("POST", `/routines/${r.id}/run`)).json().status, "started");
   await until(() => typed.length === 1, "digitou");
   const input = typed[0];
   assert.match(input, /^\x1b\[200~Resuma:\n/);
-  assert.ok(input.includes(`Meu Projeto|${dataDir}|Resumo|Agente|${dataDir}`), input);
+  assert.ok(input.includes(`Meu Projeto|${dataDir}|Resumo|Agente|${cwdOut}`), input);
   assert.equal(input.split("Meu Projeto").length, 3, "{{output}} trocado nas duas ocorrências");
   assert.doesNotMatch(input, /\{\{output\}\}/);
   await until(async () => (await one(r.id)).history.length === 1, "histórico");
@@ -433,7 +443,7 @@ test("pre-run: stdout entra em {{output}}, roda no cwd do alvo com as variáveis
 
 test("pular se ocupado: chat em andamento ou saída recente; --no-skip-if-busy dispara mesmo assim", async () => {
   const calls: string[] = [];
-  impl = async (_s, _sess, input) => (calls.push(input), { output: "", timedOut: false });
+  impl = async (_s, _sess, input) => (calls.push(wire(input)), { output: "", timedOut: false });
   const r = await make();
   busyNodes.add("ag");
   clock = r.nextRunAt;
@@ -467,7 +477,7 @@ test("pular se ocupado: chat em andamento ou saída recente; --no-skip-if-busy d
 
 test("lembrete: toast com o texto (e pre-run), sem tocar em terminal; notify liga o toast de cada disparo", async () => {
   const calls: string[] = [];
-  impl = async (_s, _sess, input) => (calls.push(input), { output: "", timedOut: false });
+  impl = async (_s, _sess, input) => (calls.push(wire(input)), { output: "", timedOut: false });
   const r = await make({ nodeId: undefined, reminder: true, name: "Standup", text: "Hora do standup: {{output}}", preRun: "echo 5 pessoas" });
   clock = r.nextRunAt;
   const cur = await tickUntil(r.id, 1);
@@ -491,7 +501,7 @@ test("texto multi-linha vai como bracketed paste; erro e timeout viram status er
   const inputs: string[] = [];
   let mode: "ok" | "timeout" | "throw" = "ok";
   impl = async (_s, _sess, input) => {
-    inputs.push(input);
+    inputs.push(wire(input));
     if (mode === "throw") throw new Error("boom");
     return { output: "x".repeat(5000) + "FIM", timedOut: mode === "timeout" };
   };
