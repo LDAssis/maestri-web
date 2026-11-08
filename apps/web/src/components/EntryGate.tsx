@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { KeyRound, LogOut, ShieldCheck } from "lucide-react";
+import { CircleHelp, KeyRound, LogOut, ShieldCheck } from "lucide-react";
 import { apiFetch, getToken, setToken } from "@/lib/api";
 import { inputCls, NewPasswordFields } from "./PasswordField";
 import { passwordOk } from "@/lib/password";
@@ -94,10 +94,12 @@ export function ProfileMenu({
   user,
   onChange,
   onLogout,
+  onHelp,
 }: {
   user: MaestriUser;
   onChange: (user: MaestriUser) => void;
   onLogout: () => void;
+  onHelp?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(user.name);
@@ -221,6 +223,18 @@ export function ProfileMenu({
             <p role={msg.ok ? "status" : "alert"} className={msg.ok ? "text-emerald-400" : "text-rose-300"}>
               {msg.text}
             </p>
+          )}
+          {onHelp && (
+            <button
+              onClick={() => {
+                setOpen(false);
+                onHelp();
+              }}
+              className="flex items-center gap-1.5 text-xs text-slate-300 hover:text-white transition"
+            >
+              <CircleHelp className="h-3.5 w-3.5" />
+              Ajuda
+            </button>
           )}
           <button onClick={onLogout} className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition">
             <LogOut className="h-3.5 w-3.5" />
@@ -421,3 +435,6 @@ export default function EntryGate({
 
   return <>{children({ user, setUser: updateUser, logout })}</>;
 }
+
+// Papel do usuário logado (gravado a cada /api/auth/me); a UI só esconde, quem impõe é o servidor
+export const isAdminUser = () => readUser()?.role === "admin";

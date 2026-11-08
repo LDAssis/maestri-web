@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Pencil, Plus, Trash2, X } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { Role, useGlobalRoles, useRoles } from "@/lib/useRoles";
+import { isAdminUser } from "./EntryGate";
 
 interface Draft {
   id?: string;
@@ -16,6 +17,7 @@ interface Draft {
 export default function RolesPanel({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const { roles: allProject, reload } = useRoles(projectId);
   const { globalRoles, reloadGlobal } = useGlobalRoles(projectId);
+  const isAdmin = isAdminUser();
   const roles = allProject;
   const scopeOf = (id: string): "project" | "global" => (globalRoles.some((g) => g.id === id) ? "global" : "project");
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -128,7 +130,7 @@ export default function RolesPanel({ projectId, onClose }: { projectId: string; 
                   <input type="color" value={draft.color.toLowerCase()} onChange={(e) => setDraft({ ...draft, color: e.target.value.toUpperCase() })} className="mt-1 block h-[30px] w-12 cursor-pointer rounded border border-slate-800 bg-slate-900" />
                 </label>
               </div>
-              {!draft.id && (
+              {!draft.id && isAdmin && (
                 <div role="radiogroup" aria-label="Escopo do role" className="flex items-center gap-3 text-[11px] text-slate-300">
                   {(["project", "global"] as const).map((sc) => (
                     <label key={sc} className="flex items-center gap-1">
@@ -164,6 +166,7 @@ export default function RolesPanel({ projectId, onClose }: { projectId: string; 
                   <span className="truncate">{r.name}</span>
                   {global && <span className="shrink-0 rounded border border-indigo-700 bg-indigo-950 px-1 text-[9px] font-medium uppercase text-indigo-300">global</span>}
                 </div>
+                {(!global || isAdmin) && (
                 <div className="flex items-center gap-1">
                   <button onClick={() => edit(r)} aria-label={`Editar ${r.name}`} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white">
                     <Pencil className="h-3 w-3" />
@@ -172,6 +175,7 @@ export default function RolesPanel({ projectId, onClose }: { projectId: string; 
                     <Trash2 className="h-3 w-3" />
                   </button>
                 </div>
+                )}
               </div>
               {r.prompt && <p className="mt-1 line-clamp-2 text-[11px] text-slate-400">{r.prompt}</p>}
               {confirmDel === r.id && (
