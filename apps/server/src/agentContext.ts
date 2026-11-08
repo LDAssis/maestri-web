@@ -50,6 +50,7 @@ export function agentsBlock(skillPath: string) {
     "- `maestri list`: quem é você e o que está conectado (rode antes de tudo); `maestri help`: todos os comandos.",
     '- `maestri ask "Agente" "pergunta"` / `send` / `check`: conversar com outros agentes; `maestri note read|write|edit "Nota"`.',
     '- Mensagens "through Maestri Chat": responda SOMENTE com `maestri say "..."` (a saída do terminal não chega ao usuário).',
+    '- Ao terminar uma tarefa delegada, devolva o resultado com `maestri send "Quem pediu" "resumo"` (sem `--raw`, sem colar no terminal dele; `ask` só se precisar da resposta).',
     `Documentação completa: ${skillPath}`,
     END,
   ].join("\n");

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
-import { submitDelayMs } from "../src/nodeApi.js";
+import { submitDelayMs, submitPauseMs, submitVerifyMs } from "../src/nodeApi.js";
 import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-submit-test-")));
@@ -15,15 +15,19 @@ process.env.NODE_ENV = "test";
 process.env.MAESTRI_TOKEN = "tok-submit";
 process.env.MAESTRI_ASK_QUIET_MS = "500";
 process.env.MAESTRI_SUBMIT_DELAY_MS = "300";
+process.env.MAESTRI_SUBMIT_VERIFY_MS = "700";
 process.env.MAESTRI_ROUTINE_BUSY_MS = "150"; // a rotina pula se o terminal imprimiu há pouco
 
 // TUI falso que imita o Claude Code: entrada que chega JUNTA com o \r é colagem (o \r vira quebra de linha no input);
-// só um \r sozinho, em outro write, envia. Imprime SUBMIT[<texto>] gap=<ms entre o texto e o Enter>.
+// só um \r sozinho, em outro write, envia. Imprime SUBMIT[<texto>] gap=<ms entre o texto e o Enter> e, como o Claude Code, o
+// indicador "esc to interrupt" por 400 ms (sinal de envio). Todo \r sozinho imprime ENTER. Texto que começa com DROP1: tem o 1º \r
+// engolido (a caixa é redesenhada com o texto ainda lá: o Enter se perdeu).
 const fakeTui = path.join(repo, "fake-tui.mjs");
 fs.writeFileSync(
   fakeTui,
   `let buf = "";
 let lastText = 0;
+let drop = false;
 process.stdin.setRawMode(true);
 process.stdin.setEncoding("utf8");
 console.log("READY");
@@ -31,12 +35,21 @@ process.stdin.on("data", (d) => {
   const pasted = d.includes("\\x1b[200~");
   const t = d.replace(/\\x1b\\[20[01]~/g, "");
   if (!pasted && t === "\\r") {
+    console.log("ENTER");
+    if (drop) {
+      drop = false;
+      console.log("PENDING" + JSON.stringify(buf)); // a caixa de entrada é redesenhada com o texto ainda lá
+      return;
+    }
     console.log("SUBMIT" + JSON.stringify(buf) + " gap=" + (Date.now() - lastText));
+    console.log("esc to interrupt");
+    setTimeout(() => console.log("DONE"), 400);
     buf = "";
     return;
   }
   buf += t.replace(/\\r/g, "\\n");
   lastText = Date.now();
+  if (buf.startsWith("DROP1:")) drop = true;
   console.log("PENDING" + JSON.stringify(buf));
 });
 `,
@@ -75,6 +88,7 @@ const ok = async (args: string[]) => {
 // SUBMIT["..."] gap=N  (o texto sem o que veio do cabeçalho do chat)
 const submits = () => [...out.matchAll(/SUBMIT(".*?") gap=(\d+)/g)].map((m) => ({ text: JSON.parse(m[1]) as string, gap: Number(m[2]) }));
 const lastSubmit = () => submits().at(-1)!;
+const enters = () => (out.match(/ENTER/g) ?? []).length;
 const pendingOnly = () => out.lastIndexOf("PENDING") > out.lastIndexOf("SUBMIT");
 
 before(async () => {
@@ -184,4 +198,58 @@ test("--raw continua cru: texto + \\r no mesmo write NÃO submete (é a colagem 
   await ok(["ask", "Tui", "--raw", "\\r", "--timeout", "3"]);
   assert.equal(submits().length, n + 1);
   assert.equal(lastSubmit().text, "cru\n");
+});
+
+test("pausa adaptativa: base + 1 ms a cada 10 caracteres, teto de 2 s (base maior que o teto vale)", () => {
+  assert.equal(submitPauseMs(0), 300);
+  assert.equal(submitPauseMs(1000), 400);
+  assert.equal(submitPauseMs(30_000), 2000);
+  assert.equal(submitPauseMs(100_000), 2000);
+  const saved = process.env.MAESTRI_SUBMIT_DELAY_MS;
+  try {
+    process.env.MAESTRI_SUBMIT_DELAY_MS = "2500";
+    assert.equal(submitPauseMs(50_000), 2500);
+    process.env.MAESTRI_SUBMIT_DELAY_MS = "0";
+    assert.equal(submitPauseMs(500), 50);
+  } finally {
+    process.env.MAESTRI_SUBMIT_DELAY_MS = saved;
+  }
+  assert.equal(submitVerifyMs(), 700);
+});
+
+test("o Enter espera mais com texto grande (pausa adaptativa)", async () => {
+  const n = submits().length;
+  await ok(["send", "Tui", "x".repeat(8000)]);
+  await until(() => submits().length === n + 1, "texto grande submetido");
+  assert.ok(lastSubmit().gap >= 1000, `Enter ${lastSubmit().gap} ms depois do texto (esperado >= 300 + 800)`);
+});
+
+test("envio normal: um Enter só, sem reenvio", async () => {
+  const n = submits().length;
+  const e = enters();
+  await ok(["send", "Tui", "envio normal"]);
+  await until(() => submits().length === n + 1, "submetido");
+  await sleep(1200); // mais que a janela de verificação
+  assert.equal(enters(), e + 1, "nenhum Enter extra");
+  assert.equal(submits().length, n + 1);
+});
+
+test("Enter engolido: o texto fica parado na caixa, então o servidor manda outro Enter", async () => {
+  const n = submits().length;
+  const e = enters();
+  await ok(["send", "Tui", "DROP1: perdeu o enter"]);
+  await until(() => submits().length === n + 1, "reenvio submeteu");
+  assert.equal(lastSubmit().text, "DROP1: perdeu o enter");
+  assert.equal(enters(), e + 2, "1 Enter perdido + 1 reenvio");
+  await sleep(1200);
+  assert.equal(enters(), e + 2, "parou depois de submeter");
+  assert.ok(!pendingOnly());
+});
+
+test("Enter engolido em texto de várias linhas (colagem) também é reenviado", async () => {
+  const n = submits().length;
+  // a última linha é longa e sem quebra: o fake imprime o buffer em JSON (\n escapado), e o fim do texto é o que se compara
+  await ok(["send", "Tui", "DROP1: a\nb\nfim da colagem sem quebra"]);
+  await until(() => submits().length === n + 1, "reenvio submeteu o multi-linha");
+  assert.equal(lastSubmit().text, "DROP1: a\nb\nfim da colagem sem quebra");
 });

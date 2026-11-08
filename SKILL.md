@@ -81,6 +81,15 @@ Fluxo: `snapshot` → agir com as refs → `snapshot` de novo para conferir. As 
 4. `recruit`: com `--role`, o texto do papel vai para `.maestri-roles/<id>.md` (nunca é interpolado no comando); com `--cmd claude` ou `--cmd codex` o arquivo é passado como prompt inicial. O novo agente já nasce conectado a você e com o terminal iniciado.
 5. Se for o Maestro: quebre o objetivo em tarefas, recrute especialistas, delegue com `send`/`ask`, acompanhe com `check` e dispense (`dismiss`) quem terminou.
 
+## Ao terminar uma tarefa delegada
+Se alguém (o Maestro ou outro agente) pediu a tarefa, devolva o resultado a quem pediu:
+```bash
+maestri send "Nome de quem pediu" "Pronto: <resumo curto do que foi feito e onde está o resultado>"
+```
+- `send` não espera resposta e já envia o Enter sozinho: não precisa de mais nada. Resuma (o texto vai digitado no terminal do outro agente); detalhes longos vão numa nota (`maestri note write`) e você cita o nome dela.
+- **Nunca** use `--raw` nem escreva por conta própria no terminal de outro agente para entregar o resultado, e não espere que a pessoa cole nada.
+- Use `ask` só quando você precisa da resposta do outro antes de continuar; para avisar que acabou, é `send`.
+
 ## Face de chat
 Os usuários também conversam com você pela **face de chat** do seu nó: a mensagem chega digitada no seu terminal (menções `@Nota` vêm com a dica de como ler). **Quando receber mensagens pela face de chat (cabeçalho `Below is a message from the user through Maestri Chat` com `thread: <cor>`), responda SOMENTE com `maestri say`** — é o que aparece, renderizado em Markdown, para todos que estão no canvas, na thread (cor) da última mensagem do usuário; a saída crua do terminal vira só um bloco recolhido. `maestri chat reply` continua funcionando como alias.
 
