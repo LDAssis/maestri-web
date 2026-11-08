@@ -427,6 +427,7 @@ test("WS com sessão: presença usa nome/cor da CONTA; desativar fecha o socket 
   assert.deepEqual({ id: peer.user.id, name: peer.user.name, color: peer.user.color }, { id: u.id, name: "Maria Teles", color: "#112233" });
 
   // outros WS (terminal/canvas) também aceitam a sessão e caem junto com ela
+  await admin("POST", "/api/projects/proj-maestri-web/members", { userId: u.id }); // Fase 2: sem ser membro o canvas recusa (4404)
   const canvasWs = open(u.token, "/ws/project/proj-maestri-web");
   await new Promise((r) => canvasWs.on("open", r));
 

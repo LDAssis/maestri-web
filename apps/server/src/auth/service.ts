@@ -23,6 +23,7 @@ export class AuthService {
   sessions: SessionStore;
   invites: InviteStore;
   limiter = new RateLimiter(10, 15 * 60_000);
+  onSetup?: () => void; // depois do primeiro admin criado (os projetos sem dono passam a ele)
   private sockets = new Map<string, Set<{ socket: WebSocket; sessionId: string }>>(); // por userId
 
   // internalToken: MAESTRI_TOKEN ("" = sem autenticação, modo dev em loopback)

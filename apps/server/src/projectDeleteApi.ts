@@ -77,7 +77,8 @@ export function registerProjectDeleteApi(d: Deps) {
     return {
       id: project.id,
       name: project.name,
-      repoPath: project.repoPath,
+      // não-admin (o dono de um projeto criado por ele) não recebe o caminho no servidor
+      ...(!req.authUser || req.authUser.role === "admin" ? { repoPath: project.repoPath } : {}),
       isLast: projects.length <= 1,
       canDeleteFolder: check.allowed,
       ...(check.reason && { folderReason: check.reason }),

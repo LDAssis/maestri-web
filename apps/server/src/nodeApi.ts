@@ -9,6 +9,7 @@ import { readRole } from "./roles.js";
 import { THREADS, DEFAULT_THREAD, isThread, chatHeader, wantsChatHeader, currentThread } from "./chatThreads.js";
 import type { AttachmentStore } from "./attachments.js";
 import type { CrossLinks } from "./crossLinks.js";
+import { reqStore } from "./projectAccess.js";
 import { sanitizeTyped } from "./routines.js";
 import { reachNotes } from "./noteGraph.js";
 import { bandReach, isBand, memberIds, myBands, neighbors, sweepBands, teamTree } from "./team.js";
@@ -302,7 +303,8 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
   const wrap = (fn: (c: Ctx, req: any, reply: FastifyReply) => any) =>
     async (req: any, reply: FastifyReply) => {
       try {
-        return await fn(context(req.params), req, reply);
+        // reqStore: as rotas que resolvem outro workspace pelo nome consultam o acesso de quem chamou
+        return await reqStore.run(req, async () => fn(context(req.params), req, reply));
       } catch (e: any) {
         if (e instanceof ApiError) return reply.status(e.status).send({ error: e.message });
         req.log.error(e);

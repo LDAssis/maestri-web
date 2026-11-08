@@ -37,6 +37,7 @@ export function registerAuthApi({ fastify, auth }: Deps) {
     if (auth.users.count() > 0) return fail(reply, 409, "A configuração inicial já foi concluída."); // outra requisição ganhou
     const user = auth.users.add({ name, email, passHash, role: "admin" });
     auth.users.update(user.id, { lastLoginAt: iso(Date.now()) });
+    auth.onSetup?.();
     return { token: session(user.id), user: publicUser(user) };
   });
 

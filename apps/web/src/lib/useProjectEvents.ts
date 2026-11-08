@@ -30,7 +30,14 @@ function connect(projectId: string, hub: Hub) {
       if (typeof type === "string") hub.listeners.forEach((l) => l(type));
     } catch {}
   };
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
+    // 4403/4404: sem acesso (removido do projeto ou projeto inexistente) - não reconecta
+    if (ev.code === 4403 || ev.code === 4404) {
+      hub.closed = true;
+      hubs.delete(projectId);
+      hub.listeners.forEach((l) => l("access-lost"));
+      return;
+    }
     if (hub.closed) return;
     hub.timer = setTimeout(() => connect(projectId, hub), Math.min(1000 * 2 ** hub.attempt, 10000));
     hub.attempt++;
@@ -52,7 +59,7 @@ function subscribe(projectId: string, listener: Listener) {
     h.closed = true;
     if (h.timer) clearTimeout(h.timer);
     h.ws?.close();
-    hubs.delete(projectId);
+    if (hubs.get(projectId) === h) hubs.delete(projectId);
   };
 }
 

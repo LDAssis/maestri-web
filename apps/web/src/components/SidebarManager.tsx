@@ -6,7 +6,7 @@ import { apiFetch } from "@/lib/api";
 import { useConfirm } from "./ConfirmProvider";
 import { useProjectEvents } from "@/lib/useProjectEvents";
 
-interface ProjectLite { id: string; name: string; group?: string | null; folder?: string | null; pinned?: boolean }
+interface ProjectLite { id: string; name: string; access?: "owner" | "member" | "admin"; group?: string | null; folder?: string | null; pinned?: boolean }
 interface Sidebar { groups: string[]; folders: { name: string; group: string | null }[] }
 
 const J = { "Content-Type": "application/json" };
@@ -156,7 +156,7 @@ export default function SidebarManager({ projectId, projects, onClose, onChanged
                   </React.Fragment>
                 ))}
               </select>
-              {onDeleteProject && (
+              {onDeleteProject && p.access !== "member" && (
                 <button aria-label={`Excluir projeto ${p.name}`} title="Excluir projeto" className={`${ibtn} hover:!text-rose-400`} onClick={() => onDeleteProject(p)}>
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
