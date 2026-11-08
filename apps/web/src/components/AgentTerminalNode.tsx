@@ -30,7 +30,6 @@ import type { TerminalStatus } from "./TerminalView";
 import { COLOR_HEX, ICON_MAP } from "./palette";
 import CrossFloorBadge from "./CrossFloorBadge";
 import ModelPicker, { MODEL_CLIS, MODEL_ERROR, useModels, validModel } from "./ModelPicker";
-import { NodeUsageMeter } from "./UsageMeter";
 
 const TerminalView = dynamic(() => import("./TerminalView"), {
   ssr: false,
@@ -288,7 +287,6 @@ export default function AgentTerminalNode({
             </button>
           </div>
 
-          <NodeUsageMeter projectId={projectId} nodeId={id} cli={nodeData.preset} />
           {modelCli && (
             <div className="nodrag relative">
               <button

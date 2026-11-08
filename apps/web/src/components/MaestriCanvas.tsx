@@ -24,7 +24,7 @@ import "@xyflow/react/dist/style.css";
 import { apiFetch, wsUrl } from "@/lib/api";
 import { ProjectIdContext } from "@/lib/projectContext";
 import { usePresenceStore } from "@/lib/presence";
-import { UsageIndicator } from "./UsageMeter";
+import { UsagePanel } from "./UsagePanel";
 import { PresenceLayer } from "./PresenceUI";
 import AgentTerminalNode, { AgentNodeData } from "./AgentTerminalNode";
 import StickyNoteNode, { StickyNoteData } from "./StickyNoteNode";
@@ -979,8 +979,9 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
           title={connState === "online" ? "Online" : "Reconectando..."}
         ></span>
         <span>Espaço Isolado: <strong className="text-white font-semibold">{projectName}</strong></span>
-        <UsageIndicator projectId={projectId} />
       </div>
+
+      <UsagePanel projectId={projectId} />
 
       {/* Dica de interação */}
       <div className="absolute bottom-4 left-4 z-10 bg-slate-900/80 border border-slate-800/80 rounded-lg px-3 py-1.5 text-[11px] text-slate-400 backdrop-blur-sm pointer-events-none">
@@ -1156,6 +1157,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
               : "#6366f1"
           }
           className="!bg-slate-950/80 !border !border-slate-800 !rounded-xl overflow-hidden"
+          style={{ marginBottom: 64 }}
           maskColor="rgba(15, 23, 42, 0.7)"
         />
       </ReactFlow>
