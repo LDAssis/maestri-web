@@ -1,16 +1,18 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AuthService } from "./service.js";
+import type { ProjectAcl } from "../projectAccess.js";
 import { cleanName, validName, type User } from "./users.js";
 
 interface Deps {
   fastify: FastifyInstance;
   auth: AuthService;
+  acl?: ProjectAcl; // permissões por projeto (Fase 2)
 }
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const row = (u: User) => ({ id: u.id, name: u.name, email: u.email, role: u.role, disabled: u.disabled, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt, color: u.color });
 
-export function registerAdminApi({ fastify, auth }: Deps) {
+export function registerAdminApi({ fastify, auth, acl }: Deps) {
   const fail = (reply: FastifyReply, code: number, error: string) => reply.code(code).send({ error });
   // Admin (sessão) ou token interno (agentes/CLI: privilégio de admin até a Fase 3)
   const adminOnly = async (req: FastifyRequest, reply: FastifyReply) => {
@@ -63,8 +65,27 @@ export function registerAdminApi({ fastify, auth }: Deps) {
     if (!keepsAnAdmin(target, { role: "user", disabled: true })) return fail(reply, 409, "Precisa sobrar pelo menos um administrador ativo.");
     auth.revokeUser(target.id);
     auth.invites.removeResetsFor(target.id);
+    // Os projetos dele passam a quem excluiu (token interno: ao primeiro outro admin) e ele sai de todos os members
+    acl?.onUserDeleted(target.id, actorId(req));
     auth.users.remove(target.id);
     return { ok: true };
+  });
+
+  // Projetos do usuário: dono / membro / admin (admin sem vínculo) / null (sem acesso)
+  fastify.get("/api/admin/users/:id/projects", opts, async (req: any, reply) => {
+    const target = auth.users.get(req.params.id);
+    if (!target || !acl) return fail(reply, 404, "Usuário não encontrado.");
+    return { projects: acl.projectsOfUser(target) };
+  });
+
+  fastify.put("/api/admin/users/:id/projects", opts, async (req: any, reply) => {
+    const target = auth.users.get(req.params.id);
+    if (!target || !acl) return fail(reply, 404, "Usuário não encontrado.");
+    const ids = req.body?.projectIds;
+    if (!Array.isArray(ids) || !ids.every((x: unknown) => typeof x === "string")) return fail(reply, 400, "projectIds deve ser uma lista de ids.");
+    const out = acl.setMemberships(target, ids);
+    if (!out) return fail(reply, 400, "Algum projeto não existe.");
+    return { projects: out };
   });
 
   fastify.post("/api/admin/users/:id/reset-link", opts, async (req: any, reply) => {

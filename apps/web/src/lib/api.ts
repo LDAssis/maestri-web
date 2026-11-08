@@ -33,6 +33,11 @@ export function apiFetch(path: string, init: RequestInit = {}) {
       } catch {}
       if (typeof location !== "undefined") location.reload();
     }
+    // 404 em /api/projects/:id... pode ser perda de acesso: a página confere a lista e troca de projeto
+    if (res.status === 404 && typeof window !== "undefined") {
+      const m = /^\/api\/projects\/([^/?]+)/.exec(path);
+      if (m) window.dispatchEvent(new CustomEvent("maestri:project-404", { detail: m[1] }));
+    }
     return res;
   });
 }

@@ -6,6 +6,7 @@ import ProjectSettingsModal from "@/components/ProjectSettingsModal";
 import CliAuthModal from "@/components/CliAuthModal";
 import DeleteProjectModal from "@/components/DeleteProjectModal";
 import AdminUsersModal from "@/components/AdminUsersModal";
+import ProjectMembersModal from "@/components/ProjectMembersModal";
 import {
   KeyRound,
   ShieldCheck,
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 import EntryGate, { ProfileMenu, MaestriUser } from "@/components/EntryGate";
 import { apiFetch } from "@/lib/api";
+import { useRef } from "react";
 import { Peer, PresenceProvider } from "@/lib/presence";
 import RoutinesPanel from "@/components/RoutinesPanel";
 import WorktreesPanel from "@/components/WorktreesPanel";
@@ -40,6 +42,8 @@ interface Project {
   group?: string | null;
   folder?: string | null;
   pinned?: boolean;
+  ownerId?: string;
+  access?: "owner" | "member" | "admin";
 }
 
 // Seções do seletor de projetos: fixados, raiz, pastas da raiz e grupos (com as pastas deles)
@@ -77,7 +81,7 @@ const readLastProject = () => {
 
 // Recarrega a lista de projetos quando o servidor avisa que a barra lateral mudou (CLI ou outro usuário)
 function SidebarSync({ projectId, onChange }: { projectId: string; onChange: () => void }) {
-  useProjectEvents(projectId, (t) => (t === "sidebar" || t === "project-deleted") && onChange());
+  useProjectEvents(projectId, (t) => (t === "sidebar" || t === "project-deleted" || t === "access-lost") && onChange());
   return null;
 }
 
@@ -125,13 +129,33 @@ function App({
     setFocus({ x: peer.cursor?.x, y: peer.cursor?.y, nodeId: peer.activeNodeId, nonce: Date.now() });
   };
 
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  const [isMembersOpen, setIsMembersOpen] = useState(false);
+  const [notice, setNotice] = useState("");
+  const activeIdRef = useRef<string | null>(null);
+  const quietRef = useRef(false); // perda esperada (excluí/saí do projeto): sem toast
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showNotice = (text: string) => {
+    setNotice(text);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(""), 6000);
+  };
+
   const fetchProjects = async () => {
     setProjectsError("");
     try {
       const res = await apiFetch("/api/projects");
       if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);
       const data = await res.json();
+      const lost = activeIdRef.current && !data.some((p: Project) => p.id === activeIdRef.current);
+      if (lost && !quietRef.current) {
+        showNotice("Você não tem mais acesso a este projeto");
+        setIsMembersOpen(false);
+        setIsSettingsOpen(false);
+      }
+      quietRef.current = false;
       setProjects(data);
+      setProjectsLoaded(true);
       // Mantém o projeto aberto (com os dados novos); no começo, o último aberto (ou o primeiro se ele sumiu)
       setActiveProject((prev) => {
         if (prev) return data.find((p: Project) => p.id === prev.id) ?? data[0] ?? null;
@@ -152,7 +176,26 @@ function App({
   }, [activeProject?.id]);
 
   useEffect(() => {
+    activeIdRef.current = activeProject?.id ?? null;
+  }, [activeProject?.id]);
+
+  useEffect(() => {
     fetchProjects();
+  }, []);
+
+  // 404 em rota do projeto aberto: pode ser perda de acesso; confere a lista (com debounce)
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const h = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== activeIdRef.current) return;
+      if (t) clearTimeout(t);
+      t = setTimeout(fetchProjects, 300);
+    };
+    window.addEventListener("maestri:project-404", h);
+    return () => {
+      window.removeEventListener("maestri:project-404", h);
+      if (t) clearTimeout(t);
+    };
   }, []);
 
   // Atalho 'ver diff' dos nós de agente no canvas
@@ -339,7 +382,14 @@ function App({
                                 : "text-slate-300"
                             }`}
                           >
-                            <div className="font-medium text-slate-100">{p.name}</div>
+                            <div className="flex items-center gap-1.5 font-medium text-slate-100">
+                              <span className="truncate">{p.name}</span>
+                              {p.access && (
+                                <span className={`shrink-0 rounded-full px-1.5 py-px text-[9px] font-normal ${p.access === "owner" ? "bg-amber-500/15 text-amber-300" : p.access === "member" ? "bg-indigo-500/15 text-indigo-300" : "bg-slate-800 text-slate-400"}`}>
+                                  {p.access === "owner" ? "dono" : p.access === "member" ? "membro" : "admin"}
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[11px] text-slate-500 truncate">
                               {p.description || "Ambiente isolado"}
                             </div>
@@ -369,6 +419,18 @@ function App({
                       <FolderPlus className="h-3.5 w-3.5" />
                       Organizar grupos e pastas
                     </button>
+                    {activeProject && (
+                      <button
+                        onClick={() => {
+                          setIsDropdownOpen(false);
+                          setIsMembersOpen(true);
+                        }}
+                        className="w-full flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-slate-300 hover:bg-slate-900 transition font-medium"
+                      >
+                        <Users className="h-3.5 w-3.5" />
+                        Membros…
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -455,9 +517,21 @@ function App({
                 </button>
               </div>
             ) : (
-              <div className="flex h-full items-center justify-center text-xs text-slate-500 font-mono">
-                Selecione um projeto para abrir o canvas.
-              </div>
+              projectsLoaded && projects.length === 0 ? (
+                <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#080d1a] text-xs text-slate-400">
+                  <p>Nenhum projeto — crie um.</p>
+                  <button
+                    onClick={() => setIsNewProjectModalOpen(true)}
+                    className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition"
+                  >
+                    Criar projeto
+                  </button>
+                </div>
+              ) : (
+                <div className="flex h-full items-center justify-center text-xs text-slate-500 font-mono">
+                  Selecione um projeto para abrir o canvas.
+                </div>
+              )
             )
           ) : activeTab === "routines" ? (
             activeProject ? (
@@ -485,6 +559,27 @@ function App({
 
       {activeProject && <SidebarSync projectId={activeProject.id} onChange={fetchProjects} />}
       {isOrganizeOpen && activeProject && <SidebarManager projectId={activeProject.id} projects={projects} onClose={() => setIsOrganizeOpen(false)} onChanged={fetchProjects} onDeleteProject={(p) => setDeleteTarget({ id: p.id, name: p.name })} />}
+      {isMembersOpen && activeProject && (
+        <ProjectMembersModal
+          projectId={activeProject.id}
+          projectName={activeProject.name}
+          access={activeProject.access ?? "admin"}
+          me={user}
+          onClose={() => setIsMembersOpen(false)}
+          onChanged={fetchProjects}
+          onLeft={async () => {
+            quietRef.current = true;
+            setIsMembersOpen(false);
+            showNotice("Você saiu do projeto");
+            await fetchProjects();
+          }}
+        />
+      )}
+      {notice && (
+        <div role="status" className="fixed left-1/2 top-4 z-[130] -translate-x-1/2 rounded-lg border border-slate-700 bg-slate-900/95 px-4 py-2 text-xs text-slate-100 shadow-xl backdrop-blur-md">
+          {notice}
+        </div>
+      )}
       {deleteTarget && (
         <DeleteProjectModal
           projectId={deleteTarget.id}
@@ -494,6 +589,7 @@ function App({
             setDeleteTarget(null);
             setIsSettingsOpen(false);
             setIsOrganizeOpen(false);
+            quietRef.current = true;
             await fetchProjects(); // se o excluído era o aberto, cai no primeiro que sobrou
           }}
         />
@@ -570,7 +666,7 @@ function App({
           projectId={activeProject?.id || ""}
           projectName={activeProject?.name || "Projeto"}
           onClose={() => setIsSettingsOpen(false)}
-          onDeleteProject={() => activeProject && setDeleteTarget({ id: activeProject.id, name: activeProject.name })}
+          onDeleteProject={activeProject?.access === "member" ? undefined : () => activeProject && setDeleteTarget({ id: activeProject.id, name: activeProject.name })}
         />
       )}
       <CliAuthModal isOpen={isCliAuthOpen} onClose={() => setIsCliAuthOpen(false)} />

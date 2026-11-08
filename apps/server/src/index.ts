@@ -35,6 +35,7 @@ import { registerDownloadsApi, isPublicDownload } from "./fileDownload.js";
 import { AuthService } from "./auth/service.js";
 import { registerAuthApi } from "./auth/authApi.js";
 import { registerAdminApi } from "./auth/adminApi.js";
+import { ProjectAcl, registerProjectAclApi, reqStore } from "./projectAccess.js";
 import { sweepBands } from "./team.js";
 import { registerPortalApi } from "./portalApi.js";
 import { setPortalSelfPorts } from "./portals.js";
@@ -100,7 +101,19 @@ if (!fs.existsSync(dataDir)) {
 // Contas, sessões e convites (Fase 1). O MAESTRI_TOKEN segue valendo como token interno dos agentes/CLI.
 export const authService = new AuthService(dataDir, authToken);
 registerAuthApi({ fastify, auth: authService });
-registerAdminApi({ fastify, auth: authService });
+// Permissões por projeto (Fase 2): guarda central em /api/projects/:id/* e rotas globais admin-only
+const acl = new ProjectAcl(
+  () => projects,
+  authService,
+  () => saveProjects(),
+  () => {
+    for (const p of projects) canvas.notify(p.id, { type: "sidebar" });
+  },
+);
+acl.register(fastify);
+registerAdminApi({ fastify, auth: authService, acl });
+registerProjectAclApi(fastify, acl, authService);
+authService.onSetup = () => acl.migrate(); // o primeiro admin herda os projetos que ainda não têm dono
 
 export interface Project {
   id: string;
@@ -112,6 +125,9 @@ export interface Project {
   group?: string | null;
   folder?: string | null;
   pinned?: boolean;
+  // Permissões (Fase 2): dono e membros (ids de usuário, sem o dono)
+  ownerId?: string;
+  members?: string[];
 }
 
 const projectsFile = path.join(dataDir, "projects.json");
@@ -157,6 +173,9 @@ projects = projects.map((p) => ({ ...p, repoPath: path.resolve(defaultRepo, p.re
   }
 }
 
+// Projetos antigos (sem ownerId) passam ao primeiro admin ativo; sem usuários ainda, migram quando o admin for criado (setup)
+acl.migrate();
+
 function writeJsonAtomic(file: string, data: unknown) {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
@@ -180,7 +199,7 @@ const host = process.env.HOST || "127.0.0.1";
 const sessionHistory = new SessionHistory(path.join(dataDir, "session_history.json"));
 const accounts = new AccountStore(dataDir);
 const attachments = new AttachmentStore(dataDir);
-const crossLinks = new CrossLinks(path.join(dataDir, "links.json"));
+export const crossLinks = new CrossLinks(path.join(dataDir, "links.json"));
 const sessions = new SessionManager({
   apiUrl: () => `http://127.0.0.1:${(fastify.server.address() as { port?: number } | null)?.port ?? port}/api`,
   token: authToken,
@@ -202,7 +221,13 @@ const sessions = new SessionManager({
     return typeof m === "string" && m ? m : undefined;
   },
 });
-const presence = new PresenceHub();
+// Presença: cada peer só vê cursor/atividade/projectId de projetos que o próprio peer acessa
+const presence = new PresenceHub((viewerId, projectId) => {
+  if (!viewerId) return true; // token interno / dev
+  const u = authService.users.get(viewerId);
+  const p = projects.find((x) => x.id === projectId);
+  return !!u && !!p && !!acl.accessOfUser(u, p);
+});
 const canvas = new CanvasStore(canvasFileFor, writeJsonAtomic, (projectId, ids) => {
   sessions.killNodes(projectId, ids);
   portals.closeNodes(projectId, ids);
@@ -231,9 +256,22 @@ fastify.addHook("onClose", async () => {
 
 const idPattern = /^[\w-]+$/;
 
+// Agentes/CLI enxergam todos os workspaces; uma sessão de usuário só os que acessa (reqStore = requisição em andamento)
+const workspaceNames = { nameOf: (id: string) => projects.find((p) => p.id === id)?.name, idOf: (name: string) => {
+  const id = projects.find((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase())?.id;
+  return id && acl.canSeeCurrent(id) ? id : undefined;
+} };
+const linksView = {
+  all: () => crossLinks.all().filter((l) => acl.canSeeCurrent(l.a.project) && acl.canSeeCurrent(l.b.project)),
+  has: (a: any, b: any) => crossLinks.has(a, b),
+  add: (a: any, b: any) => crossLinks.add(a, b),
+  peers: (project: string, node: string) => crossLinks.peers(project, node).filter((e) => acl.canSeeCurrent(e.project)),
+  dropNode: (p: string, n: string) => crossLinks.dropNode(p, n),
+  dropProject: (p: string) => crossLinks.dropProject(p),
+} as unknown as CrossLinks;
 const nodeApi = registerNodeApi({ fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, attachments,
-  links: crossLinks,
-  workspaces: { nameOf: (id) => projects.find((p) => p.id === id)?.name, idOf: (name) => projects.find((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase())?.id },
+  links: linksView,
+  workspaces: workspaceNames,
   // Acordar um agente sem sessão: cwd (andar) e comando do nó, como a conexão da UI faria
   wake: (projectId, node) => {
     const repo = projects.find((p) => p.id === projectId)!.repoPath;
@@ -264,15 +302,24 @@ const prPoll = setInterval(() => {
 prPoll.unref();
 fastify.addHook("onClose", async () => clearInterval(prPoll));
 registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds: () => projects.map((p) => p.id), settings: settingsAccess });
-registerCliToolsApi({ fastify, accounts, wsAuthorized });
+// Menu de CLIs: só admin (REST pelo guarda central; o WS do job confere aqui)
+registerCliToolsApi({ fastify, accounts, wsAuthorized: (socket, req, url) => {
+  if (!wsAuthorized(socket, req, url)) return false;
+  const u = (socket as any).authUser;
+  if (u && u.role !== "admin") {
+    socket.close(4403, "Apenas administradores.");
+    return false;
+  }
+  return true;
+} });
 registerTeamApi({
-  fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, dataDir, nodeApi, floors, accounts, links: crossLinks, workspaces: { nameOf: (id) => projects.find((p) => p.id === id)?.name, idOf: (name) => projects.find((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase())?.id },
+  fastify, sessions, canvas, projectRepo: (id) => projects.find((p) => p.id === id)?.repoPath ?? null, dataDir, nodeApi, floors, accounts, links: linksView, workspaces: workspaceNames,
   settings: settingsAccess,
 });
 const projectRepo = (id: string) => projects.find((p) => p.id === id)?.repoPath ?? null;
 // o portal não navega até a API do próprio servidor (porta real, mesmo quando escolhida pelo SO)
 setPortalSelfPorts(() => [(fastify.server.address() as { port?: number } | null)?.port ?? port]);
-export const portals = registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAuthorized, dataDir });
+export const portals = registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAuthorized, dataDir, wsProject: (socket, projectId) => acl.wsAllowed(socket, projectId, "portal") });
 const { createFloorFor } = registerWorktreeApi({ fastify, sessions, canvas, projectRepo });
 registerRolesApi({ fastify, canvas, projectRepo, createFloorFor, globalRoot: path.join(dataDir, "global-roles") });
 registerGlobalRolesApi({ fastify, canvas, dataDir, projectRepo, projectIds: () => projects.map((p) => p.id) });
@@ -283,7 +330,7 @@ registerModelsApi({ fastify, projectRepo });
 const usageStore = new UsageStore(path.join(dataDir, "usage.json"), writeJsonAtomic);
 registerUsageApi({ fastify, canvas, projectRepo, store: usageStore });
 fastify.addHook("onClose", async () => usageStore.flush());
-registerWorkspacesApi({ fastify, canvas, projects, saveProjects, dataDir, writeJson: writeJsonAtomic, floors, nodeApi, sessions, createFloor: floorsApi.createFloor as any });
+registerWorkspacesApi({ fastify, canvas, projects, saveProjects, acl, dataDir, writeJson: writeJsonAtomic, floors, nodeApi, sessions, createFloor: floorsApi.createFloor as any });
 
 // Endpoints de Projetos
 
@@ -377,8 +424,9 @@ fastify.put<{ Params: { id: string }; Body: any }>("/api/projects/:id/settings",
   return { ok: true, settings: req.body };
 });
 
-fastify.get("/api/projects", async () => {
-  return projects;
+// Só os projetos acessíveis; cada item traz ownerId e access (owner | member | admin). Não-admin não recebe repoPath.
+fastify.get("/api/projects", async (req) => {
+  return projects.filter((p) => acl.reqAccess(req, p)).map((p) => acl.present(req, p));
 });
 
 fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }>("/api/projects", async (req, reply) => {
@@ -387,11 +435,16 @@ fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }
     return reply.status(400).send({ error: "Nome do projeto é obrigatório." });
   }
 
+  const wantsRepoPath = repoPath !== undefined && repoPath !== null && repoPath !== "";
+  if (wantsRepoPath && !acl.isAdminReq(req)) {
+    return reply.status(403).send({ error: "Apenas administradores podem usar uma pasta existente; o projeto ganha uma pasta nova." });
+  }
+
   let id = `proj-${Date.now().toString().slice(-6)}`;
   while (projects.some((p) => p.id === id)) id = `proj-${Math.random().toString(36).slice(2, 8)}`;
 
   let dir: string;
-  if (repoPath === undefined || repoPath === null || repoPath === "") {
+  if (!wantsRepoPath) {
     // Sem repoPath: pasta nova só deste projeto (com git)
     dir = await createProjectDir(name, id);
   } else {
@@ -411,11 +464,12 @@ fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }
     }
   }
 
-  const newProject: Project = { id, name, description, repoPath: dir, createdAt: new Date().toISOString() };
+  // Quem cria vira o dono; token interno/dev (sem conta) entrega ao primeiro admin
+  const newProject: Project = { id, name, description, repoPath: dir, createdAt: new Date().toISOString(), ownerId: req.authUser?.id ?? acl.firstAdminId(), members: [] };
   projects.push(newProject);
   saveProjects();
   for (const p of projects) canvas.notify(p.id, { type: "sidebar" });
-  return { ok: true, project: newProject };
+  return { ok: true, project: acl.present(req, newProject) };
 });
 
 // DELETE /api/projects/:id e GET /api/projects/:id/delete-info (projectDeleteApi.ts)
@@ -501,6 +555,8 @@ fastify.get("/ws/terminal", { websocket: true }, (socket, req) => {
 
   const projectId = url.searchParams.get("project") || "";
   const nodeId = url.searchParams.get("node") || "";
+  // Sem acesso (ou projeto inexistente, para quem tem conta): 4404, sem revelar se o projeto existe
+  if (idPattern.test(projectId) && !acl.wsAllowed(socket, projectId, "terminal")) return;
   if (!idPattern.test(projectId) || !idPattern.test(nodeId) || !canvasFileFor(projectId)) {
     socket.close(4400, "project/node inválidos");
     return;
@@ -525,6 +581,7 @@ fastify.get<{ Params: { id: string } }>("/ws/project/:id", { websocket: true }, 
   const url = new URL(req.url, "http://localhost");
   if (!wsAuthorized(socket, req, url)) return;
 
+  if (idPattern.test(req.params.id) && !acl.wsAllowed(socket, req.params.id, "project")) return;
   if (!idPattern.test(req.params.id) || !canvasFileFor(req.params.id)) {
     socket.close(4400, "Projeto inválido");
     return;

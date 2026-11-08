@@ -44,8 +44,17 @@ function parseUpdate(msg: any) {
 
 // Presença global: um socket por aba, independente de projeto
 export class PresenceHub {
-  private peers = new Map<string, { peer: Peer; socket: WebSocket }>();
+  private peers = new Map<string, { peer: Peer; socket: WebSocket; viewerId: string | null }>();
   private timers = new Set<NodeJS.Timeout>();
+
+  // canSee(viewerId, projectId): o espectador pode saber em que projeto o peer está? (sem ele, tudo é visível)
+  constructor(private canSee: (viewerId: string | null, projectId: string) => boolean = () => true) {}
+
+  // Peer como o espectador pode vê-lo: projeto que ele não acessa some (online, mas projectId/cursor/atividade neutros)
+  private view(peer: Peer, viewerId: string | null): Peer {
+    if (peer.projectId === null || this.canSee(viewerId, peer.projectId)) return peer;
+    return { ...peer, projectId: null, cursor: null, activeNodeId: null, activity: "idle" };
+  }
 
   private send(socket: WebSocket, msg: unknown) {
     try {
@@ -55,6 +64,18 @@ export class PresenceHub {
 
   private broadcast(msg: unknown, exceptConnId: string) {
     for (const [connId, { socket }] of this.peers) if (connId !== exceptConnId) this.send(socket, msg);
+  }
+
+  // join/update do peer, filtrado por espectador
+  private broadcastPeer(peer: Peer, kind: "join" | "update", changes: Record<string, unknown>) {
+    for (const [connId, e] of this.peers) {
+      if (connId === peer.connId) continue;
+      const v = this.view(peer, e.viewerId);
+      if (kind === "join") this.send(e.socket, { type: "join", peer: v });
+      else if (v === peer) {
+        this.send(e.socket, { type: "update", connId: peer.connId, ...changes });
+      } else if ("projectId" in changes) this.send(e.socket, { type: "update", connId: peer.connId, projectId: null, cursor: null, activeNodeId: null, activity: "idle" });
+    }
   }
 
   // authUser: conta que abriu o socket; nome/cor passam a vir dela em vez do que o cliente manda no hello
@@ -103,9 +124,9 @@ export class PresenceHub {
         joined = true;
         const peer: Peer = { connId, user, projectId: null, cursor: null, activeNodeId: null, activity: "idle", since: new Date().toISOString() };
         const others = [...this.peers.values()].map((e) => e.peer);
-        this.peers.set(connId, { peer, socket });
-        this.send(socket, { type: "snapshot", you: connId, peers: others });
-        this.broadcast({ type: "join", peer }, connId);
+        this.peers.set(connId, { peer, socket, viewerId: authUser?.id ?? null });
+        this.send(socket, { type: "snapshot", you: connId, peers: others.map((o) => this.view(o, authUser?.id ?? null)) });
+        this.broadcastPeer(peer, "join", {});
         return;
       }
 
@@ -113,7 +134,7 @@ export class PresenceHub {
       const changes = parseUpdate(msg);
       if (Object.keys(changes).length === 0) return;
       Object.assign(this.peers.get(connId)!.peer, changes);
-      this.broadcast({ type: "update", connId, ...changes }, connId);
+      this.broadcastPeer(this.peers.get(connId)!.peer, "update", changes);
     });
 
     socket.on("close", () => {

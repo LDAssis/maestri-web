@@ -15,6 +15,7 @@ interface Deps {
   projectRepo: (projectId: string) => string | null;
   nodeApi: NodeApi;
   wsAuthorized: (socket: WebSocket, req: FastifyRequest, url: URL) => boolean;
+  wsProject?: (socket: WebSocket, projectId: string) => boolean; // acesso do usuário ao projeto (fecha 4404 se não tiver)
   dataDir?: string; // anexos do chat (<dataDir>/attachments/<projeto>) valem como origem de upload
 }
 
@@ -35,7 +36,7 @@ function nodeSize(vp: { w: number; h: number }) {
   return { width: Math.max(dw, 560), height: Math.max(dh, Math.round((560 * vp.h) / vp.w) + 110) };
 }
 
-export function registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAuthorized, dataDir }: Deps) {
+export function registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAuthorized, dataDir, wsProject }: Deps) {
   const { base, resolveTarget, wrap, patch } = nodeApi;
   const manager = new PortalManager(canvas, { repoOf: projectRepo, extraUploadRoots: (projectId) => (dataDir ? [path.join(dataDir, "attachments", projectId)] : []) });
 
@@ -116,6 +117,7 @@ export function registerPortalApi({ fastify, canvas, projectRepo, nodeApi, wsAut
     if (!wsAuthorized(socket, req, url)) return;
     const projectId = url.searchParams.get("project") || "";
     const nodeId = url.searchParams.get("node") || "";
+    if (/^[\w-]+$/.test(projectId) && wsProject && !wsProject(socket, projectId)) return;
     const node = /^[\w-]+$/.test(projectId) && /^[\w-]+$/.test(nodeId) && projectRepo(projectId) ? canvas.state(projectId).nodes?.find((n) => n.id === nodeId) : null;
     if (!node || node.type !== "portal") {
       socket.close(4400, "project/node inválidos");

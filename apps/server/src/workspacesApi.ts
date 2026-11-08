@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import type { NodeApi } from "./nodeApi.js";
 import type { SessionManager } from "./sessions.js";
+import type { ProjectAcl } from "./projectAccess.js";
 import { isText, lc } from "./nodeApi.js";
 import { ApiError } from "./agents.js";
 import { findConflict, overlaps } from "./projectDirs.js";
@@ -23,6 +24,8 @@ export interface WorkspaceProject {
   group?: string | null;
   folder?: string | null;
   pinned?: boolean;
+  ownerId?: string;
+  members?: string[];
 }
 
 interface Sidebar {
@@ -35,6 +38,7 @@ interface Deps {
   canvas: CanvasStore;
   projects: WorkspaceProject[];
   saveProjects: () => void;
+  acl?: ProjectAcl; // permissões por projeto (Fase 2)
   dataDir: string;
   writeJson: (file: string, data: unknown) => void;
   floors: FloorStore;
@@ -46,7 +50,7 @@ interface Deps {
 
 const NAME_MAX = 80;
 
-export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects: saveProjectsToDisk, dataDir, writeJson, floors, nodeApi, sessions, createFloor }: Deps) {
+export function registerWorkspacesApi({ fastify, canvas, projects, acl, saveProjects: saveProjectsToDisk, dataDir, writeJson, floors, nodeApi, sessions, createFloor }: Deps) {
   const { base, requireMaestro, wrap } = nodeApi;
   const sidebarFile = path.join(dataDir, "sidebar.json");
   let sidebar: Sidebar = { groups: [], folders: [] };
@@ -82,10 +86,12 @@ export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects:
     return n;
   };
 
+  // Sessão de usuário só enxerga os workspaces que acessa (agentes/CLI com token interno enxergam todos)
+  const visible = () => projects.filter((p) => !acl || acl.canSeeCurrent(p.id));
   const findProject = (name: unknown) => {
-    const hit = projects.filter((p) => lc(p.name) === lc(name));
+    const hit = visible().filter((p) => lc(p.name) === lc(name));
     if (hit.length === 1) return hit[0];
-    throw new ApiError(404, `Workspace "${name}" não encontrado. Workspaces: ${projects.map((p) => p.name).join(", ")}.`);
+    throw new ApiError(404, `Workspace "${name}" não encontrado. Workspaces: ${visible().map((p) => p.name).join(", ")}.`);
   };
 
   // Destino na barra lateral: cria grupo/pasta se faltar e devolve { group, folder }
@@ -123,11 +129,11 @@ export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects:
 
   function tree(currentId: string) {
     const of = (group: string | null, folder: string | null) =>
-      projects.filter((p) => (p.group ?? null) === group && (p.folder ?? null) === folder).map((p) => view(p, currentId));
+      visible().filter((p) => (p.group ?? null) === group && (p.folder ?? null) === folder).map((p) => view(p, currentId));
     const foldersIn = (group: string | null) =>
       sidebar.folders.filter((f) => f.group === group).map((f) => ({ name: f.name, workspaces: of(group, f.name) }));
     return {
-      pinned: projects.filter((p) => p.pinned).map((p) => view(p, currentId)),
+      pinned: visible().filter((p) => p.pinned).map((p) => view(p, currentId)),
       root: { workspaces: of(null, null), folders: foldersIn(null) },
       groups: sidebar.groups.map((g) => ({ name: g, workspaces: of(g, null), folders: foldersIn(g) })),
     };
@@ -230,7 +236,7 @@ export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects:
     }
     if (b.pinned !== undefined) p.pinned = b.pinned;
     ok();
-    return { ok: true, project: p };
+    return { ok: true, project: acl ? acl.present(req, p as any) : p };
   }));
 
   fastify.get(`${base}/workspaces`, wrap((c) => {
@@ -243,6 +249,7 @@ export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects:
     const b = req.body ?? {};
     const name = cleanName(b.name, "o nome do workspace");
     if (projects.some((p) => lc(p.name) === lc(name))) throw new ApiError(409, `Já existe um workspace chamado "${name}".`);
+    if (acl && !acl.isAdminReq(req)) throw new ApiError(403, "Apenas administradores criam workspaces em uma pasta existente.");
     if (!isText(b.dir, 4096) || !b.dir.trim()) throw new ApiError(400, "Informe --dir (o diretório precisa existir).");
     let dir: string;
     try {
@@ -259,7 +266,9 @@ export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects:
 
     let id = `proj-${Date.now().toString().slice(-6)}`;
     while (projects.some((p) => p.id === id)) id = `proj-${Math.random().toString(36).slice(2, 8)}`;
-    const project: WorkspaceProject = { id, name, description: source ? `Clone de ${source.name}` : "", repoPath: dir, createdAt: new Date().toISOString(), group: dest.group, folder: dest.folder };
+    // Herda dono e membros do projeto de origem (o do agente que criou); sem origem, o primeiro admin é o dono
+    const heir = acl ? acl.inherit(projects.find((p) => p.id === c.projectId)) : {};
+    const project: WorkspaceProject = { id, name, description: source ? `Clone de ${source.name}` : "", repoPath: dir, createdAt: new Date().toISOString(), group: dest.group, folder: dest.folder, ...heir };
     projects.push(project);
     saveProjects();
     saveSidebar();
