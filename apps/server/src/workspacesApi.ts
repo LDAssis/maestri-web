@@ -3,6 +3,7 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import type { NodeApi } from "./nodeApi.js";
+import type { SessionManager } from "./sessions.js";
 import { isText, lc } from "./nodeApi.js";
 import { ApiError } from "./agents.js";
 import { findConflict, overlaps } from "./projectDirs.js";
@@ -38,13 +39,14 @@ interface Deps {
   writeJson: (file: string, data: unknown) => void;
   floors: FloorStore;
   nodeApi: NodeApi;
+  sessions: SessionManager;
   // Cria um andar de verdade (worktree/clone) no projeto indicado; vem de registerFloorsApi
   createFloor: (projectId: string, o: Record<string, unknown>) => Promise<{ floor: { git: boolean }; note: string }>;
 }
 
 const NAME_MAX = 80;
 
-export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects: saveProjectsToDisk, dataDir, writeJson, floors, nodeApi, createFloor }: Deps) {
+export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects: saveProjectsToDisk, dataDir, writeJson, floors, nodeApi, sessions, createFloor }: Deps) {
   const { base, requireMaestro, wrap } = nodeApi;
   const sidebarFile = path.join(dataDir, "sidebar.json");
   let sidebar: Sidebar = { groups: [], folders: [] };
@@ -311,6 +313,16 @@ export function registerWorkspacesApi({ fastify, canvas, projects, saveProjects:
     p.name = next;
     saveProjects();
     return { ok: true, name: next };
+  }));
+
+  // Como o item de menu "Descarregar": encerra os terminais do workspace (o canvas fica; ask/send/check os reacordam)
+  fastify.post(`${base}/workspaces/unload`, wrap((c, req) => {
+    requireMaestro(c, "descarregar workspaces");
+    const p = findProject(req.body?.name);
+    if (p.id === c.projectId) throw new ApiError(400, "Não é possível descarregar o workspace em que você está.");
+    const terminals = (canvas.state(p.id).nodes ?? []).filter((n) => n.type === "agentTerminal" && sessions.get(p.id, n.id)).length;
+    sessions.killProject(p.id);
+    return { ok: true, name: p.name, terminals };
   }));
 
   fastify.post(`${base}/workspaces/move`, wrap((c, req) => {

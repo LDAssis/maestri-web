@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { rmTmp } from "./rmtmp.js";
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-polish6-test-")));
 const repo = path.join(tmp, "repo");
@@ -71,7 +72,7 @@ before(async () => {
 after(async () => {
   ws.close();
   await fastify.close();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  rmTmp(tmp);
 });
 
 test("roles globais pela UI: CRUD, duplicado, validação, mesmo armazenamento do CLI e evento roles", async () => {
@@ -185,4 +186,24 @@ test("floor land de clone na mesma branch não imprime 'main mesclada em main'",
   git(wt, "commit", "-m", "feat");
   const out2 = await ok(["floor", "land", "Feat", "--into", "main"]);
   assert.match(out2, /feat mesclada em main\. Andar removido; branch feat mantida\./);
+});
+
+test("workspace unload: encerra os terminais do workspace, recusa o próprio e nome inexistente", async () => {
+  const dir = path.join(tmp, "ws-unload");
+  fs.mkdirSync(dir);
+  await ok(["workspace", "create", "WU", "--dir", dir]);
+  await ok(["recruit", "Dorminhoco", "--preset", "shell", "--workspace", "WU"]);
+  const projects = (await call("GET", "/api/projects")).json();
+  const wu = projects.find((p: any) => p.name === "WU");
+  const sessions = async () => (await call("GET", `/api/projects/${wu.id}/sessions`)).json();
+  assert.ok((await sessions()).length >= 1, "recruta abriu terminal no WU");
+
+  assert.match(await ok(["workspace", "unload", "WU"]), /descarregado \(1 terminal/);
+  assert.equal((await sessions()).length, 0, "terminais encerrados");
+
+  const own = projects.find((p: any) => p.id === P);
+  const refused = await maestri(["workspace", "unload", own.name]);
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /em que você está/);
+  assert.match((await maestri(["workspace", "unload", "Nao Existe"])).stderr, /não encontrado/i);
 });

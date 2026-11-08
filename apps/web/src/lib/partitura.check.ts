@@ -84,7 +84,7 @@ const dirty = parsePartitura(JSON.stringify({ ...good, nodes: [{ ...dup, type: "
 assert.ok(dirty.ok && dirty.partitura.nodes[0].data.status === "idle" && !("chat" in dirty.partitura.nodes[0].data) && !("branch" in dirty.partitura.nodes[0].data));
 
 // lista de tipos extensível
-assert.deepEqual(PARTITURA_NODE_TYPES, ["agentTerminal", "stickyNote", "portal", "fileTree", "diff"]);
+assert.deepEqual(PARTITURA_NODE_TYPES, ["agentTerminal", "stickyNote", "portal", "fileTree", "diff", "band", "noteStack"]);
 PARTITURA_NODE_TYPES.push("outro");
 assert.ok(parsePartitura(JSON.stringify({ ...good, nodes: [{ ...dup, type: "outro" }] })).ok);
 PARTITURA_NODE_TYPES.pop();
@@ -98,5 +98,20 @@ assert.ok(!("worktree" in pf.nodes[1].data) && pf.nodes[1].data.title === "Diff"
 const back = parsePartitura(JSON.stringify({ ...good, nodes: [ft, df] }));
 assert.ok(back.ok && back.partitura.nodes[0].data.root === "main" && !("worktree" in back.partitura.nodes[1].data));
 assert.equal(ft.data.root, "meu-andar", "entrada não é mutada");
+
+// bandas e fichários (partituras da CLI): members e stackId acompanham os ids novos
+const bd = { id: "b", type: "band", position: { x: 0, y: 0 }, data: { title: "Banda", members: ["m1", "m2"] } };
+const m1 = { id: "m1", type: "agentTerminal", position: { x: 1, y: 1 }, data: { title: "A" } };
+const m2 = { id: "m2", type: "agentTerminal", position: { x: 2, y: 2 }, data: { title: "B" } };
+const sk = { id: "sk", type: "noteStack", position: { x: 3, y: 3 }, data: { title: "Pilha" } };
+const pg = { id: "pg", type: "stickyNote", position: { x: 4, y: 4 }, data: { title: "Pág", stackId: "sk" } };
+const pb = parsePartitura(JSON.stringify({ ...good, nodes: [bd, m1, m2, sk, pg], edges: [] }));
+assert.ok(pb.ok);
+if (pb.ok) {
+  const inst = instantiatePartitura(pb.partitura, { x: 0, y: 0 });
+  const idOf = (t: string) => inst.nodes.find((n) => n.data.title === t)!.id;
+  assert.deepEqual(inst.nodes.find((n) => n.type === "band")!.data.members, [idOf("A"), idOf("B")]);
+  assert.equal(inst.nodes.find((n) => n.data.title === "Pág")!.data.stackId, idOf("Pilha"));
+}
 
 console.log("partitura.check: OK");

@@ -18,19 +18,24 @@ export const SKILL_NAME = "maestri-web";
 const START = "<!-- maestri-web:start (gerenciado pelo Maestri Web; não edite este bloco) -->";
 const END = "<!-- maestri-web:end -->";
 
+// Só dispara no Maestri Web: o Maestri nativo tem skills próprias para as mesmas situações e se distingue pelo ambiente
+// (o Web define MAESTRI_NODE_ID; o nativo define MAESTRI_TERMINAL_ID e não MAESTRI_NODE_ID)
 const DESCRIPTION =
-  "Use SEMPRE que a variável de ambiente MAESTRI_NODE_ID estiver definida (você roda num terminal do canvas do Maestri Web), " +
-  "quando receber uma mensagem 'through Maestri Chat', ou quando pedirem para falar com outro agente, ler/escrever uma nota, " +
-  "usar um portal (navegador), andares, rotinas, bandas ou recrutar agentes. Ensina o CLI `maestri` (list, ask, send, check, " +
-  "say, note, portal, floor, routine, recruit, band...).";
+  "Use SOMENTE quando a variável de ambiente MAESTRI_NODE_ID estiver definida (você roda num terminal do canvas do Maestri Web): " +
+  "para falar com outro agente, responder mensagens 'through Maestri Chat', ler/escrever notas, usar um portal (navegador), " +
+  "andares, rotinas, bandas ou recrutar agentes com o CLI `maestri` (list, ask, send, check, say, note, portal, floor, routine, recruit, band...). " +
+  "NÃO use se MAESTRI_NODE_ID não existir, nem se só MAESTRI_TERMINAL_ID estiver definida (isso é o Maestri nativo, que tem outras skills).";
+
+const WEB_ONLY_GUARD =
+  "> **Só vale no Maestri Web.** Confira `MAESTRI_NODE_ID` no ambiente: se não estiver definida, ou se só existir `MAESTRI_TERMINAL_ID` (Maestri nativo), ignore esta skill e use as do Maestri nativo.";
 
 let cachedSkill: string | null = null;
 // SKILL.md do repositório com o frontmatter da skill instalada (nome estável e descrição que dispara sozinha)
 export function skillContent() {
   if (cachedSkill) return cachedSkill;
   const src = fs.readFileSync(path.join(repoRoot, "SKILL.md"), "utf-8");
-  const body = src.replace(/^---\n[\s\S]*?\n---\n/, "");
-  cachedSkill = `---\nname: ${SKILL_NAME}\ndescription: ${DESCRIPTION}\n---\n${body}`;
+  const body = src.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
+  cachedSkill = `---\nname: ${SKILL_NAME}\ndescription: ${DESCRIPTION}\n---\n${WEB_ONLY_GUARD}\n${body}`;
   return cachedSkill;
 }
 
@@ -39,7 +44,8 @@ export function agentsBlock(skillPath: string) {
   return [
     START,
     "## Maestri Web (canvas de agentes)",
-    "Se a variável de ambiente `MAESTRI_NODE_ID` estiver definida, você roda num terminal do canvas do Maestri Web, ligado a",
+    "Só vale se a variável de ambiente `MAESTRI_NODE_ID` estiver definida; se ela não existir, ou se só `MAESTRI_TERMINAL_ID` existir (Maestri nativo), ignore este bloco.",
+    "Com `MAESTRI_NODE_ID` definida, você roda num terminal do canvas do Maestri Web, ligado a",
     "outros agentes, notas e portais. Use o comando `maestri` (está no PATH; senão, `$MAESTRI_CLI`):",
     "- `maestri list`: quem é você e o que está conectado (rode antes de tudo); `maestri help`: todos os comandos.",
     '- `maestri ask "Agente" "pergunta"` / `send` / `check`: conversar com outros agentes; `maestri note read|write|edit "Nota"`.',

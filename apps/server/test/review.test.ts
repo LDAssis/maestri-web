@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { rmTmp } from "./rmtmp.js";
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-review-test-")));
 const repo = path.join(tmp, "repo");
@@ -51,7 +52,7 @@ before(async () => {
 });
 after(async () => {
   await fastify.close();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  rmTmp(tmp);
 });
 
 const layout = () => [
@@ -132,7 +133,10 @@ test("apagar um fichário solta as páginas (nada de nota escondida sem fichári
   assert.ok(!page.data.stackId && page.hidden === false, JSON.stringify(page));
 });
 
-test("pre-run: o timeout mata o grupo de processos inteiro (filhos não ficam vivos)", async () => {
+const win = process.platform === "win32";
+
+// Windows: não há grupo de processos POSIX (process.kill(-pid)); runPreRun só mata o sh e o neto sobrevive — lacuna real em src/routines.ts
+test("pre-run: o timeout mata o grupo de processos inteiro (filhos não ficam vivos)", { skip: win && "sem grupo de processos POSIX no Windows (kill(-pid))" }, async () => {
   const pidFile = path.join(tmp, "child.pid");
   const t0 = Date.now();
   const r = await runPreRun(`sleep 30 & echo $! > '${pidFile}'; wait`, tmp, {});
@@ -148,6 +152,9 @@ test("pre-run: o timeout mata o grupo de processos inteiro (filhos não ficam vi
     alive = false;
   }
   assert.equal(alive, false, "o filho do pre-run continuou vivo");
+});
+
+test("pre-run: sucesso, código ≠ 0 e saída demais", async () => {
   // sucesso, código ≠ 0 e saída demais
   assert.deepEqual(await runPreRun("printf 'a\\nb'", tmp, {}), { ok: true, stdout: "a\nb" });
   const bad = await runPreRun("echo falhou >&2; exit 3", tmp, {});
@@ -164,7 +171,7 @@ test("sanitizeTyped tira ESC/controles (inclusive o fim do bracketed paste) e no
   assert.equal(sanitizeTyped("linha1\nlinha2 — acentuação ✓"), "linha1\nlinha2 — acentuação ✓");
 });
 
-test("contas de CLI são criadas com permissão 0700", () => {
+test("contas de CLI são criadas com permissão 0700", { skip: win && "NTFS não tem modos POSIX (mode é ignorado)" }, () => {
   const dir = fs.mkdtempSync(path.join(tmp, "acc-"));
   const store = new AccountStore(dir);
   store.create("claude", "Trabalho");

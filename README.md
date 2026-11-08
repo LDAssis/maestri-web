@@ -29,7 +29,7 @@ Inspirado no [Maestri](https://www.themaestri.app) (app nativo). O Maestri Web r
 - **Canvas infinito** (React Flow): mova, redimensione e ligue nós por arestas; busca (Ctrl+K), atalhos, menu de contexto, elevar e apagar nós.
 - **Tempo real e multiusuário:** o servidor é a fonte da verdade do canvas e transmite cada mudança por WebSocket. Presença com usuários conectados, cursores ao vivo e o nó em que cada pessoa está interagindo.
 - **Multi-projetos (workspaces):** cada projeto tem o próprio diretório, canvas, configurações, sessões e agentes — nada vaza de um projeto para outro. Barra lateral com fixados, grupos e pastas.
-- **Partituras:** exporte/importe uma seleção do canvas como arquivo.
+- **Partituras:** exporte/importe uma seleção do canvas como arquivo (inclui bandas e fichários). Pela CLI (Maestro), `maestri partitura list|insert|create|update|delete` guarda times (agentes com roles e comandos, bandas, notas, portais e cordas) em `.maestri/partituras/` (ou globais no diretório de dados), no mesmo formato do arquivo da UI com campos extras que a UI ignora.
 - **Desenhos por andar:** caneta, retângulo, elipse, seta, texto, cor, espessura, borracha e desfazer, em tempo real e persistidos.
 - **Avisos:** toasts no canvas (`maestri notify`, lembretes de rotinas, status de andar, andar que passa a seguir um PR) e notificações do sistema operacional pelo servidor (liga/desliga nas Configurações).
 
@@ -65,6 +65,7 @@ Inspirado no [Maestri](https://www.themaestri.app) (app nativo). O Maestri Web r
 ### Equipe
 - **`recruit`** (do zero, cópia sua ou `--replace` no mesmo nó), `connect`, **bandas** (grupos em que todo membro alcança todos), **roles** (por projeto ou globais, entregues como `CLAUDE.md`/`AGENTS.md` na pasta do role) e **presets**.
 - **Rotinas:** comandos/prompts agendados (`--every`, `--daily`, `--weekly`, `--once`) para o próprio terminal, outro terminal ou como lembrete; `--pre-run` com `{{output}}`, `--count/--until`, pular se ocupado e histórico de disparos.
+- **Indicador de uso (Claude):** cada terminal `claude` sobe com `--settings` apontando a statusLine para `maestri usage-report` (interno). O Claude Code entrega por ela, via stdin, `rate_limits.five_hour` e `seven_day` (`used_percentage` e `resets_at`) e o modelo; o servidor guarda o uso **por conta** (`Default` ou o nome de `--account`) em `.maestri_data/usage.json` e avisa os navegadores (`{type:"usage"}`). `GET /api/projects/:p/usage` devolve `{accounts, nodes}` do projeto. Se você já tem `statusLine` em `~/.claude/settings.json` (ou no `CLAUDE_CONFIG_DIR` da conta), ela é mantida: o comando vai em `MAESTRI_USER_STATUSLINE` e o `usage-report` repassa o stdin a ela e imprime a saída dela. O relatório só sai quando muda ou a cada 60 s, com timeout de 1 s, e nunca derruba a statusline. Os campos só aparecem depois da 1ª resposta e podem faltar.
 
 ### Colaboração
 - Acesso por rede com **token** e identidade (nome e cor) na primeira visita; várias pessoas no mesmo canvas, nos mesmos terminais e no mesmo chat.
@@ -146,6 +147,8 @@ Com `MAESTRI_TOKEN` definido, `GET /api/health` continua público; as demais rot
 
 ## ⚙️ Configuração
 
+As variáveis podem ficar num `.env` por app (ignorado pelo git): copie `apps/server/.env.example` para `apps/server/.env` (carregado pelo `npm run dev` via `--env-file-if-exists`) e `apps/web/.env.example` para `apps/web/.env` (carregado pelo Next.js). Variáveis já definidas no ambiente valem mais que as do arquivo.
+
 ### Servidor (`apps/server`)
 
 | Variável | Padrão | Para quê |
@@ -159,11 +162,13 @@ Com `MAESTRI_TOKEN` definido, `GET /api/health` continua público; as demais rot
 | `SHELL` | `/bin/bash` | Shell dos terminais dos agentes |
 | `MAESTRI_PORTAL_ALLOW_PRIVATE` | — | `1` libera o bloqueio de metadata/link-local e da API do próprio servidor nos portais (localhost em outras portas já é livre); necessário para abrir a própria UI do Maestri Web dentro de um portal |
 | `MAESTRI_PORTAL_NO_SANDBOX` | — | Qualquer valor inicia o Chromium com `--no-sandbox` (necessário em alguns contêineres/root) |
-| `MAESTRI_PORTAL_FRAME_MS` | `700` | Intervalo dos frames ao vivo dos portais |
+| `MAESTRI_PORTAL_FRAME_MS` | `150` | Intervalo mínimo entre frames ao vivo dos portais (só são enviados quando a página muda) |
 | `MAESTRI_ASK_QUIET_MS` | `5000` | Silêncio do terminal que encerra um `ask` |
 | `MAESTRI_WAKE_STARTUP_MS` | `30000` | Tempo máximo em que um agente recém-acordado ainda “está iniciando” |
 | `MAESTRI_WAKE_SETTLE_MS` | `1500` | Silêncio após a primeira saída para o agente acordado contar como pronto |
 | `MAESTRI_AGENT_CONTEXT` | `1` | `0` desliga a instalação automática das instruções do canvas para os agentes (skill `maestri-web` em `~/.claude/skills` e `~/.gemini/config/skills`, bloco no `AGENTS.md` global do Codex e do opencode) |
+| `MAESTRI_USAGE_REPORT` | `1` | `0` desliga o indicador de uso dos planos Claude: não acrescenta `--settings` (statusLine) aos terminais `claude` (nos testes fica desligado, salvo `1`) |
+| `MAESTRI_SUBMIT_DELAY_MS` | `250` | Pausa entre o texto digitado por `ask`/`send`/chat/rotinas e o Enter, que vai num write separado: TUIs como o Claude Code tratam entrada que chega junta como colagem e o `` colado viraria quebra de linha (o texto ficaria parado no input). Multi-linha vai em bracketed paste. `--raw` não passa por aqui |
 | `MAESTRI_DESKTOP_NOTIFY` | — | `1`/`0` força ligar/desligar as notificações do sistema (`notify-send` no Linux, `osascript` no macOS) para `maestri notify`, lembretes de rotina, andares em blocked/review/done e andares que passam a seguir um PR. Sem a variável vale a preferência do projeto; o padrão é ligado só quando o servidor escuta em loopback |
 | `MAESTRI_PR_POLL_MS` | `120000` | Intervalo da detecção de PRs em segundo plano nos andares git (também roda quando um agente do andar fica ocioso depois de produzir saída, `MAESTRI_IDLE_MS`, padrão 8000) |
 | `MAESTRI_ROUTINE_TICK_MS` | `15000` | Granularidade do agendador de rotinas |
@@ -187,7 +192,7 @@ Comando de inicialização e atalhos de CLI (globais e por projeto), retomada de
 
 ## 🧰 Referência rápida da CLI `maestri`
 
-Disponível em todo terminal de agente (`maestri help`, `maestri <comando> --help`). Nomes são os títulos dos nós; o alvo precisa estar conectado a você (agentes de outros workspaces: `"Nome @ Workspace"`). Flags desconhecidas falham; use `--` antes de um texto que comece com `--`. Detalhes e exemplos completos para agentes: **[`SKILL.md`](SKILL.md)**.
+Disponível em todo terminal de agente (`maestri help [comando]`, `maestri <comando> --help`). Nomes são os títulos dos nós; o alvo precisa estar conectado a você (agentes de outros workspaces: `"Nome @ Workspace"`). Flags desconhecidas falham; use `--` antes de um texto que comece com `--`. Detalhes e exemplos completos para agentes: **[`SKILL.md`](SKILL.md)**.
 
 **Equipe e contexto**
 ```bash
@@ -195,12 +200,13 @@ maestri list                                   # você, colegas, bandas, notas, 
 maestri ask "Nome" "pergunta" [--timeout S]    # envia e espera o agente ficar quieto
 maestri ask --batch '{"A":"p1","B":"p2"}'      # em paralelo; saída em JSON
 maestri send "Nome" "texto" | check "Nome"     # escreve / lê as últimas linhas
-maestri recruit "Hawk" --role "Reviewer" [--preset P] [--floor F] [--workspace W] [--band B] [--account A]
+maestri recruit "Hawk" --role "Reviewer" [--preset P] [--floor F] [--workspace W] [--band B] [--account A] [--model M]
 maestri recruit "Novo" --replace "Antigo" --preset "Codex"   # troca o agente no mesmo nó
 maestri dismiss "Nome" | connect "A" "B"       # (Maestro)
 maestri preset list|show|create|set|delete     # presets de agente
-maestri role list|show|create|edit|write|assign
+maestri role list|show|create|edit|write|assign|delete [--force]
 maestri band create|add|remove|dissolve        # (Maestro)
+maestri partitura list|insert|create|update|delete   # (Maestro) times salvos; floor create --partitura P
 maestri account list|create|delete --cli claude|codex
 ```
 
@@ -215,6 +221,7 @@ maestri recall list | recall attachment <id>
 ```bash
 maestri note read|write|append|edit|delete|create "Nota" ...   # linhas/intervalos, travas, cadeias
 maestri note stack|unstack ...                                  # fichários
+maestri note delete --stack "Fichário"                          # apaga o fichário e as notas dele
 maestri arrange ["Nome"] [--name N] [--icon I] [--color C]
 ```
 
@@ -222,7 +229,7 @@ maestri arrange ["Nome"] [--name N] [--icon I] [--color C]
 ```bash
 maestri portal create URL "Nome" | edit | close | navigate "Portal" URL
 maestri portal snapshot "Portal"                 # árvore com refs @e1…
-maestri portal click|fill|type|key|select|check|upload|scroll "Portal" @e3 ...
+maestri portal click|fill|type|key|select|check|upload|scroll|drag "Portal" @e3 ...   # check sem alvo = screenshot; drag DE PARA
 maestri portal text|html|evaluate|logs|screenshot|resize|ua "Portal" ...
 maestri portal wait "Portal" (@ref|seletor|--text "t"|--url "padrão"|MS) [--timeout S]
 ```
@@ -233,7 +240,7 @@ maestri floor list | status "texto" [--progress 3/5] [--state working|blocked|re
 maestri floor create "Nome" [--branch B] [--existing-branch] [--copy | --no-git]   # (Maestro)
 maestri floor create --pull-request NUMERO|URL                                      # (Maestro; usa o gh)
 maestri floor land "Nome" | delete "Nome" | unload "Nome"                           # (Maestro; land/delete a partir do térreo)
-maestri workspace list | create "Nome" --dir PATH [--from "Origem"] | rename | move # (Maestro)
+maestri workspace list | create "Nome" --dir PATH [--from "Origem"] | rename | move | unload # (Maestro)
 ```
 
 **Rotinas** (Maestro)

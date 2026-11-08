@@ -32,10 +32,26 @@ export const roleCwdPatch = (node: Obj, d: { worktreePath: string | null; roleDi
 
 // Paleta do `arrange` (a única que o nó desenha) e cores antigas/padrão da UI mapeadas para ela
 export const ARRANGE_PALETTE = ["amber", "indigo", "emerald", "rose", "sky", "violet", "orange", "slate"] as const;
-const LEGACY_COLORS: Record<string, string> = {
+// Inclui os nomes de cor do app nativo (agentes/bandas: blue red green orange purple pink cyan yellow; notas: ... white charcoal slate midnight)
+export const LEGACY_COLORS: Record<string, string> = {
   purple: "violet", violet: "violet", fuchsia: "violet", pink: "rose", red: "rose", rose: "rose",
   blue: "sky", cyan: "sky", sky: "sky", teal: "emerald", green: "emerald", lime: "emerald", emerald: "emerald",
   yellow: "amber", amber: "amber", orange: "orange", gray: "slate", grey: "slate", zinc: "slate", slate: "slate", indigo: "indigo",
+  white: "slate", charcoal: "slate", midnight: "indigo",
+};
+// Nomes de ícone do app nativo (SF Symbols) -> o ícone curado do Web (ICONS em notesApi.ts) mais próximo
+export const ICON_ALIASES: Record<string, string> = {
+  sparkle: "sparkles", seal: "star", "bubble.left.and.bubble.right": "bot", gearshape: "wrench", "rectangle.portrait": "terminal",
+  "server.rack": "database", "globe.americas": "globe", hammer: "wrench", bolt: "zap", memorychip: "cpu", laptopcomputer: "code",
+  desktopcomputer: "code", paintbrush: "palette", folder: "book", "doc.text": "book", cube: "database", "shield.checkered": "shield",
+  eye: "search", "wand.and.stars": "sparkles", theatermasks: "star", "person.text.rectangle": "bot", leaf: "heart",
+  graduationcap: "book", "books.vertical": "book", "chart.bar": "database", "antenna.radiowaves.left.and.right": "zap",
+  "pencil.and.ruler": "pen", "testtube.2": "flask", stethoscope: "heart", "music.note": "star", camera: "palette", gamecontroller: "rocket",
+  // bandas
+  "person.3": "crown", "person.2": "star", "music.microphone": "sparkles", "music.mic": "sparkles", "figure.dance": "zap",
+  "figure.socialdance": "zap", guitars: "star", pianokeys: "star", "pianokeys.inverse": "star", metronome: "star", tuningfork: "star",
+  "music.quarternote.3": "star", "music.note.list": "star", headphones: "heart", hifispeaker: "zap", amplifier: "zap", waveform: "zap",
+  recordingtape: "star", radio: "zap",
 };
 // Nome de cor (da paleta ou antigo) -> cor da paleta do arrange; undefined se não houver equivalente
 export const arrangeColor = (c: unknown): string | undefined => (typeof c === "string" ? LEGACY_COLORS[c.trim().toLowerCase()] : undefined);

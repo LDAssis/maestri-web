@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { rmTmp, installFakeBin } from "./rmtmp.js";
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-polish8-test-")));
 const repo = path.join(tmp, "repo");
@@ -21,9 +22,11 @@ git(repo, "add", "-A");
 git(repo, "commit", "-m", "init");
 
 // Programas falsos no PATH: notify-send (registra os argumentos), gh (lista de PRs por branch) e TUIs que mostram o indicador de ocupado
+const winSO = process.platform === "win32";
+const noSO = winSO && "desktopNotify não faz nada no Windows (só notify-send/osascript)";
 const bin = (name: string, body: string) => fs.writeFileSync(path.join(fakeBin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 bin("notify-send", `for a in "$@"; do printf '%s\\n' "$a" >> "${notifyLog}"; done; echo "---" >> "${notifyLog}"`);
-bin("gh", `[ -f "${ghDir}/unauth" ] && { echo "gh auth login" >&2; exit 4; }\ncase "$2" in\n  list) f="${ghDir}/list-$4.json"; [ -f "$f" ] && cat "$f" || echo "[]" ;;\nesac`);
+installFakeBin(fakeBin, "gh", `[ -f "${ghDir}/unauth" ] && { echo "gh auth login" >&2; exit 4; }\ncase "$2" in\n  list) f="${ghDir}/list-$4.json"; [ -f "$f" ] && cat "$f" || echo "[]" ;;\nesac`);
 bin("busyprog", `echo "✻ Working (1s • esc to interrupt)"\nsleep 1.5\necho "RESPOSTA-FINAL"\necho "> pronto"`);
 bin("busyprog2", `echo "Thinking… (esc to interrupt)"\nsleep 8\necho "NUNCA-A-TEMPO"`);
 process.env.PATH = `${fakeBin}${path.delimiter}${process.env.PATH}`;
@@ -102,12 +105,12 @@ before(async () => {
 
 after(async () => {
   await fastify.close();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  rmTmp(tmp);
 });
 
 // ---------- 1. notificações do sistema ----------
 
-test("desktopNotify: notify-send via execFile (sem shell), com '--', texto limpo, só quando o comando existe", async () => {
+test("desktopNotify: notify-send via execFile (sem shell), com '--', texto limpo, só quando o comando existe", { skip: noSO }, async () => {
   assert.equal(desktopNotifyEnabled(P), true, "padrão em loopback: ligado");
   fs.writeFileSync(notifyLog, "");
   assert.equal(desktopNotify(P, "Título", "corpo\x07com\nquebra"), true);
@@ -152,7 +155,7 @@ test("liga/desliga: MAESTRI_DESKTOP_NOTIFY vence a preferência do projeto; padr
     await req("PUT", `/api/projects/${P}/prefs`, { desktopNotify: false });
     process.env.MAESTRI_DESKTOP_NOTIFY = "1";
     await ok(M("notify", "ligado pela env"));
-    await until(() => notifications().length === 1, "ligado pela env mesmo com a preferência desligada");
+    if (!winSO) await until(() => notifications().length === 1, "ligado pela env mesmo com a preferência desligada");
   } finally {
     process.env.MAESTRI_DESKTOP_NOTIFY = "";
     await req("PUT", `/api/projects/${P}/prefs`, { desktopNotify: true });
@@ -166,7 +169,7 @@ test("liga/desliga: MAESTRI_DESKTOP_NOTIFY vence a preferência do projeto; padr
   assert.equal(desktopNotifyEnabled(P), true);
 });
 
-test("maestri notify, lembrete de rotina e andar em blocked/review/done também vão para o SO", async () => {
+test("maestri notify, lembrete de rotina e andar em blocked/review/done também vão para o SO", { skip: noSO }, async () => {
   fs.writeFileSync(notifyLog, "");
   await ok(M("notify", "build terminou"));
   await until(() => notifications().length === 1, "notify");
@@ -199,7 +202,7 @@ test("andar git: fim do turno do agente (ocioso depois de saída) detecta o PR, 
   await ok(M("send", "Fl", "echo trabalho"));
   await until(async () => ((await req("GET", `/api/projects/${P}/floors`)).json().floors ?? (await req("GET", `/api/projects/${P}/floors`)).json()).find?.((f: any) => f.name === "Feat")?.pullRequest?.number === 7, "andar passou a seguir o PR");
   await until(() => events.some((e) => e.type === "notify" && e.text === "Andar Feat agora segue o PR #7"), "toast no canvas");
-  await until(() => notifications().some((n) => n.includes("Andar Feat agora segue o PR #7")), "notificação do SO");
+  if (!winSO) await until(() => notifications().some((n) => n.includes("Andar Feat agora segue o PR #7")), "notificação do SO");
   // já segue: não avisa de novo
   const count = notifications().length;
   await ok(M("send", "Fl", "echo mais"));
@@ -266,7 +269,7 @@ test("ask espera enquanto a tela mostra o indicador de ocupado, mesmo em silênc
 test("withRolePrompt detecta claude/codex pelo executável (caminho, variáveis na frente) e não mexe em shells compostos", () => {
   const dir = fs.mkdtempSync(path.join(tmp, "role-"));
   const w = (cmd: string) => withRolePrompt(dir, "n1", cmd, "papel");
-  const arg = ` "$(cat '${path.join(dir, ".maestri-roles", "n1.md")}')"`;
+  const arg = ` "$(cat '${path.join(dir, ".maestri-roles", "n1.md").replaceAll("\\", "/")}')"`; // Windows: o src quota com /
   assert.equal(w("claude"), `claude${arg}`);
   assert.equal(w("/opt/homebrew/bin/codex --yolo"), `/opt/homebrew/bin/codex --yolo${arg}`);
   assert.equal(w("ANTHROPIC_BASE_URL=http://localhost:4000 claude --model opus"), `ANTHROPIC_BASE_URL=http://localhost:4000 claude --model opus${arg}`);

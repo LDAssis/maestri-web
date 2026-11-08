@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "maestri-polish7-test-")));
 process.env.REPO_PATH = repo;
@@ -63,7 +64,7 @@ before(async () => {
 
 after(async () => {
   await fastify.close();
-  fs.rmSync(repo, { recursive: true, force: true });
+  rmTmp(repo);
 });
 
 // ---------- chat: o que vai ao PTY é sanitizado e o agente não fica preso ----------

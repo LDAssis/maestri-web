@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { rmTmp } from "./rmtmp.js";
 
 const repo = fs.mkdtempSync(path.join(os.tmpdir(), "maestri-auth-test-"));
 process.env.REPO_PATH = repo;
@@ -20,7 +21,7 @@ before(async () => {
 
 after(async () => {
   await fastify.close();
-  fs.rmSync(repo, { recursive: true, force: true });
+  rmTmp(repo);
 });
 
 test("GET /api/health é público e informa authRequired", async () => {

@@ -6,6 +6,7 @@ import type { CanvasStore } from "./canvas.js";
 import { ApiError, PRESETS, PRESET_LABELS, SIZES, freePosition, validCmd } from "./agents.js";
 import { arrangeColor, deliverRole } from "./agentSetup.js";
 import { ICONS } from "./notesApi.js";
+import { validModel } from "./resume.js";
 
 type Obj = Record<string, any>;
 
@@ -144,7 +145,8 @@ export function registerRolesApi({ fastify, canvas, projectRepo, createFloorFor,
 
   // Cria o nó de agente; a sessão nasce quando o navegador anexa (initialCmd = defaultCmd)
   fastify.post("/api/projects/:p/agents", wrap(async ({ projectId, repo }, req, reply) => {
-    const { title, preset, cmd, roleId, position, worktree, floor, isMaestro, chatFirst, presetName, color, icon } = req.body ?? {};
+    const { title, preset, cmd, roleId, position, worktree, floor, isMaestro, chatFirst, presetName, color, icon, model } = req.body ?? {};
+    if (model != null && model !== "" && !validModel(model)) throw new ApiError(400, "Modelo inválido: use só letras, números e . _ : / @ - (começando por letra ou número).");
     if (typeof title !== "string" || !title.trim() || title.trim().length > 64) throw new ApiError(400, "Título: 1 a 64 caracteres.");
     if (typeof preset !== "string" || !Object.hasOwn(PRESETS, preset)) throw new ApiError(400, `preset inválido (${Object.keys(PRESETS).join(", ")}).`);
     if (cmd !== undefined && !validCmd(cmd)) throw new ApiError(400, "Comando inválido.");
@@ -169,7 +171,7 @@ export function registerRolesApi({ fastify, canvas, projectRepo, createFloorFor,
       type: "agentTerminal",
       position: position ? { x: position.x, y: position.y } : freePosition(nodes, ref, SIZES.agentTerminal),
       style: { width: 460, height: 330 },
-      data: { title: title.trim(), preset, ...(role && { roleId: role.id }), role: role?.name ?? PRESET_LABELS[preset], status: "idle", baseCmd, defaultCmd, ...(d.roleDir && { worktreePath: d.worktreePath, roleDir: true }), ...(lookColor && { color: lookColor }), ...(lookIcon && { icon: lookIcon }), ...(typeof presetName === "string" && presetName && { presetName }), ...(isMaestro === true && { isMaestro: true }), ...(chatFirst === true && { chatFirst: true }), ...(floorName && { floor: floorName }) },
+      data: { title: title.trim(), preset, ...(role && { roleId: role.id }), role: role?.name ?? PRESET_LABELS[preset], status: "idle", baseCmd, defaultCmd, ...(d.roleDir && { worktreePath: d.worktreePath, roleDir: true }), ...(lookColor && { color: lookColor }), ...(lookIcon && { icon: lookIcon }), ...(typeof presetName === "string" && presetName && { presetName }), ...(isMaestro === true && { isMaestro: true }), ...(chatFirst === true && { chatFirst: true }), ...(floorName && { floor: floorName }), ...(model && { model }) },
     };
     canvas.applyAndBroadcast(projectId, { kind: "upsertNodes", nodes: [node] }, "agents");
 

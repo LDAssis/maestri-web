@@ -6,7 +6,7 @@ export const PARTITURA_VERSION = 1;
 export const MAX_PARTITURA_BYTES = 2 * 1024 * 1024;
 
 // Tipos de nó aceitos na importação; novos tipos (ex.: fileTree, diff) entram só aqui
-export const PARTITURA_NODE_TYPES: string[] = ["agentTerminal", "stickyNote", "portal", "fileTree", "diff"];
+export const PARTITURA_NODE_TYPES: string[] = ["agentTerminal", "stickyNote", "portal", "fileTree", "diff", "band", "noteStack"];
 
 // Estado efêmero/pessoal que nunca viaja na partitura
 const EPHEMERAL_DATA_KEYS = ["chat", "chatBusy", "worktree", "branch", "worktreePath"];
@@ -143,6 +143,14 @@ export function parsePartitura(text: string): ParseResult {
   };
 }
 
+// Bandas (members) e páginas de fichário (stackId) apontam para outros nós da partitura: acompanham os ids novos
+function remapRefs(data: Record<string, unknown>, idMap: Map<string, string>) {
+  const out = { ...data };
+  if (Array.isArray(out.members)) out.members = out.members.map((m) => idMap.get(String(m))).filter(Boolean);
+  if (typeof out.stackId === "string") out.stackId = idMap.get(out.stackId) ?? out.stackId;
+  return out;
+}
+
 const defaultNewId = (type: string) =>
   `${type === "agentTerminal" ? "agent" : type === "stickyNote" ? "note" : type}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -166,7 +174,7 @@ export function instantiatePartitura(
     ...n,
     id: idMap.get(n.id)!,
     position: { x: n.position.x + origin.x, y: n.position.y + origin.y },
-    data: { ...n.data },
+    data: remapRefs(n.data, idMap),
     selected: true,
   }));
   const edges = p.edges.map((e) => {

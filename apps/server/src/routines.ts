@@ -55,7 +55,7 @@ export interface Routine {
 export type TypeAndWait = (
   sessions: SessionManager,
   session: Session,
-  input: string,
+  input: string | { prompt: string },
   timeoutS: number,
   aborted?: () => boolean,
 ) => Promise<{ output: string; timedOut: boolean }>;
@@ -440,8 +440,7 @@ export function registerRoutinesApi({ fastify, sessions, canvas, projectRepo, pr
       const session = sessions.ensure(projectId, node!.id, { cwd, cmd: node!.data?.defaultCmd || "" });
       if (!existing) await settle(session);
       const typed = sanitizeTyped(text);
-      const input = typed.includes("\n") ? `\x1b[200~${typed}\x1b[201~\r` : `${typed}\r`;
-      const res = await typeAndWait(sessions, session, input, 600, () => stopped);
+      const res = await typeAndWait(sessions, session, { prompt: typed }, 600, () => stopped);
       entry.output = res.output.slice(-OUTPUT_MAX);
       if (res.timedOut) Object.assign(entry, { status: "error", reason: "tempo esgotado (600s) esperando o terminal ficar quieto" });
     } catch (e: any) {

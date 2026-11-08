@@ -46,9 +46,25 @@ export function busyIndicator(latest: string): boolean {
   return lines.some((l) => BUSY_RE.test(l));
 }
 
+// Prompt digitado no PTY de um agente (ask/send/chat/rotina). TUIs como o Claude Code tratam entrada que chega junta como
+// COLAGEM: um \r no mesmo write vira quebra de linha e o texto fica parado no input. Por isso: o texto (multi-linha em bracketed
+// paste) num write, uma pausa (MAESTRI_SUBMIT_DELAY_MS, padrão 250 ms) e o Enter num write SEPARADO. O --raw não passa por aqui.
+export const submitDelayMs = () => {
+  const v = process.env.MAESTRI_SUBMIT_DELAY_MS;
+  return v !== undefined && v.trim() !== "" && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : 250;
+};
+export async function typePrompt(sessions: SessionManager, session: Session, text: string) {
+  const typed = sanitizeTyped(text); // sem ESC/controles: nada fecha o bracketed paste nem injeta teclas
+  sessions.write(session.projectId, session.nodeId, typed.includes("\n") ? `\x1b[200~${typed}\x1b[201~` : typed);
+  await new Promise((r) => setTimeout(r, submitDelayMs()));
+  sessions.write(session.projectId, session.nodeId, "\r");
+}
+
 // Escreve no PTY e espera ele ficar quieto (depois de produzir saída); devolve só a saída nova.
+// input string = cru (escapes já decodificados, --raw); { prompt } = texto de prompt: vai por typePrompt (Enter separado) e o
+// tempo de silêncio conta a partir do Enter.
 // O silêncio só encerra se a tela do alvo NÃO mostrar um indicador de ocupado (o --timeout continua valendo).
-export async function typeAndWait(sessions: SessionManager, session: Session, input: string, timeoutS: number, aborted = () => false) {
+export async function typeAndWait(sessions: SessionManager, session: Session, input: string | { prompt: string }, timeoutS: number, aborted = () => false) {
   const quietMs = Number(process.env.MAESTRI_ASK_QUIET_MS) || 5000;
   let out = "";
   let last = 0;
@@ -64,7 +80,11 @@ export async function typeAndWait(sessions: SessionManager, session: Session, in
   const started = Date.now();
   let timedOut = false;
   try {
-    sessions.write(session.projectId, session.nodeId, input);
+    if (typeof input === "string") sessions.write(session.projectId, session.nodeId, input);
+    else {
+      await typePrompt(sessions, session, input.prompt);
+      if (last) last = Date.now(); // o eco do texto não conta: o silêncio vale a partir do Enter
+    }
     while (!aborted()) {
       await new Promise((r) => setTimeout(r, 100));
       const now = Date.now();
@@ -274,12 +294,12 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     };
   }));
 
-  fastify.post(`${base}/send`, wrap((c, req) => {
+  fastify.post(`${base}/send`, wrap(async (c, req) => {
     const { target, text } = req.body ?? {};
     if (!isText(text)) throw new ApiError(400, "Informe o texto.");
     const t = resolveTarget(c, target, "agentTerminal");
     const { session, starting } = awake(c, t);
-    sessions.write(session.projectId, t.id, `${text}\r`);
+    await typePrompt(sessions, session, text);
     return { ok: true, ...(starting && { starting: true }) };
   }));
 
@@ -323,7 +343,7 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     raw.on("close", () => (aborted = true));
 
     try {
-      const r = await typeAndWait(sessions, session, `${text}\r`, timeoutS, () => aborted);
+      const r = await typeAndWait(sessions, session, { prompt: text }, timeoutS, () => aborted);
       if (!aborted) raw.end(JSON.stringify(r));
     } catch (e: any) {
       // Os cabeçalhos 200 já saíram (hijack): o erro vai no corpo; o CLI o transforma em erro com saída != 0
@@ -419,7 +439,6 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     // Texto e nomes de anexo passam por sanitizeTyped: sem ESC/controles (nada fecha o bracketed paste nem injeta teclas).
     const attLines = files.map((f) => `[Attachment: ${sanitizeTyped(f.name)} (${f.image ? "image" : sanitizeTyped(f.mime)}, ${f.size} bytes) — get it with: maestri recall attachment ${f.id}]`);
     const hinted = (wantsChatHeader(session) ? chatHeader(thread) : "") + [expandMentions(sanitizeTyped(text), c.connected), ...attLines].filter(Boolean).join("\n");
-    const input = hinted.includes("\n") ? `\x1b[200~${hinted}\x1b[201~\r` : `${hinted}\r`;
 
     chatBusy.add(key);
     try {
@@ -430,7 +449,7 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     }
 
     // Captura em segundo plano; a resposta 202 não espera
-    void typeAndWait(sessions, session, input, 600)
+    void typeAndWait(sessions, session, { prompt: hinted }, 600)
       .then(({ output }) => {
         if (output) appendChat(c.projectId, c.me.id, { role: "terminal", text: output.slice(-20_000), thread });
       })

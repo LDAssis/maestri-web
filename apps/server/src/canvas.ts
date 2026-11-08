@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { WebSocket } from "ws";
+import { validModel } from "./resume.js";
 
 type Obj = Record<string, any>;
 
@@ -47,6 +48,8 @@ export class CanvasStore {
   private states = new Map<string, CanvasState>();
   private timers = new Map<string, NodeJS.Timeout>();
   private clients = new Map<string, Map<WebSocket, string>>();
+  // data.model de um nó mudou (patchNodeData): o index.ts reinicia o terminal dele, se estiver rodando
+  onModelChange?: (projectId: string, nodeId: string) => void;
 
   constructor(
     private fileFor: (projectId: string) => string | null,
@@ -79,12 +82,15 @@ export class CanvasStore {
     const nodes = st.nodes ?? [];
     const edges = st.edges ?? [];
     let normalized: Obj;
+    let modelChanged: string | null = null;
+    // data.model: vazio = padrão do CLI; o resto precisa passar na allowlist (vira flag de linha de comando)
+    const badModel = (data: unknown) => (isObj(data) && data.model != null && data.model !== "" && !validModel(data.model) ? "Modelo inválido: use só letras, números e . _ : / @ - (começando por letra ou número)." : null);
 
     switch (op.kind) {
       case "upsertNodes":
         if (!Array.isArray(op.nodes) || !op.nodes.every(isObjWithId)) return { error: "upsertNodes: nodes deve ser array de objetos com id." };
         for (const n of op.nodes) {
-          const bad = n.type === "drawing" ? drawingError(n) : null;
+          const bad = n.type === "drawing" ? drawingError(n) : badModel(n.data);
           if (bad) return { error: bad };
         }
         normalized = { kind: op.kind, nodes: op.nodes.map(cleanNode) };
@@ -103,6 +109,8 @@ export class CanvasStore {
         if (typeof op.id !== "string" || !isObj(op.data)) return { error: "patchNodeData: id (string) e data (objeto) são obrigatórios." };
         const i = nodes.findIndex((n) => n.id === op.id);
         if (i === -1) return { error: "patchNodeData: nó não encontrado." };
+        if (badModel(op.data)) return { error: badModel(op.data)! };
+        if ("model" in op.data && (op.data.model || "") !== (nodes[i].data?.model || "")) modelChanged = op.id;
         normalized = { kind: op.kind, id: op.id, data: op.data };
         st.nodes = nodes.map((n, j) => (j === i ? { ...n, data: { ...n.data, ...op.data } } : n));
         break;
@@ -123,6 +131,7 @@ export class CanvasStore {
         if (!Array.isArray(op.nodes) || !op.nodes.every(isObjWithId) || !Array.isArray(op.edges) || !op.edges.every(isObjWithId)) {
           return { error: "replace: nodes e edges devem ser arrays de objetos com id." };
         }
+        for (const n of op.nodes) if (badModel(n.data)) return { error: badModel(n.data)! };
         normalized = { kind: op.kind, nodes: op.nodes.map(cleanNode), edges: op.edges };
         st.nodes = normalized.nodes;
         st.edges = normalized.edges;
@@ -133,6 +142,7 @@ export class CanvasStore {
 
     st.rev++;
     this.schedulePersist(projectId);
+    if (modelChanged) this.onModelChange?.(projectId, modelChanged);
     return { op: normalized, rev: st.rev };
   }
 

@@ -121,6 +121,24 @@ export default function TerminalView({
     term.open(containerRef.current);
     termRef.current = term;
 
+    // Zoom do canvas: o xterm converte o mouse em célula com (clientX - rect.left) / célula, onde rect (getBoundingClientRect)
+    // vem escalado pelo transform do React Flow e a célula não (MouseService.ts/Mouse.ts do xterm 6). Com zoom ≠ 1 a seleção
+    // e os eventos de mouse do TUI caem em outra linha/coluna. Desfaz a escala no clientX/Y antes de o xterm calcular.
+    // ponytail: usa o _mouseService interno do xterm; se uma atualização renomear, vira no-op (volta ao erro com zoom).
+    const mouse = (term as any)._core?._mouseService;
+    if (mouse) {
+      const unzoom = (e: { clientX: number; clientY: number }, el: HTMLElement) => {
+        const r = el.getBoundingClientRect();
+        const k = el.offsetWidth ? r.width / el.offsetWidth : 1;
+        if (!(k > 0) || Math.abs(k - 1) < 0.005) return e;
+        return { clientX: r.left + (e.clientX - r.left) / k, clientY: r.top + (e.clientY - r.top) / k };
+      };
+      const getCoords = mouse.getCoords.bind(mouse);
+      const getReport = mouse.getMouseReportCoords.bind(mouse);
+      mouse.getCoords = (e: MouseEvent, el: HTMLElement, ...rest: unknown[]) => getCoords(unzoom(e, el), el, ...rest);
+      mouse.getMouseReportCoords = (e: MouseEvent, el: HTMLElement) => getReport(unzoom(e, el), el);
+    }
+
     // Atalhos de copiar/colar. Ctrl+C com seleção copia (sem seleção segue como interrupção, ^C);
     // Ctrl+Shift+C sempre copia. Ctrl+V / Ctrl+Shift+V não vão ao PTY: o navegador dispara o evento de colar,
     // que o xterm trata (com bracketed paste) e funciona até sem HTTPS. Shift+Insert já é nativo.
@@ -149,12 +167,21 @@ export default function TerminalView({
     let attempt = 0;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
+    // Tamanho DESEJADO = o que cabe no nó (não o term.cols, que é o aplicado pelo servidor e pode ser menor).
+    // Nunca chamamos fitAddon.fit(): o xterm fica no tamanho que o servidor aplicou (pode sobrar área vazia, como no tmux).
+    const sendDesired = () => {
+      const d = fitAddon.proposeDimensions();
+      if (!d || !(d.cols > 0) || !(d.rows > 0) || ws?.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: "resize", cols: d.cols, rows: d.rows }));
+    };
+
     const connect = () => {
       if (retryTimer) clearTimeout(retryTimer);
       updateStatus("conectando");
       const sock = new WebSocket(
         wsUrl("/ws/terminal", { project: projectId, node: nodeId, cwd: cwd || "", cmd: currentDefaultCmd || "" })
       );
+      sock.binaryType = "arraybuffer";
       ws = sock;
       socketRef.current = sock;
 
@@ -162,14 +189,16 @@ export default function TerminalView({
         attempt = 0;
         term.reset(); // o servidor reenvia o scrollback inteiro ao anexar
         updateStatus("online");
-        try {
-          fitAddon.fit();
-        } catch {}
-        sock.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+        sendDesired();
       };
 
       sock.onmessage = (event) => {
-        term.write(event.data);
+        if (typeof event.data === "string") return term.write(event.data);
+        // Frame binário = controle do servidor: {type:'size',cols,rows} é o tamanho aplicado (mínimo entre os clientes)
+        try {
+          const m = JSON.parse(new TextDecoder().decode(event.data as ArrayBuffer));
+          if (m.type === "size" && m.cols > 0 && m.rows > 0 && (m.cols !== term.cols || m.rows !== term.rows)) term.resize(m.cols, m.rows);
+        } catch {}
       };
 
       sock.onclose = (event) => {
@@ -197,12 +226,6 @@ export default function TerminalView({
       }
     });
 
-    term.onResize((size) => {
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "resize", cols: size.cols, rows: size.rows }));
-      }
-    });
-
     // Proteção contra loop infinito: debounce e verificação de alteração real de tamanho
     let lastWidth = 0;
     let lastHeight = 0;
@@ -220,10 +243,7 @@ export default function TerminalView({
           if (resizeTimer) clearTimeout(resizeTimer);
           resizeTimer = setTimeout(() => {
             try {
-              fitAddon.fit();
-              if (ws?.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-              }
+              sendDesired();
             } catch {}
           }, 60);
         }
@@ -234,7 +254,7 @@ export default function TerminalView({
 
     setTimeout(() => {
       try {
-        fitAddon.fit();
+        sendDesired();
       } catch {}
     }, 150);
 

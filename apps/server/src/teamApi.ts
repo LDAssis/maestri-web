@@ -8,15 +8,16 @@ import type { SessionManager } from "./sessions.js";
 import { ApiError, PRESETS, PRESET_LABELS, SIZES, freePosition, validCmd, withRolePrompt } from "./agents.js";
 import { isText, lc, chatBusy, type NodeApi } from "./nodeApi.js";
 import { listRoles, readRole, rolesDir, writeRole } from "./roles.js";
-import { COLORS, ICONS } from "./notesApi.js";
+import { ICONS, KIND_TYPES, resolveColor, resolveIcon } from "./notesApi.js";
 import { presetLook } from "./presetLook.js";
 import { isInside, resolveInside } from "./projectDirs.js";
 import { BAND_SIZE, bandOf, dissolve, isBand, materialize, memberIds, myBands, neighbors, sameFloorNodes, sweepBands, teamTree } from "./team.js";
 import { FloorStore, GROUND, floorOf } from "./floors.js";
 import { AccountStore, DEFAULT_ACCOUNT } from "./accounts.js";
 import type { CrossLinks } from "./crossLinks.js";
-import { programOf } from "./resume.js";
+import { programOf, validModel } from "./resume.js";
 import { arrangeColor, deliverRole, roleCwdPatch } from "./agentSetup.js";
+import { registerPartituras } from "./partituras.js";
 
 type Obj = Record<string, any>;
 
@@ -67,10 +68,10 @@ const onOff = (v: unknown, what: string) => {
   throw new ApiError(400, `${what} deve ser on ou off.`);
 };
 
-// Cores e ícones do `arrange` (mesmas listas das notas)
-const checkLook = (color: unknown, icon: unknown) => {
-  if (color !== undefined && !(COLORS as readonly string[]).includes(String(color))) throw new ApiError(400, `Cor inválida. Opções: ${COLORS.join(", ")}.`);
-  if (icon !== undefined && !(ICONS as readonly string[]).includes(String(icon))) throw new ApiError(400, `Ícone inválido. Opções: ${ICONS.join(", ")}.`);
+// Cores e ícones do `arrange` (mesmas listas das notas); aceita também os nomes do app nativo e já os converte em `b`
+const checkLook = (b: Obj) => {
+  if (b.color !== undefined) b.color = resolveColor(b.color).value ?? undefined;
+  if (b.icon !== undefined) b.icon = resolveIcon(b.icon).value ?? undefined;
 };
 
 
@@ -172,7 +173,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     const taken = new Set(loadPresets(c.projectId).map((p) => p.id));
     let id = slug(label);
     for (let n = 2; taken.has(id); n++) id = `${slug(label)}-${n}`;
-    checkLook(b.color, b.icon);
+    checkLook(b);
     const cmd0 = b.command === undefined ? "" : parseCmd(b.command);
     const look = presetLook(cmd0); // sem --color/--icon: cor sorteada e o ícone do CLI
     const preset: Preset = {
@@ -192,7 +193,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     requireMaestro(c, "alterar presets");
     const b = req.body ?? {};
     const cur = findPreset(c.projectId, b.name);
-    checkLook(b.color, b.icon);
+    checkLook(b);
     const next: Preset = {
       ...cur,
       ...(b.color !== undefined && { color: b.color }),
@@ -320,6 +321,20 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     reapplyRole(c, repo, role);
     return { role: { ...role, scope: cur.scope } };
   }));
+  // Recusa enquanto terminais usam o role, salvo force: aí eles perdem o role (reiniciam) antes de apagar
+  fastify.post(`${base}/roles/delete`, wrap((c, req) => {
+    requireMaestro(c, "apagar roles");
+    const repo = projectRepo(c.projectId)!;
+    const { role, scope } = findRole(repo, req.body?.name);
+    const users = c.nodes.filter((x) => x.type === "agentTerminal" && String(x.data?.roleId ?? "").toLowerCase() === String(role.id).toLowerCase());
+    if (users.length && req.body?.force !== true) {
+      throw new ApiError(409, `O role "${role.name}" ainda é usado por: ${users.map((n) => n.data?.title).join(", ")}. Use --force para desatribuí-lo (os terminais reiniciam).`);
+    }
+    for (const n of users) applyCmd(c, repo, n, baseCmdOf(n), null, { role: PRESET_LABELS[n.data?.preset] ?? "Agente", roleId: null });
+    fs.rmSync(path.join(rolesDir(rootOf(repo, scope)), String(role.id).toLowerCase()), { recursive: true, force: true });
+    canvas.notify(c.projectId, { type: "roles" });
+    return { ok: true, name: role.name, unassigned: users.length };
+  }));
   fastify.post(`${base}/roles/assign`, wrap((c, req) => {
     requireMaestro(c, "atribuir roles");
     const repo = projectRepo(c.projectId)!;
@@ -438,7 +453,8 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
   fastify.post(`${base}/recruit`, wrap((c, req) => {
     requireMaestro(c, "recrutar");
     const b = req.body ?? {};
-    checkLook(b.color, b.icon);
+    checkLook(b);
+    if (b.model != null && b.model !== "" && !validModel(b.model)) throw new ApiError(400, "Modelo inválido: use só letras, números e . _ : / @ - (começando por letra ou número).");
     if (b.replace !== undefined) return replaceAgent(c, projectRepo(c.projectId)!, b);
 
     if (!isText(b.name, MAX_TITLE) || !b.name.trim()) throw new ApiError(400, "Informe o nome do agente.");
@@ -511,6 +527,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
         ...(d.roleDir && { roleDir: true }),
         ...floorData(floor),
         ...(accountName && { account: accountName }),
+        ...(b.model && { model: b.model }),
         ...(preset?.maestro && { isMaestro: true }),
         ...(preset?.chat && { chatFirst: true }),
         // aparência: --color/--icon vencem; senão a do preset (cor antiga da UI, como purple, vira a da paleta do arrange)
@@ -596,15 +613,18 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
 
   // Os nós da minha árvore de equipe, por nome: eu, recrutas diretos e o que está ligado a mim ou a eles
   // (inclui agentes de outros workspaces ligados a mim)
-  function teamNode(c: Ctx, name: unknown): Obj {
+  // kind (--agent|--note|--band|--fichario|--portal, logo depois do nome) desambigua nomes repetidos entre tipos
+  function teamNode(c: Ctx, name: unknown, kind?: unknown): Obj {
     if (!isText(name, 200) || !name.trim()) throw new ApiError(400, "Informe os dois nomes.");
+    if (kind !== undefined && !KIND_TYPES[String(kind)]) throw new ApiError(400, "Tipo inválido. Use --agent, --note, --band, --fichario ou --portal.");
+    const type = kind === undefined ? undefined : KIND_TYPES[String(kind)];
     const tree = teamTree(c.nodes, c.edges, c.me);
     const pool = [c.me, ...tree.direct, ...tree.others, ...c.connected].filter((n, i, a) => LINKABLE.has(n.type) && a.findIndex((x) => x.id === n.id) === i);
-    const hits = pool.filter((n) => lc(labelOf(n)) === lc(name));
+    const hits = pool.filter((n) => lc(labelOf(n)) === lc(name) && (!type || n.type === type));
     if (hits.length === 1) return hits[0];
-    if (hits.length > 1) throw new ApiError(400, `Nome ambíguo: "${name}" corresponde a ${hits.length} nós da sua equipe.`);
-    if (c.nodes.some((n) => LINKABLE.has(n.type) && lc(n.data?.title) === lc(name))) throw new ApiError(400, `"${name}" existe no canvas, mas está fora da sua árvore de equipe.`);
-    throw new ApiError(404, `"${name}" não encontrado.`);
+    if (hits.length > 1) throw new ApiError(400, `Nome ambíguo: "${name}" corresponde a ${hits.length} nós da sua equipe.${type ? "" : " Diga o tipo logo depois do nome: --agent, --note, --band, --fichario ou --portal."}`);
+    if (c.nodes.some((n) => LINKABLE.has(n.type) && lc(n.data?.title) === lc(name) && (!type || n.type === type))) throw new ApiError(400, `"${name}" existe no canvas, mas está fora da sua árvore de equipe.`);
+    throw new ApiError(404, `"${name}" não encontrado${type ? ` (tipo ${kind})` : ""}.`);
   }
 
   function checkLink(a: Obj, b: Obj) {
@@ -621,8 +641,8 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
 
   fastify.post(`${base}/connect`, wrap((c, req) => {
     requireMaestro(c, "conectar nós");
-    const a = teamNode(c, req.body?.from);
-    const b = teamNode(c, req.body?.to);
+    const a = teamNode(c, req.body?.from, req.body?.fromKind);
+    const b = teamNode(c, req.body?.to, req.body?.toKind);
     checkLink(a, b);
     const pa: string = a.__project ?? c.projectId;
     const pb: string = b.__project ?? c.projectId;
@@ -694,7 +714,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
   fastify.post(`${base}/band/create`, wrap((c, req) => {
     requireMaestro(c, "criar bandas");
     const b = req.body ?? {};
-    checkLook(b.color, b.icon);
+    checkLook(b);
     if (!isText(b.name, 60) || !b.name.trim()) throw new ApiError(400, "Informe o nome da banda (até 60 caracteres).");
     // --workspace: a banda nasce no outro workspace, com os agentes de lá que alcanço; eu coordeno de fora
     const tpid = b.workspace === undefined ? c.projectId : wsId(b.workspace);
@@ -787,4 +807,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     dissolve(canvas, cw.projectId, band, alive, by(c));
     return { ok: true };
   }));
+
+  // Partituras (biblioteca de times salvos): src/partituras.ts
+  registerPartituras({ fastify, canvas, sessions, floors, dataDir, projectRepo, nodeApi, links, workspaces, wsId, floorNamed, linksChanged, baseCmdOf, tryAccount });
 }

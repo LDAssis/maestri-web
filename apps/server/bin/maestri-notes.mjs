@@ -6,6 +6,7 @@ maestri note write "Nome" "texto"               Substitui o conteúdo
 maestri note append "Nome" "texto"              Acrescenta ao fim
 maestri note edit "Nome" "antigo" "novo"        Troca um trecho (precisa aparecer exatamente uma vez)
 maestri note delete "Nome"                      Remove a nota (destrutivo; só quando o usuário pedir)
+maestri note delete --stack "Fichário"          Apaga um fichário e as notas dele (destrutivo; recusa se houver nota travada)
 maestri note create ["conteúdo"] [--name "Nome"] [--stack ["Fichário"]] [--color C]
 maestri note stack "Nome" ["Fichário"]          Guarda a nota num fichário (cria se não existir; padrão "Fichário")
 maestri note unstack "Nome"                     Tira a nota do fichário
@@ -16,9 +17,13 @@ Notas com "locked: true" no list são somente leitura (write/edit/append/delete 
 emerald, rose, sky, violet, orange, slate.`;
 
 const ARRANGE_HELP = (icons, colors) => `maestri arrange                              Mostra nome, ícone e cor atuais
-maestri arrange "Nome" [--name N] [--icon I] [--color C]   Renomeia/estiliza você, uma nota conectada ou (Maestro) um agente ou banda conectado
+maestri arrange "Nome" [--name N] [--icon I] [--color C] [--agent | --note | --band | --fichario]   Renomeia/estiliza você, uma nota conectada ou (Maestro) um agente ou banda conectado
+--agent/--note/--band/--fichario: o tipo do alvo, quando o mesmo nome existe em mais de um tipo.
 Ícones: ${icons.join(", ")}
-Cores: ${colors.join(", ")}`;
+Cores: ${colors.join(", ")}
+Também aceita os nomes do app nativo e converte para o mais próximo (a resposta diz qual usou): ícones SF Symbols
+(sparkle, gearshape, server.rack, bolt, doc.text, ...), cores blue/red/green/purple/pink/cyan/yellow/white/charcoal/midnight,
+hex #RRGGBB (vira a cor mais próxima), um emoji (vira "sparkles") e "default" (volta ao padrão).`;
 
 const ICONS = [
   "terminal", "bot", "code", "cpu", "brain", "rocket", "shield", "bug", "flask", "palette", "database", "globe",
@@ -59,6 +64,10 @@ export function register({ call, need, CliError }) {
       need(pos, 4, 'note edit "Nome" "antigo" "novo"');
       const r = await call("POST", `${route}/edit`, { old: rest[0], text: rest[1] });
       console.log("Nota editada." + renamedMsg(r));
+    } else if (sub === "delete" && flags.stack) {
+      need([name], 1, 'note delete --stack "Fichário"');
+      const r = await call("DELETE", `/stacks/${enc(name)}`);
+      console.log(`Fichário "${r.stack}" removido (${r.pages} página(s)).`);
     } else if (sub === "delete") {
       need([name], 1, 'note delete "Nome"');
       await call("DELETE", route);
@@ -94,10 +103,14 @@ export function register({ call, need, CliError }) {
       for (const i of r.items) console.log(`${i.title} [${i.type}] — ícone: ${i.icon ?? "(padrão)"}, cor: ${i.color ?? "(padrão)"}`);
       return;
     }
+    const kinds = [...new Set(flags.kindList ?? [])];
+    if (kinds.length > 1) throw new CliError("Use só um de --agent, --note, --band, --fichario.");
+    if (kinds[0] === "portal") throw new CliError("arrange não aceita --portal (use --agent, --note, --band ou --fichario).");
     // Sem nome de alvo, aplica a você mesmo
-    const r = await call("POST", "/arrange", { target: pos[0], name: flags.name, icon: flags.icon, color: flags.color });
+    const r = await call("POST", "/arrange", { target: pos[0], name: flags.name, icon: flags.icon, color: flags.color, kind: kinds[0] });
     const who = pos[0] ?? "Você";
     console.log(`"${who}" atualizado${r.title !== who ? ` (agora "${r.title}")` : ""}.`);
+    for (const n of r.converted ?? []) console.log(`  (${n})`);
   }
 
   async function list() {
