@@ -471,7 +471,8 @@ export function registerNodeApi({ fastify, sessions, canvas, projectRepo, attach
     // O texto pode faltar quando há anexos
     if (!isText(text, 20_000) || (!text.trim() && !files.length)) throw new ApiError(400, "Informe o texto.");
     if (!isThread(thread)) throw new ApiError(400, `Thread inválida (${THREADS.join(", ")}).`);
-    const user = parseUser(author);
+    // Com conta, nome e cor vêm dela (não do que o cliente manda)
+    const user = req.authUser ? { id: req.authUser.id, name: req.authUser.name, color: req.authUser.color } : parseUser(author);
     if (!user) throw new ApiError(400, "Autor inválido (id, name e color #rrggbb).");
     const session = sessions.get(c.projectId, c.me.id);
     if (!session) throw new ApiError(409, "O terminal deste agente não tem sessão ativa.");

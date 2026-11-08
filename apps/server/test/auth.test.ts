@@ -27,7 +27,7 @@ after(async () => {
 test("GET /api/health é público e informa authRequired", async () => {
   const res = await fastify.inject({ method: "GET", url: "/api/health" });
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.json(), { ok: true, authRequired: true });
+  assert.deepEqual(res.json(), { ok: true, authRequired: true, setupRequired: true });
 });
 
 test("/api/* sem token ou com token errado retorna 401", async () => {

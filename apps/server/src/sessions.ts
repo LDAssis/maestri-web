@@ -252,8 +252,10 @@ export class SessionManager {
 
     const session = s;
     try {
-      socket.send(session.scrollback);
+      // Tamanho ANTES do histórico: o cliente redimensiona o xterm e só então reproduz o scrollback na largura certa
+      // (na ordem inversa, o quadro do TUI era desenhado em 80 colunas e embaralhava até alguém redimensionar).
       socket.send(sizeMsg(session));
+      socket.send(session.scrollback);
     } catch {}
     session.clients.add(socket);
 
@@ -263,8 +265,11 @@ export class SessionManager {
         if (text.startsWith('{"type":"resize"')) {
           const { cols, rows } = JSON.parse(text);
           if (Number.isFinite(cols) && Number.isFinite(rows)) {
+            const first = !session.sizes.has(socket);
             session.sizes.set(socket, { cols: Math.min(500, Math.max(10, Math.floor(cols))), rows: Math.min(200, Math.max(5, Math.floor(rows))) });
-            this.applySize(session);
+            // Cliente novo e o tamanho não mudou: o TUI não recebe SIGWINCH e a tela reproduzida do histórico pode estar
+            // incompleta. Um "empurrão" de tamanho faz o app redesenhar a tela inteira.
+            if (!this.applySize(session) && first) this.nudgeRedraw(session);
           }
           return;
         }
@@ -283,18 +288,33 @@ export class SessionManager {
   }
 
   // Estilo tmux: o PTY compartilhado usa o MENOR tamanho entre os clientes que já reportaram; quando muda, avisa todos
-  private applySize(s: Session) {
-    if (!s.sizes.size) return;
+  private applySize(s: Session): boolean {
+    if (!s.sizes.size) return false;
     const sizes = [...s.sizes.values()];
     const cols = Math.min(...sizes.map((z) => z.cols));
     const rows = Math.min(...sizes.map((z) => z.rows));
-    if (cols === s.cols && rows === s.rows) return;
+    if (cols === s.cols && rows === s.rows) return false;
     s.cols = cols;
     s.rows = rows;
     try {
       s.pty.resize(cols, rows);
     } catch {}
     this.broadcastBinary(s, sizeMsg(s));
+    return true;
+  }
+
+  // Redimensiona o PTY uma linha a menos e volta: o app recebe dois SIGWINCH e redesenha a tela no tamanho atual
+  private nudgeRedraw(s: Session) {
+    if (s.dead || s.rows < 6) return;
+    try {
+      s.pty.resize(s.cols, s.rows - 1);
+    } catch {}
+    setTimeout(() => {
+      if (s.dead) return;
+      try {
+        s.pty.resize(s.cols, s.rows);
+      } catch {}
+    }, 80).unref?.();
   }
 
   private broadcastBinary(s: Session, data: Buffer) {

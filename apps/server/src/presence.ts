@@ -57,7 +57,8 @@ export class PresenceHub {
     for (const [connId, { socket }] of this.peers) if (connId !== exceptConnId) this.send(socket, msg);
   }
 
-  attach(socket: WebSocket) {
+  // authUser: conta que abriu o socket; nome/cor passam a vir dela em vez do que o cliente manda no hello
+  attach(socket: WebSocket, authUser: { id: string; name: string; color: string } | null = null) {
     const connId = crypto.randomUUID();
     let joined = false;
     let tokens = MAX_MSGS_PER_SEC;
@@ -94,7 +95,7 @@ export class PresenceHub {
 
       if (msg?.type === "hello") {
         if (joined) return;
-        const user = parseUser(msg.user);
+        const user = authUser ? { id: authUser.id, name: authUser.name, color: authUser.color } : parseUser(msg.user);
         if (!user) {
           socket.close(4400, "hello inválido");
           return;
