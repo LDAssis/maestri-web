@@ -53,7 +53,7 @@ import SystemNotifyToggle from "./SystemNotifyToggle";
 import { useConfirm } from "./ConfirmProvider";
 import { hitStack, stackOps, uniqueStackTitle } from "@/lib/noteStack";
 import RolesPanel from "./RolesPanel";
-import { CommandPalette, ContextMenu, ShortcutsHelp, MenuState } from "./CanvasOverlays";
+import { CommandPalette, ContextMenu, MenuState } from "./CanvasOverlays";
 import { Download, Upload, Plus, UserCog, RefreshCw, StickyNote, Globe, FolderTree, FileDiff, Bell, PenTool } from "lucide-react";
 
 // crypto.randomUUID só existe em contexto seguro (HTTPS/localhost); no http://IP-da-rede cai no getRandomValues
@@ -728,7 +728,6 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
     sendOp({ kind: "upsertNodes", nodes: [newNode] });
   };
 
-  const [helpOpen, setHelpOpen] = useState(false);
 
   const selectNode = (id: string) => {
     // Nó de outro andar: troca de andar primeiro
@@ -834,7 +833,7 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
       else if (k === "d") setDrawOpen((v) => !v);
       else if (e.key === "Escape" && drawOpenRef.current) setDrawOpen(false);
       else if (k === "f") flowRef.current?.fitView({ duration: 300 });
-      else if (e.key === "?") setHelpOpen(true);
+      else if (e.key === "?") window.dispatchEvent(new CustomEvent("maestri:open-help", { detail: "atalhos" }));
       else return;
       e.preventDefault();
     };
@@ -1056,7 +1055,6 @@ export default function MaestriCanvas({ projectId, projectName, clientId, focus 
         />
       )}
       {rolesOpen && <RolesPanel projectId={projectId} onClose={() => setRolesOpen(false)} />}
-      {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
       {menu && (
         <ContextMenu
           menu={menu}

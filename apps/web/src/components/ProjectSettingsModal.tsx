@@ -1,6 +1,7 @@
 "use client";
 
 import SessionAccountsSettings from "./SessionAccountsSettings";
+import { isAdminUser } from "./EntryGate";
 import React, { useState, useEffect } from "react";
 import { Settings, Globe, FolderGit2, Plus, Trash2, Check, X, ShieldAlert } from "lucide-react";
 import { apiFetch } from "@/lib/api";
@@ -183,6 +184,7 @@ export default function ProjectSettingsModal({
             <FolderGit2 className="h-3.5 w-3.5" />
             Projeto: {projectName}
           </button>
+          {isAdminUser() && (
           <button
             onClick={() => setActiveTab("global")}
             className={`flex-1 flex items-center justify-center gap-2 py-1.5 px-3 rounded-lg font-medium transition ${
@@ -194,6 +196,7 @@ export default function ProjectSettingsModal({
             <Globe className="h-3.5 w-3.5" />
             Padrão Global (Todos os Projetos)
           </button>
+          )}
         </div>
 
         {/* Conteúdo da Aba */}

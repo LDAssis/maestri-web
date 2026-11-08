@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Bell, RotateCcw, Trash2, UserCog } from "lucide-react";
 import { apiFetch } from "@/lib/api";
+import { isAdminUser } from "./EntryGate";
 
 interface Account {
   program: "claude" | "codex";
@@ -12,6 +13,7 @@ interface Account {
 
 // Retomada de sessão (por projeto) e contas de CLI (globais) nas configurações
 export default function SessionAccountsSettings({ projectId }: { projectId: string }) {
+  const isAdmin = isAdminUser();
   const [resume, setResume] = useState(true);
   const [desktop, setDesktop] = useState(true);
   const [desktopForced, setDesktopForced] = useState(false); // MAESTRI_DESKTOP_NOTIFY no servidor manda mais que a preferência
@@ -144,7 +146,7 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
                 <span className="rounded bg-slate-800 px-1.5 text-[10px] text-slate-300">{a.program}</span>
                 <span className="flex-1 truncate text-slate-200">{a.name}</span>
                 {a.usedBy.length > 0 && <span className="truncate text-[10px] text-slate-500" title={a.usedBy.join(", ")}>em uso: {a.usedBy.join(", ")}</span>}
-                {confirmDel === k ? (
+                {!isAdmin ? null : confirmDel === k ? (
                   <span className="flex items-center gap-1 text-[11px]">
                     Apagar (inclui o login)?
                     <button onClick={() => remove(a)} className="rounded bg-rose-600 px-1.5 py-0.5 text-white hover:bg-rose-500">Sim</button>
@@ -159,6 +161,7 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
             );
           })}
         </ul>
+        {isAdmin ? (
         <form onSubmit={create} className="flex gap-2">
           <select value={program} onChange={(e) => setProgram(e.target.value as "claude" | "codex")} aria-label="CLI da conta" className={input}>
             <option value="claude">claude</option>
@@ -169,6 +172,9 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
             Criar conta
           </button>
         </form>
+        ) : (
+          <p className="text-[11px] text-slate-500">Só administradores criam ou apagam contas.</p>
+        )}
         {error && <div role="alert" className="mt-1.5 text-[11px] text-amber-300">{error}</div>}
         {notice && <div role="status" className="mt-1.5 text-[11px] text-sky-300">{notice}</div>}
         {notice && <div role="status" className="mt-1.5 text-[11px] text-sky-300">{notice}</div>}

@@ -7,9 +7,11 @@ import CliAuthModal from "@/components/CliAuthModal";
 import DeleteProjectModal from "@/components/DeleteProjectModal";
 import AdminUsersModal from "@/components/AdminUsersModal";
 import ProjectMembersModal from "@/components/ProjectMembersModal";
+import HelpCenter from "@/components/HelpCenter";
 import {
   KeyRound,
   ShieldCheck,
+  CircleHelp,
   Layers,
   Cpu,
   Users,
@@ -131,6 +133,7 @@ function App({
 
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [isMembersOpen, setIsMembersOpen] = useState(false);
+  const [help, setHelp] = useState<{ section?: string } | null>(null);
   const [notice, setNotice] = useState("");
   const activeIdRef = useRef<string | null>(null);
   const quietRef = useRef(false); // perda esperada (excluí/saí do projeto): sem toast
@@ -178,6 +181,21 @@ function App({
   useEffect(() => {
     activeIdRef.current = activeProject?.id ?? null;
   }, [activeProject?.id]);
+
+  // Central de Ajuda: tecla ? (evento do canvas) e deep link /?ajuda=<secao>
+  useEffect(() => {
+    const open = (e: Event) => setHelp({ section: (e as CustomEvent<string>).detail });
+    window.addEventListener("maestri:open-help", open);
+    const params = new URLSearchParams(window.location.search);
+    const link = params.get("ajuda");
+    if (link !== null) {
+      setHelp({ section: link || undefined });
+      params.delete("ajuda");
+      const qs = params.toString();
+      window.history.replaceState(null, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    }
+    return () => window.removeEventListener("maestri:open-help", open);
+  }, []);
 
   useEffect(() => {
     fetchProjects();
@@ -294,6 +312,7 @@ function App({
               <AlarmClock className="h-5 w-5" />
             </button>
 
+            {user.role === "admin" && (
             <button
               onClick={() => setIsCliAuthOpen(true)}
               className="p-3 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/50 transition"
@@ -302,6 +321,7 @@ function App({
             >
               <KeyRound className="h-5 w-5" />
             </button>
+            )}
 
             {user.role === "admin" && (
               <button
@@ -439,15 +459,25 @@ function App({
 
           <div className="flex items-center gap-3">
             <PresenceStack me={user.id} projects={projects} onGoTo={goToPeer} />
-            <ProfileMenu user={user} onChange={setUser} onLogout={logout} />
             <button
-              onClick={() => setIsCliAuthOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-xs font-medium text-slate-300 hover:text-white transition"
-              title="Instalar CLIs e fazer login"
+              onClick={() => setHelp({})}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              title="Central de Ajuda"
+              aria-label="Central de Ajuda"
             >
-              <KeyRound className="h-3.5 w-3.5 text-indigo-400" />
-              <span>CLIs & Logins</span>
+              <CircleHelp className="h-4 w-4" />
             </button>
+            <ProfileMenu user={user} onChange={setUser} onLogout={logout} onHelp={() => setHelp({})} />
+            {user.role === "admin" && (
+              <button
+                onClick={() => setIsCliAuthOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-xs font-medium text-slate-300 hover:text-white transition"
+                title="Instalar CLIs e fazer login"
+              >
+                <KeyRound className="h-3.5 w-3.5 text-indigo-400" />
+                <span>CLIs & Logins</span>
+              </button>
+            )}
             <button
               onClick={() => setIsSettingsOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-xs font-medium text-slate-300 hover:text-white transition"
@@ -575,6 +605,7 @@ function App({
           }}
         />
       )}
+      {help && <HelpCenter initialSection={help.section} isAdmin={user.role === "admin"} onClose={() => setHelp(null)} />}
       {notice && (
         <div role="status" className="fixed left-1/2 top-4 z-[130] -translate-x-1/2 rounded-lg border border-slate-700 bg-slate-900/95 px-4 py-2 text-xs text-slate-100 shadow-xl backdrop-blur-md">
           {notice}
@@ -669,7 +700,7 @@ function App({
           onDeleteProject={activeProject?.access === "member" ? undefined : () => activeProject && setDeleteTarget({ id: activeProject.id, name: activeProject.name })}
         />
       )}
-      <CliAuthModal isOpen={isCliAuthOpen} onClose={() => setIsCliAuthOpen(false)} />
+      {user.role === "admin" && <CliAuthModal isOpen={isCliAuthOpen} onClose={() => setIsCliAuthOpen(false)} />}
       {user.role === "admin" && <AdminUsersModal isOpen={isAdminOpen} onClose={() => setIsAdminOpen(false)} me={user} />}
       <PresenceToasts />
     </div>
