@@ -75,9 +75,17 @@ export default function TerminalView({
     if (flashTimer.current) clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => setFlash(""), 1400);
   }, []);
+  const showFlashRef = useRef(showFlash);
+  showFlashRef.current = showFlash;
+  // Última cópia pedida pelo próprio app via OSC 52 (o Claude Code desenha a seleção dele e copia assim, sem seleção do xterm)
+  const appCopyRef = useRef<{ text: string; at: number } | null>(null);
+  const recentAppCopy = () => {
+    const c = appCopyRef.current;
+    return c && Date.now() - c.at < 5 * 60_000 ? c.text : "";
+  };
   const copySelection = useCallback(async () => {
     const term = termRef.current;
-    const text = term?.getSelection() ?? "";
+    const text = term?.getSelection() || recentAppCopy();
     if (!text) return showFlash("Nada selecionado");
     const ok = await copyText(text);
     showFlash(ok ? "Copiado" : "Não foi possível copiar");
@@ -138,6 +146,25 @@ export default function TerminalView({
       mouse.getCoords = (e: MouseEvent, el: HTMLElement, ...rest: unknown[]) => getCoords(unzoom(e, el), el, ...rest);
       mouse.getMouseReportCoords = (e: MouseEvent, el: HTMLElement) => getReport(unzoom(e, el), el);
     }
+
+    // OSC 52 (área de transferência pedida pelo app): o Claude Code seleciona com o mouse por conta própria e, ao soltar,
+    // manda ESC ] 52 ; c ; <base64> BEL. O xterm.js ignora isso por padrão, e a "seleção" do agente nunca chegava ao navegador.
+    // Só gravamos; o pedido de LEITURA ("?") é ignorado para o app não ler a área de transferência do usuário.
+    term.parser.registerOscHandler(52, (data) => {
+      const i = data.indexOf(";");
+      const b64 = i >= 0 ? data.slice(i + 1) : "";
+      if (!b64 || b64 === "?") return true;
+      let text = "";
+      try {
+        text = new TextDecoder().decode(Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0)));
+      } catch {
+        return true;
+      }
+      if (!text) return true;
+      appCopyRef.current = { text, at: Date.now() };
+      copyText(text).then((ok) => showFlashRef.current(ok ? "Copiado" : "Seleção pronta: clique direito > Copiar"));
+      return true;
+    });
 
     // Atalhos de copiar/colar. Ctrl+C com seleção copia (sem seleção segue como interrupção, ^C);
     // Ctrl+Shift+C sempre copia. Ctrl+V / Ctrl+Shift+V não vão ao PTY: o navegador dispara o evento de colar,
@@ -292,7 +319,7 @@ export default function TerminalView({
     const rect = el.getBoundingClientRect();
     // o nó pode estar com zoom do canvas: converte para coordenadas locais do elemento
     const scale = rect.width ? el.offsetWidth / rect.width : 1;
-    setMenu({ x: (e.clientX - rect.left) * scale, y: (e.clientY - rect.top) * scale, hasSelection: !!termRef.current?.hasSelection() });
+    setMenu({ x: (e.clientX - rect.left) * scale, y: (e.clientY - rect.top) * scale, hasSelection: !!termRef.current?.hasSelection() || !!recentAppCopy() });
   };
 
   const menuAction = (fn: () => void) => (e: React.MouseEvent) => {
@@ -414,6 +441,9 @@ export default function TerminalView({
             <button role="menuitem" onClick={menuAction(() => { termRef.current?.selectAll(); termRef.current?.focus(); })} className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-800">
               <TextSelect className="h-3 w-3" /> Selecionar tudo
             </button>
+            <p className="mt-1 border-t border-slate-800 px-3 pt-1.5 pb-1 text-[10px] leading-snug text-slate-500">
+              Agentes como o Claude Code copiam sozinhos ao soltar o mouse. Para selecionar pelo terminal, segure <b>Shift</b> ao arrastar.
+            </p>
           </div>
         )}
         {pasteBox && (
