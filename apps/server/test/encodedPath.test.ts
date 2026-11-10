@@ -67,6 +67,14 @@ test("ACL de projeto e rotas admin valem com o caminho codificado", async () => 
   assert.equal((await call("PUT", "/ap%69/settings/global", bearer(userTok), {})).status, 403);
 });
 
+test("rotas com outro parâmetro :id (anexos) usam o :p do projeto na ACL", async () => {
+  const up = await call("POST", `/api/projects/${projAdmin}/attachments`, bearer(adminTok), { name: "nota.txt", data: Buffer.from("oi").toString("base64") });
+  assert.equal(up.status, 200, JSON.stringify(up.body));
+  const url = `/api/projects/${projAdmin}/attachments/${up.body.attachment.id}`;
+  assert.equal((await call("GET", url, bearer(adminTok))).status, 200, "o dono abre o anexo");
+  assert.equal((await call("GET", url, bearer(userTok))).status, 404, "quem não acessa o projeto não abre");
+});
+
 test("codificação inválida é recusada", async () => {
   assert.equal((await call("GET", "/api/projects/%zz/canvas", bearer(userTok))).status, 400);
 });

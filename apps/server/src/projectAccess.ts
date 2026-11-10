@@ -287,7 +287,10 @@ export class ProjectAcl {
       if (this.isAdminOnlyRoute(req.method, pathname) && user.role !== "admin") return reply.code(403).send({ error: "Apenas administradores." });
       // Projeto alvo: o parâmetro da rota casada (é o que o handler vai usar); sem rota, o caminho decodificado
       const params = (req.params ?? {}) as Record<string, string>;
-      const byRoute = rp.route.startsWith("/api/projects/:") ? (params.id ?? params.p) : undefined;
+      // O nome do parâmetro do PROJETO vem do próprio padrão (:id ou :p); outros parâmetros (ex.: o :id do anexo em
+      // /api/projects/:p/attachments/:id) não são o projeto
+      const routeParam = /^\/api\/projects\/:(\w+)/.exec(rp.route)?.[1];
+      const byRoute = routeParam ? params[routeParam] : undefined;
       const m = byRoute === undefined ? ID_RE.exec(rp.path) : null;
       if (byRoute === undefined && !m) return;
       const p = this.find(byRoute ?? dec(m![1]));

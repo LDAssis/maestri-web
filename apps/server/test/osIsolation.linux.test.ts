@@ -317,9 +317,8 @@ console.log("ST=" + out.join(","));
     fs.writeFileSync(path.join(geminiDir, "antigravity-cli", "antigravity-oauth-token"), "TOKEN-AGY", { mode: 0o600 });
     fs.writeFileSync(path.join(geminiDir, "oauth_creds.json"), '{"gemini":1}', { mode: 0o600 });
     const a = term(proj.A.id, "agw");
-    const denied = await a.run("echo T=$(cat ~/.gemini/antigravity-cli/antigravity-oauth-token 2>&1 | head -1)");
-    assert.match(val(denied.out, "T"), /Permission denied/);
-    iso.ensureAccountDir("gemini", "Padrão", geminiDir, true); // o que o servidor faz ao fim do login do menu / a migração
+    // o watcher de permissões (accountPerms.ts) normaliza o 0600 de root para o grupo sozinho, sem chamar ensureAccountDir
+    await until(() => (fs.statSync(path.join(geminiDir, "antigravity-cli", "antigravity-oauth-token")).mode & 0o060) === 0o060, "watcher normalizou o login 0600", 2500);
     const r = await a.run("echo L=$(readlink ~/.gemini) T=$(cat ~/.gemini/antigravity-cli/antigravity-oauth-token) K=$(printenv MAESTRI_ACCOUNT_LINK_GEMINI) C=$(cat ~/.gemini/oauth_creds.json)");
     assert.equal(val(r.out, "L"), geminiDir);
     assert.equal(val(r.out, "T"), "TOKEN-AGY");
@@ -336,6 +335,35 @@ console.log("ST=" + out.join(","));
     assert.equal(val(wb.out, "APPENDED"), "2", "o outro projeto regrava o arquivo criado pelo primeiro");
     // projeto externo nunca ganha link (o ~/.gemini do root é o login do admin)
     assert.ok(!fs.existsSync("/tmp/.gemini-should-not-exist"));
+    a.close();
+    b.close();
+  });
+
+  test("contas: login gravado com chmod 0600 por um projeto continua legível (e regravável) pelos outros da conta — claude e gemini/agy", async () => {
+    const credFile = path.join(accountDir, ".credentials.json");
+    const agyFile = path.join(geminiDir, "antigravity-cli", "antigravity-oauth-token");
+    const settle = async (f: string) => {
+      await until(() => (fs.statSync(f).mode & 0o777) === 0o660, `${f} normalizado para 0660`, 2500);
+    };
+    const a = term(proj.A.id, "t");
+    const b = term(proj.B.id, "t");
+    // projeto A loga: o CLI grava 0600 (chmod explícito, ignora umask)
+    await a.run(`echo TOKEN-A > ${credFile} && chmod 600 ${credFile} && mkdir -p ${geminiDir}/antigravity-cli && echo AGY-A > ${agyFile} && chmod 600 ${agyFile}`);
+    await settle(credFile);
+    await settle(agyFile);
+    assert.equal(fs.statSync(credFile).uid, proj.A.uid, "continua sendo do uid que gravou");
+    const rb = await b.run(`echo C=$(cat ${credFile}) G=$(cat ${agyFile})`);
+    assert.equal(val(rb.out, "C"), "TOKEN-A", "o projeto B lê o login gravado pelo A");
+    assert.equal(val(rb.out, "G"), "AGY-A");
+    // B renova (tmp 0600 + rename, como o claude): o A precisa continuar lendo e vice-versa
+    await b.run(`echo TOKEN-B > ${credFile}.tmp && chmod 600 ${credFile}.tmp && mv ${credFile}.tmp ${credFile}`);
+    await settle(credFile);
+    assert.equal(fs.statSync(credFile).uid, proj.B.uid);
+    const ra = await a.run(`echo C=$(cat ${credFile}) && echo novo >> ${credFile} && echo APPENDED=sim`);
+    assert.equal(val(ra.out, "C"), "TOKEN-B", "o projeto A lê a renovação feita pelo B");
+    assert.equal(val(ra.out, "APPENDED"), "sim", "e consegue regravar o arquivo que o B criou");
+    // ninguém de fora do grupo enxerga (o+ nunca)
+    assert.equal(fs.statSync(credFile).mode & 0o007, 0);
     a.close();
     b.close();
   });

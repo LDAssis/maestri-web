@@ -46,6 +46,7 @@ import { Isolation, loadIsolationConfig } from "./isolation.js";
 import { TerminalTokens, terminalScopeCheck } from "./terminalTokens.js";
 import { AccountAccess, NO_ACCOUNT_MESSAGE } from "./accountAccess.js";
 import { setRunAsResolver } from "./runAs.js";
+import { AccountPermWatcher } from "./accountPerms.js";
 import { accountProgramOf } from "./resume.js";
 import { GEMINI_LINK_ENV } from "./accounts.js";
 
@@ -255,6 +256,11 @@ accountAccess.onRevoked = (p, _groups) => {
   canvas.notify(p.id, { type: "notify", from: { nodeId: "", title: "Maestri" }, text: "Uma conta de assinatura foi revogada para este projeto: os terminais foram reiniciados." });
 };
 acl.onOwnerChange = () => accountAccess.syncAll();
+// Os CLIs gravam o login com chmod 0600 (ignora umask) e o dono vira o projeto que logou: sem isto os outros projetos da mesma conta
+// perdem o login. O servidor (root) mantém tudo dentro das pastas de conta legível/gravável pelo grupo (inotify + varredura de 30 s).
+const accountWatcher = new AccountPermWatcher(iso.cfg.accountsDir);
+if (iso.enabled) accountWatcher.start();
+fastify.addHook("onClose", async () => accountWatcher.stop());
 if (iso.enabled) accountAccess.syncAll();
 const attachments = new AttachmentStore(dataDir);
 export const crossLinks = new CrossLinks(path.join(dataDir, "links.json"));

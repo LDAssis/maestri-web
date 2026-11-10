@@ -4,6 +4,7 @@ import path from "node:path";
 import { ApiError } from "./agents.js";
 import { accountProgramOf } from "./resume.js";
 import type { Isolation } from "./isolation.js";
+import { normalizeAccountTree } from "./accountPerms.js";
 
 export const ACCOUNT_PROGRAMS = ["claude", "codex", "gemini"] as const;
 export type AccountProgram = (typeof ACCOUNT_PROGRAMS)[number];
@@ -80,6 +81,12 @@ export class AccountStore {
     }
     this.opts.onChange?.();
     return n;
+  }
+
+  // Rápido e sem exec (usado antes de checar o status de login): arquivos g+rw, diretórios g+rwxs, sem seguir symlink
+  normalizeTree(program: AccountProgram, name: string) {
+    const real = this.find(program, name);
+    if (real && real !== DEFAULT_ACCOUNT && this.opts.iso?.enabled) normalizeAccountTree(this.dir(program, real));
   }
 
   // Depois de um login feito pelo servidor (root): arquivos 0600 de root não serviriam aos projetos; refaz dono/grupo/modo
