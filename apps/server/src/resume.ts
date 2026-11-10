@@ -66,6 +66,25 @@ export function programOf(cmd: string | undefined | null): Program | null {
   return cmd ? locate(cmd).program : null;
 }
 
+// Programa de conta de assinatura do comando: claude, codex ou gemini (gemini-cli E agy compartilham ~/.gemini)
+const base0 = (cmd: string): string | null => {
+  const toks = tokenize(cmd);
+  let idx = 0;
+  while (idx < toks.length && (isAssign(toks[idx]) || WRAPPERS.has(path.basename(toks[idx].value)))) idx++;
+  const t = toks[idx];
+  if (!t) return null;
+  const b = path.basename(t.value);
+  if (SHELLS.has(b)) {
+    const flag = toks.findIndex((x, j) => j > idx && /^-[a-z]*c$/.test(x.value));
+    return flag >= 0 && toks[flag + 1] ? base0(toks[flag + 1].value) : null;
+  }
+  return b;
+};
+export function accountProgramOf(cmd: string | undefined | null): "claude" | "codex" | "gemini" | null {
+  const b = cmd ? base0(cmd) : null;
+  return b === "claude" || b === "codex" ? b : b === "agy" || b === "gemini" ? "gemini" : null;
+}
+
 // claude/codex rodando DIRETAMENTE (não dentro de `sh -c`) e num comando simples, sem metacaracteres de shell: é seguro
 // acrescentar um argumento no fim (usado para passar o prompt do role). Caminho absoluto e variáveis na frente valem.
 export function directProgramOf(cmd: string | undefined | null): "claude" | "codex" | null {

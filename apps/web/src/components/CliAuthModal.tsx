@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, ChevronDown, Copy, Download, ExternalLink, KeyRound, Loader2, LogIn, LogOut, Plus, RefreshCw, Send, X } from "lucide-react";
+import { accountProgramOf } from "@/lib/accounts";
 import { apiFetch, wsUrl } from "@/lib/api";
 import { copyText, readText } from "@/lib/clipboard";
 
@@ -564,7 +565,7 @@ export default function CliAuthModal({ isOpen, onClose }: { isOpen: boolean; onC
     const res = await apiFetch("/api/accounts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ program: c.id, name }),
+      body: JSON.stringify({ program: accountProgramOf(c.id), name }),
     }).catch(() => null);
     if (!res?.ok) return setAccountError(await errorOf(res, "Não foi possível criar a conta"));
     setNewAccount(null);
@@ -597,7 +598,7 @@ export default function CliAuthModal({ isOpen, onClose }: { isOpen: boolean; onC
   const b = cli ? brandOf(cli) : null;
   const busy = cli ? busyOf(cli.id) : false;
   const jobId = cli ? jobs[cli.id] : undefined;
-  const accountNames = cli ? accounts.filter((a) => a.program === cli.id).map((a) => a.name) : [];
+  const accountNames = cli ? accounts.filter((a) => a.program === accountProgramOf(cli.id)).map((a) => a.name) : [];
   const status = cli ? statusOf(cli, busy) : null;
   const bigBtn = "flex items-center justify-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold text-white shadow-md transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 disabled:opacity-40";
 
@@ -687,7 +688,7 @@ export default function CliAuthModal({ isOpen, onClose }: { isOpen: boolean; onC
                   </div>
                 </div>
 
-                {/* Contas (claude/codex): o status de login é por conta */}
+                {/* Contas (claude/codex/gemini): o status de login é por conta */}
                 {cli.accountsSupported && cli.installed && (
                   <div>
                     <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">Conta</div>

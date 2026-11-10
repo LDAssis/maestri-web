@@ -2,8 +2,8 @@
 // de configuração próprio (CLAUDE_CONFIG_DIR / CODEX_HOME); o login de fato é feito rodando o CLI no terminal da conta.
 
 const HELP = `maestri account list
-maestri account create "Nome" --cli claude|codex
-maestri account delete "Nome" --cli claude|codex
+maestri account create "Nome" --cli claude|codex|gemini
+maestri account delete "Nome" --cli claude|codex|gemini
 Contas de CLI para rodar agentes lado a lado em assinaturas/chaves diferentes: "maestri recruit ... --account Nome",
 "maestri preset create/set ... --account Nome" e "maestri recruit --replace X --account Nome". "Default" é o login existente
 do CLI e não precisa ser criada. Depois de recrutar na conta nova, faça o login rodando o CLI naquele terminal.
@@ -16,7 +16,7 @@ export function register({ call, need, CliError }) {
     const cli = flags.cli ?? flags.program;
     if (sub === "list") {
       const { accounts } = await call("GET", "/accounts");
-      for (const program of ["claude", "codex"]) {
+      for (const program of ["claude", "codex", "gemini"]) {
         const mine = accounts.filter((a) => a.program === program);
         console.log(`${program}: "Default"${mine.map((a) => `, "${a.name}"${a.usedBy.length ? ` (em uso: ${a.usedBy.join(", ")})` : ""}`).join("")}`);
       }

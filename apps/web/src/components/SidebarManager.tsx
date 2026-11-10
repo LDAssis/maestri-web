@@ -1,12 +1,13 @@
 "use client";
 
+import UnisolatedBadge from "./UnisolatedBadge";
 import React, { useCallback, useEffect, useState } from "react";
 import { X, FolderPlus, Pencil, Trash2, Pin, PinOff, Folder, Layers } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useConfirm } from "./ConfirmProvider";
 import { useProjectEvents } from "@/lib/useProjectEvents";
 
-interface ProjectLite { id: string; name: string; access?: "owner" | "member" | "admin"; group?: string | null; folder?: string | null; pinned?: boolean }
+interface ProjectLite { id: string; name: string; isolated?: boolean; access?: "owner" | "member" | "admin"; group?: string | null; folder?: string | null; pinned?: boolean }
 interface Sidebar { groups: string[]; folders: { name: string; group: string | null }[] }
 
 const J = { "Content-Type": "application/json" };
@@ -141,6 +142,7 @@ export default function SidebarManager({ projectId, projects, onClose, onChanged
                 {p.pinned ? <Pin className="h-3.5 w-3.5" /> : <PinOff className="h-3.5 w-3.5" />}
               </button>
               <span className="flex-1 text-xs truncate">{p.name}</span>
+              {p.isolated === false && <UnisolatedBadge />}
               <select
                 aria-label={`Mover ${p.name} para`}
                 value={dest(p.group ?? null, p.folder ?? null)}

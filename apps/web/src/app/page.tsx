@@ -29,6 +29,7 @@ import { useRef } from "react";
 import { Peer, PresenceProvider } from "@/lib/presence";
 import RoutinesPanel from "@/components/RoutinesPanel";
 import WorktreesPanel from "@/components/WorktreesPanel";
+import UnisolatedBadge from "@/components/UnisolatedBadge";
 import SidebarManager from "@/components/SidebarManager";
 import { ConfirmProvider } from "@/components/ConfirmProvider";
 import { useProjectEvents } from "@/lib/useProjectEvents";
@@ -46,6 +47,7 @@ interface Project {
   pinned?: boolean;
   ownerId?: string;
   access?: "owner" | "member" | "admin";
+  isolated?: boolean; // false = pasta externa, roda como root (sem isolamento no SO)
 }
 
 // Seções do seletor de projetos: fixados, raiz, pastas da raiz e grupos (com as pastas deles)
@@ -404,6 +406,7 @@ function App({
                           >
                             <div className="flex items-center gap-1.5 font-medium text-slate-100">
                               <span className="truncate">{p.name}</span>
+                              {p.isolated === false && <UnisolatedBadge />}
                               {p.access && (
                                 <span className={`shrink-0 rounded-full px-1.5 py-px text-[9px] font-normal ${p.access === "owner" ? "bg-amber-500/15 text-amber-300" : p.access === "member" ? "bg-indigo-500/15 text-indigo-300" : "bg-slate-800 text-slate-400"}`}>
                                   {p.access === "owner" ? "dono" : p.access === "member" ? "membro" : "admin"}

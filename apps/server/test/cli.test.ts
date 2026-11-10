@@ -165,8 +165,9 @@ test("erros claros: alvo não conectado, inexistente, servidor fora e sem token"
 test("o PTY recebe o ambiente do CLI e o maestri do web vence no PATH", async () => {
   worker.send("echo ENV[$MAESTRI_NODE_ID][$MAESTRI_PROJECT_ID][$(command -v maestri)]\r");
   await until(() => worker.raw.join("").includes(`ENV[worker][${P}][${path.resolve(path.dirname(bin))}/maestri]`), "env no PTY");
-  worker.send("echo URL=$MAESTRI_API_URL TOK=$MAESTRI_TOKEN\r");
-  await until(() => worker.raw.join("").includes(`URL=http://127.0.0.1:${port}/api TOK=tok-cli`), "api url/token no PTY");
+  // Fase 3: o token interno NUNCA entra no PTY; o terminal recebe só o arquivo do SEU token
+  worker.send("echo URL=$MAESTRI_API_URL TOK=[$MAESTRI_TOKEN] F=$(test -s \"$MAESTRI_TOKEN_FILE\" && echo yes)\r");
+  await until(() => worker.raw.join("").includes(`URL=http://127.0.0.1:${port}/api TOK=[] F=yes`), "api url, sem token interno e com arquivo de token no PTY");
 });
 
 test("send escreve no PTY do alvo e check devolve o scrollback sem ANSI", async () => {

@@ -1,18 +1,20 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AuthService } from "./service.js";
 import type { ProjectAcl } from "../projectAccess.js";
+import type { AccountAccess } from "../accountAccess.js";
 import { cleanName, validName, type User } from "./users.js";
 
 interface Deps {
   fastify: FastifyInstance;
   auth: AuthService;
   acl?: ProjectAcl; // permissões por projeto (Fase 2)
+  accountAccess?: AccountAccess; // contas de assinatura liberadas por usuário (Fase 3)
 }
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const row = (u: User) => ({ id: u.id, name: u.name, email: u.email, role: u.role, disabled: u.disabled, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt, color: u.color });
 
-export function registerAdminApi({ fastify, auth, acl }: Deps) {
+export function registerAdminApi({ fastify, auth, acl, accountAccess }: Deps) {
   const fail = (reply: FastifyReply, code: number, error: string) => reply.code(code).send({ error });
   // Admin (sessão) ou token interno (agentes/CLI: privilégio de admin até a Fase 3)
   const adminOnly = async (req: FastifyRequest, reply: FastifyReply) => {
@@ -55,6 +57,7 @@ export function registerAdminApi({ fastify, auth, acl }: Deps) {
     if (!keepsAnAdmin(target, after)) return fail(reply, 409, "Precisa sobrar pelo menos um administrador ativo.");
     const u = auth.users.update(target.id, patch)!;
     if (patch.disabled) auth.revokeUser(u.id);
+    if (patch.role !== undefined) accountAccess?.syncOwnedBy(u.id); // admin libera todas as contas; rebaixar tira as não liberadas
     return { user: row(u) };
   });
 
@@ -86,6 +89,22 @@ export function registerAdminApi({ fastify, auth, acl }: Deps) {
     const out = acl.setMemberships(target, ids);
     if (!out) return fail(reply, 400, "Algum projeto não existe.");
     return { projects: out };
+  });
+
+  // Contas de assinatura (Fase 3): quais o usuário pode usar nos projetos de que é dono
+  fastify.get("/api/admin/users/:id/accounts", opts, async (req: any, reply) => {
+    const target = auth.users.get(req.params.id);
+    if (!target || !accountAccess) return fail(reply, 404, "Usuário não encontrado.");
+    return accountAccess.view(target);
+  });
+
+  fastify.put("/api/admin/users/:id/accounts", opts, async (req: any, reply) => {
+    const target = auth.users.get(req.params.id);
+    if (!target || !accountAccess) return fail(reply, 404, "Usuário não encontrado.");
+    const grants = req.body?.grants;
+    if (!Array.isArray(grants) || !grants.every((g: any) => g && typeof g.program === "string" && typeof g.name === "string")) return fail(reply, 400, "grants deve ser uma lista de {program, name}.");
+    if (!accountAccess.setGrants(target, grants)) return fail(reply, 400, "Alguma conta não existe.");
+    return accountAccess.view(auth.users.get(target.id)!);
   });
 
   fastify.post("/api/admin/users/:id/reset-link", opts, async (req: any, reply) => {

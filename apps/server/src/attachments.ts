@@ -60,9 +60,9 @@ export class AttachmentStore {
       at: new Date().toISOString(),
     };
     const dir = this.dir(projectId, meta.id);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, "file"), data);
-    fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta));
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(dir, "file"), data, { mode: 0o600 });
+    fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta), { mode: 0o600 });
     return meta;
   }
 

@@ -3,9 +3,10 @@ import type { FastifyInstance } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import { ApiError } from "./agents.js";
 import { AccountStore, type AccountProgram } from "./accounts.js";
-import { programOf } from "./resume.js";
+import { accountProgramOf as programOf } from "./resume.js";
 import type { NodeApi } from "./nodeApi.js";
 import type { SettingsAccess } from "./teamApi.js";
+import type { AccountAccess, AccountProject } from "./accountAccess.js";
 
 type Obj = Record<string, any>;
 
@@ -16,19 +17,35 @@ interface Deps {
   accounts: AccountStore;
   projectIds: () => string[];
   settings: SettingsAccess;
+  access?: AccountAccess; // Fase 3: quem enxerga quais contas
+  projectOf?: (projectId: string) => AccountProject | undefined;
+  canSee?: (projectId: string) => boolean;
 }
 
-export function registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds, settings }: Deps) {
+export function registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds, settings, access, projectOf, canSee }: Deps) {
   const { base, requireMaestro, wrap } = nodeApi;
 
   // Terminais (de todos os projetos) que rodam nesta conta
-  const usedBy = (program: AccountProgram, name: string) =>
-    projectIds().flatMap((p) =>
+  const usedBy = (program: AccountProgram, name: string, onlyVisible = false) =>
+    projectIds().filter((p) => !onlyVisible || (canSee?.(p) ?? true)).flatMap((p) =>
       (canvas.state(p).nodes ?? [])
         .filter((n: Obj) => n.type === "agentTerminal" && n.data?.account === name && programOf(n.data?.baseCmd ?? n.data?.defaultCmd) === program)
         .map((n: Obj) => String(n.data?.title ?? n.id)),
     );
-  const view = () => accounts.list().map((a) => ({ ...a, usedBy: usedBy(a.program, a.name) }));
+  const view = (allowed?: { program: string; name: string }[]) =>
+    accounts
+      .list()
+      .filter((a) => !allowed || allowed.some((x) => x.program === a.program && x.name === a.name))
+      .map((a) => ({ ...a, usedBy: usedBy(a.program, a.name, true) }));
+  // Quem pede e o que ele enxerga: admin/token interno = tudo; terminal = as do dono do projeto; usuário = as do projeto pedido (?project=) ou as dele
+  const allowedFor = (req: any, projectId?: string) => {
+    if (!access) return undefined;
+    if (req.authTerminal) return access.visible({ project: projectOf?.(req.authTerminal.projectId) ?? null });
+    if (req.authInternal || req.authUser?.role === "admin") return undefined;
+    const p = projectId && canSee?.(projectId) ? projectOf?.(projectId) ?? null : null;
+    return access.visible({ user: req.authUser, project: p });
+  };
+
 
   // Presets (globais e de cada projeto) que fixam esta conta: ao apagar a conta eles são DESAFIXADOS e a resposta lista quais
   // (apagar não é recusado por causa de preset: o preset volta a iniciar no login padrão do CLI).
@@ -82,7 +99,7 @@ export function registerAccountsApi({ fastify, canvas, nodeApi, accounts, projec
   };
 
   // Web (configurações): gerenciar contas; o login de fato é feito rodando o CLI no terminal da conta
-  fastify.get("/api/accounts", guarded(() => ({ accounts: view(), default: "Default" })));
+  fastify.get("/api/accounts", guarded((req) => ({ accounts: view(allowedFor(req, typeof req.query?.project === "string" ? req.query.project : undefined)), default: "Default" })));
   fastify.post("/api/accounts", guarded((req) => {
     const program = accounts.checkProgram(req.body?.program);
     const name = accounts.create(program, req.body?.name);
@@ -91,7 +108,7 @@ export function registerAccountsApi({ fastify, canvas, nodeApi, accounts, projec
   fastify.delete("/api/accounts/:program/:name", guarded((req) => ({ ok: true, ...guardDelete(accounts.checkProgram(req.params.program), String(req.params.name)) })));
 
   // CLI
-  fastify.get(`${base}/accounts`, wrap(() => ({ accounts: view(), default: "Default" })));
+  fastify.get(`${base}/accounts`, wrap((c, req) => ({ accounts: view(allowedFor(req, c.projectId)), default: "Default" })));
   fastify.post(`${base}/accounts/create`, wrap((c, req) => {
     requireMaestro(c, "criar contas");
     const program = accounts.checkProgram(req.body?.program);

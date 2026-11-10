@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // CLI do Maestri Web: fala com a API do servidor usando o ambiente injetado no PTY
-// (MAESTRI_API_URL, MAESTRI_PROJECT_ID, MAESTRI_NODE_ID, MAESTRI_TOKEN). Sem dependências.
+// (MAESTRI_API_URL, MAESTRI_PROJECT_ID, MAESTRI_NODE_ID, MAESTRI_TOKEN_FILE; MAESTRI_TOKEN como recurso). Sem dependências.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -92,10 +92,23 @@ function parse(argv) {
   return { pos, flags, help };
 }
 
+// Token do terminal: o servidor entrega um arquivo (MAESTRI_TOKEN_FILE, só o dono lê); MAESTRI_TOKEN fica como recurso
+// para o Maestri nativo/dev e para o uso local do admin fora de um PTY.
+function readToken() {
+  const f = process.env.MAESTRI_TOKEN_FILE;
+  if (f) {
+    try {
+      const t = fs.readFileSync(f, "utf8").trim();
+      if (t) return t;
+    } catch {}
+  }
+  return process.env.MAESTRI_TOKEN;
+}
+
 function env() {
-  const { MAESTRI_API_URL: api, MAESTRI_PROJECT_ID: project, MAESTRI_NODE_ID: node, MAESTRI_TOKEN: token } = process.env;
+  const { MAESTRI_API_URL: api, MAESTRI_PROJECT_ID: project, MAESTRI_NODE_ID: node } = process.env;
   if (!api || !project || !node) throw new CliError("Fora de um terminal do Maestri Web (variáveis MAESTRI_* ausentes).");
-  return { base: `${api.replace(/\/$/, "")}/projects/${project}/nodes/${node}`, token };
+  return { base: `${api.replace(/\/$/, "")}/projects/${project}/nodes/${node}`, token: readToken() };
 }
 
 async function call(method, route, body) {

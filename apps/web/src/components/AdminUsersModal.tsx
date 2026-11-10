@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Copy, FolderGit2, KeyRound, Link2, Loader2, Plus, ShieldCheck, Trash2, UserCheck, UserX, Users, X } from "lucide-react";
+import { Check, Copy, FolderGit2, KeyRound, Bot, Link2, Loader2, Plus, ShieldCheck, Trash2, UserCheck, UserX, Users, X } from "lucide-react";
+import { ACCOUNT_PROGRAMS, accountProgramLabel, type AccountProgram } from "@/lib/accounts";
 import { apiFetch } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import { Avatar, errorOf, type MaestriUser } from "./EntryGate";
@@ -56,6 +57,7 @@ function CopyBox({ value }: { value: string }) {
 }
 
 const iconBtn = "rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-white disabled:opacity-30";
+const textBtn = "flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-slate-300 transition hover:bg-slate-800 hover:text-white disabled:opacity-30";
 
 
 interface ProjAccess {
@@ -149,6 +151,101 @@ function UserProjectsPanel({ user, onClose }: { user: AdminUser; onClose: () => 
     </div>
   );
 }
+interface GrantAccount {
+  program: AccountProgram;
+  name: string;
+  granted: boolean;
+}
+
+// Contas de assinatura (Claude, Codex, Gemini / Antigravity) liberadas para o usuário; admin tem todas
+function UserAccountsPanel({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const [all, setAll] = useState<GrantAccount[] | null>(null);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const key = (a: { program: string; name: string }) => `${a.program}/${a.name}`;
+  const isAdmin = user.role === "admin";
+
+  useEffect(() => {
+    apiFetch(`/api/admin/users/${user.id}/accounts`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await errorOf(res, "Não foi possível carregar as contas"));
+        const list: GrantAccount[] = (await res.json()).accounts ?? [];
+        setSel(new Set(list.filter((a) => a.granted).map(key)));
+        setAll(list);
+      })
+      .catch((e) => setError(e?.message || "Servidor indisponível"));
+  }, [user.id]);
+
+  const toggle = (k: string) => {
+    setSaved(false);
+    setSel((s) => {
+      const n = new Set(s);
+      n.has(k) ? n.delete(k) : n.add(k);
+      return n;
+    });
+  };
+
+  const save = async () => {
+    if (!all) return;
+    setBusy(true);
+    setError("");
+    const grants = all.filter((a) => sel.has(key(a))).map((a) => ({ program: a.program, name: a.name }));
+    const res = await apiFetch(`/api/admin/users/${user.id}/accounts`, { method: "PUT", ...json({ grants }) }).catch(() => null);
+    setBusy(false);
+    if (res?.ok) setSaved(true);
+    else setError(await errorOf(res, "Não foi possível salvar"));
+  };
+
+  return (
+    <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+      <div className="flex items-start justify-between gap-2 text-xs text-slate-200">
+        <span>
+          Contas de assinatura de <strong>{user.name}</strong>
+          {isAdmin && <span className="text-slate-500"> (administrador usa todas)</span>}
+        </span>
+        <button onClick={onClose} aria-label="Fechar" className="text-slate-400 hover:text-white">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <p className="text-[11px] text-slate-500">
+        Os projetos dessa pessoa só podem usar as contas marcadas. Ao retirar uma conta, os terminais que a usam são reiniciados.
+      </p>
+      {error && (
+        <p role="alert" className="text-xs text-rose-300">
+          {error}
+        </p>
+      )}
+      {!all ? (
+        !error && <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
+      ) : all.length === 0 ? (
+        <p className="text-xs text-slate-500">Nenhuma conta cadastrada</p>
+      ) : (
+        <ul className="max-h-56 divide-y divide-slate-800 overflow-y-auto rounded-lg border border-slate-800">
+          {all.map((a) => {
+            const k = key(a);
+            return (
+              <li key={k}>
+                <label className={`flex items-center gap-2.5 px-3 py-2 text-xs ${isAdmin ? "text-slate-500" : "cursor-pointer text-slate-200 hover:bg-slate-900"}`}>
+                  <input type="checkbox" checked={isAdmin || sel.has(k)} disabled={isAdmin} onChange={() => toggle(k)} className="accent-indigo-500" />
+                  <span className="rounded bg-slate-800 px-1.5 text-[10px] text-slate-300">{accountProgramLabel(a.program)}</span>
+                  <span className="flex-1 truncate">{a.name}</span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <div className="flex items-center gap-3">
+        <button onClick={save} disabled={busy || !all || isAdmin} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-40">
+          Salvar contas
+        </button>
+        {saved && <span className="text-[11px] text-emerald-400">Salvo</span>}
+      </div>
+    </div>
+  );
+}
 function UsersTab({ me }: { me: MaestriUser }) {
   const [users, setUsers] = useState<AdminUser[] | null>(null);
   const [error, setError] = useState("");
@@ -157,6 +254,7 @@ function UsersTab({ me }: { me: MaestriUser }) {
   const [typed, setTyped] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [projUser, setProjUser] = useState<AdminUser | null>(null);
+  const [accUser, setAccUser] = useState<AdminUser | null>(null);
 
   const load = useCallback(async () => {
     const res = await apiFetch("/api/admin/users").catch(() => null);
@@ -222,6 +320,7 @@ function UsersTab({ me }: { me: MaestriUser }) {
         </div>
       )}
       {projUser && <UserProjectsPanel key={projUser.id} user={projUser} onClose={() => setProjUser(null)} />}
+      {accUser && <UserAccountsPanel key={accUser.id} user={accUser} onClose={() => setAccUser(null)} />}
       <div className="overflow-x-auto rounded-xl border border-slate-800">
         <table className="w-full min-w-[640px] text-left text-xs">
           <thead className="bg-slate-900 text-[11px] uppercase tracking-wide text-slate-500">
@@ -284,8 +383,13 @@ function UsersTab({ me }: { me: MaestriUser }) {
                       >
                         {u.disabled ? <UserCheck className="h-4 w-4" /> : <UserX className="h-4 w-4" />}
                       </button>
-                      <button className={iconBtn} onClick={() => setProjUser(u)} title="Projetos" aria-label={`Projetos de ${u.name}`}>
+                      <button className={textBtn} onClick={() => { setAccUser(null); setProjUser(u); }} title="Projetos em que a pessoa é membro" aria-label={`Projetos de ${u.name}`}>
                         <FolderGit2 className="h-4 w-4" />
+                        Projetos
+                      </button>
+                      <button className={textBtn} onClick={() => { setProjUser(null); setAccUser(u); }} title="Contas de assinatura (Claude, Codex, Gemini / Antigravity) liberadas" aria-label={`Contas de assinatura de ${u.name}`}>
+                        <Bot className="h-4 w-4" />
+                        Contas
                       </button>
                       <button className={iconBtn} disabled={busy} onClick={() => resetLink(u)} title="Gerar link de redefinição de senha" aria-label={`Redefinir senha de ${u.name}`}>
                         <KeyRound className="h-4 w-4" />

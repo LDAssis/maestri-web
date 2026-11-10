@@ -1,5 +1,6 @@
 import { desktopNotify } from "./desktopNotify.js";
 import { execFile } from "node:child_process";
+import { SAFE_DIR_ENV, mkdirOwned, fixOwner } from "./runAs.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -29,7 +30,7 @@ const SKIP_COPY = /(^|\/)(node_modules|\.next|dist|build|out|target|\.turbo|\.ca
 // GitHub CLI (gh): erros viram mensagens claras; o JSON de `gh pr view` vem em stdout
 function gh(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("gh", args, { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 30_000 }, (err, stdout, stderr) => {
+    execFile("gh", args, { cwd, env: { ...process.env, ...SAFE_DIR_ENV }, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 30_000 }, (err, stdout, stderr) => {
       if (!err) return resolve(stdout);
       if ((err as any).code === "ENOENT") return reject(new ApiError(409, "O GitHub CLI (gh) não está instalado ou não está no PATH."));
       const msg = (stderr || stdout || err.message).trim();
@@ -127,8 +128,9 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
         try {
           const src = path.join(repo, rel);
           if (!fs.statSync(src).isFile()) continue;
-          fs.mkdirSync(path.dirname(path.join(dest, rel)), { recursive: true });
+          mkdirOwned(path.dirname(path.join(dest, rel)));
           fs.copyFileSync(src, path.join(dest, rel));
+          fixOwner(path.join(dest, rel));
           copied.push(rel);
         } catch {}
       }
@@ -140,8 +142,9 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
     const exclude = path.resolve(repo, (await git(repo, ["rev-parse", "--git-path", "info/exclude"])).trim());
     const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
     if (!/^\/?\.worktrees\/?$/m.test(cur)) {
-      fs.mkdirSync(path.dirname(exclude), { recursive: true });
+      mkdirOwned(path.dirname(exclude));
       fs.appendFileSync(exclude, `${cur && !cur.endsWith("\n") ? "\n" : ""}/.worktrees/\n`);
+      fixOwner(exclude);
     }
   }
 
@@ -256,7 +259,7 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
         let dir = slug(name);
         for (let n = 2; fs.existsSync(path.join(repo, ".worktrees", dir)); n++) dir = `${slug(name)}-${n}`;
         const dest = path.join(repo, ".worktrees", dir);
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        mkdirOwned(path.dirname(dest));
         await hideWorktrees(repo);
         let finalBranch: string;
         if (o.copy) {

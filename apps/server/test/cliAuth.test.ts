@@ -310,7 +310,8 @@ test("login agy: responde o menu sozinho, aceita o código e encerra a TUI quand
 });
 
 test("cancelar e timeout (opencode: menu pelo input)", { skip }, async () => {
-  assert.equal((await api("POST", "/api/clis/agy/login", { account: "work" })).status, 400); // só Default
+  assert.equal((await api("POST", "/api/clis/opencode/login", { account: "work" })).status, 400); // só Default
+  assert.equal((await api("POST", "/api/clis/agy/login", { account: "work" })).status, 404); // agy aceita conta gemini (conta inexistente)
   const { job: a } = (await api("POST", "/api/clis/opencode/login")).json;
   await waitJob(a.id, (x) => /Select provider/.test(x.log), "menu");
   await api("POST", `/api/cli-jobs/${a.id}/input`, { text: "GitHub Copilot" }); // responde o menu

@@ -259,7 +259,17 @@ export function register({ call, need, CliError }) {
         line(false, "API responde (/api/health)", err.cause?.code || err.message);
       }
     }
-    line(!!e.MAESTRI_TOKEN || !authRequired, "MAESTRI_TOKEN", e.MAESTRI_TOKEN ? "definido" : authRequired ? "ausente" : "ausente (o servidor não exige token)");
+    let hasToken = !!e.MAESTRI_TOKEN;
+    let tokenWhere = "MAESTRI_TOKEN";
+    if (e.MAESTRI_TOKEN_FILE) {
+      tokenWhere = "MAESTRI_TOKEN_FILE";
+      try {
+        hasToken = !!fs.readFileSync(e.MAESTRI_TOKEN_FILE, "utf8").trim();
+      } catch {
+        hasToken = !!e.MAESTRI_TOKEN;
+      }
+    }
+    line(hasToken || !authRequired, tokenWhere, hasToken ? "definido" : authRequired ? "ausente (ou o arquivo não é legível por este usuário)" : "ausente (o servidor não exige token)");
     if (e.MAESTRI_API_URL && e.MAESTRI_PROJECT_ID && e.MAESTRI_NODE_ID) {
       try {
         const d = await call("GET", "/debug");

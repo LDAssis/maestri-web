@@ -24,7 +24,7 @@ export class SessionHistory {
     if (!this.file) return;
     try {
       const tmp = `${this.file}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(this.data));
+      fs.writeFileSync(tmp, JSON.stringify(this.data), { mode: 0o600 });
       fs.renameSync(tmp, this.file);
     } catch (e: any) {
       console.error("Erro ao persistir histórico de sessões:", e.message);
