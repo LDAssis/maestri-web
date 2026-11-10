@@ -41,6 +41,8 @@ export interface CliDef {
   waitFor?: RegExp; // saída que pede algo ao usuário (código colado / menu) => waiting_input
   autoReply?: { re: RegExp; send: string }[]; // responde sozinho a menus com a resposta padrão (cada um uma vez)
   pollStatus?: boolean; // TUI que não sai ao terminar o login: confere o status depois do input e encerra quando logou
+  // URL de login do próprio CLI (a TUI pode imprimir outros links antes, ex.: termos de uso). Vale a ÚLTIMA ocorrência.
+  urlRe?: RegExp;
 }
 
 const homeDir = () => process.env.HOME || os.homedir();
@@ -198,6 +200,8 @@ export const CATALOG: CliDef[] = [
     versionArgs: ["--version"],
     loginArgs: [], // TUI: confiar na pasta -> método de login (padrão "Sign in with Google") -> URL + código colado
     waitFor: /enter the authorization code/i,
+    // A TUI desenha o link dos Termos (geminicli.com/.../tos-privacy) antes da URL OAuth; um retry imprime URL nova
+    urlRe: /https:\/\/accounts\.google\.com\/o\/oauth2\/[^\s"'<>]+(?=\s)/,
     autoReply: [
       { re: /trust the files in this folder/i, send: "\r" }, // "1. Trust folder" (o CLI reinicia sozinho depois)
       { re: /how would you like to authenticate/i, send: "\r" }, // "1. Sign in with Google"
@@ -413,7 +417,15 @@ export class CliTools {
     j.scan = (j.scan + text).slice(-8000);
 
     if (j.kind === "login") {
-      if (!j.url) {
+      if (d.urlRe) {
+        // Última ocorrência da URL do próprio CLI (troca se o CLI reimprimir uma nova)
+        const all = j.scan.match(new RegExp(d.urlRe.source, "g"));
+        const url = all?.[all.length - 1].replace(/[.,;:)\]]+$/, "");
+        if (url && url !== j.url) {
+          j.url = url;
+          this.emit(j, { type: "url", url });
+        }
+      } else if (!j.url) {
         const m = URL_RE.exec(j.scan);
         if (m) {
           j.url = m[0].replace(/[.,;:)\]]+$/, "");

@@ -72,8 +72,10 @@ case "$1" in
 -p) if [ -s "$HOME/.gemini/oauth_creds.json" ]; then echo '{"response":"pong"}'; else echo '{"error":{"code":41}}'; exit 41; fi;;
 *) echo "Do you trust the files in this folder?"; echo "1. Trust folder"; read t
    echo "How would you like to authenticate for this project?"; echo "1. Sign in with Google"; read m
+   echo "Terms of Service and Privacy Notice: https://geminicli.com/docs/resources/tos-privacy/ "
    echo "Please visit the following URL to authorize the application:"
    echo "https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=https%3A%2F%2Fcodeassist.google.com%2Fauthcode&state=1"
+   echo "Retrying..."; echo "https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=https%3A%2F%2Fcodeassist.google.com%2Fauthcode&state=2"
    printf "Enter the authorization code: "; read code
    if [ "$code" = "good-gemini-code" ]; then mkdir -p "$HOME/.gemini"; echo '{"token":1}' > "$HOME/.gemini/oauth_creds.json"; fi
    sleep 30;;
@@ -334,6 +336,7 @@ test("login gemini: confia na pasta e escolhe o método sozinho, pede o código,
   const { job: ref } = (await api("POST", "/api/clis/gemini/login")).json;
   const j = await waitJob(ref.id, (x) => x.state === "waiting_input", "gemini pede o código");
   assert.match(j.url, /^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?/);
+  assert.match(j.url, /state=2$/, "pega a última URL OAuth, não o link dos Termos nem a URL antiga");
   assert.match(j.log, /Trust folder/);
   assert.match(j.log, /Sign in with Google/);
   await api("POST", `/api/cli-jobs/${ref.id}/input`, { text: "good-gemini-code" });
