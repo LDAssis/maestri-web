@@ -3,6 +3,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
+import { reqPath } from "./reqPath.js";
 import type { AuthService } from "./auth/service.js";
 import type { User } from "./auth/users.js";
 
@@ -277,19 +278,24 @@ export class ProjectAcl {
     // Depois da autenticação (hook registrado antes): rotas globais admin-only e toda rota /api/projects/:id/*
     fastify.addHook("onRequest", async (req, reply) => {
       if (req.method === "OPTIONS" || req.authInternal) return;
-      const pathname = req.url.split("?")[0];
-      if (!pathname.startsWith("/api/")) return;
+      // Rota casada + caminho decodificado (o req.url bruto pode vir com %XX: /%61pi/... casa /api/...)
+      const rp = reqPath(req);
+      if (!rp) return reply.code(400).send({ error: "Caminho inválido." });
       const user = req.authUser;
-      if (!user) return; // rota pública ou sem autenticação exigida
+      if (!user) return; // rota pública, ou token de terminal (escopo já checado no hook de autenticação)
+      const pathname = rp.route || rp.path;
       if (this.isAdminOnlyRoute(req.method, pathname) && user.role !== "admin") return reply.code(403).send({ error: "Apenas administradores." });
-      const m = ID_RE.exec(pathname);
-      if (!m) return;
-      const p = this.find(dec(m[1]));
+      // Projeto alvo: o parâmetro da rota casada (é o que o handler vai usar); sem rota, o caminho decodificado
+      const params = (req.params ?? {}) as Record<string, string>;
+      const byRoute = rp.route.startsWith("/api/projects/:") ? (params.id ?? params.p) : undefined;
+      const m = byRoute === undefined ? ID_RE.exec(rp.path) : null;
+      if (byRoute === undefined && !m) return;
+      const p = this.find(byRoute ?? dec(m![1]));
       const access = p ? this.accessOfUser(user, p) : null;
       if (!p || !access) return reply.code(404).send({ error: NOT_FOUND });
       // Excluir o projeto (e o resumo da exclusão): dono ou admin
-      const rest = pathname.slice(m[0].length);
-      const isDelete = (req.method === "DELETE" && rest === "") || (req.method === "GET" && rest === "delete-info");
+      const rest = rp.route ? rp.route.replace(/^\/api\/projects\/:(id|p)\/?/, "") : rp.path.slice(m![0].length);
+      const isDelete = (req.method === "DELETE" && rest === "") || ((req.method === "GET" || req.method === "HEAD") && rest === "delete-info");
       if (isDelete && !this.canManage(access)) return reply.code(403).send({ error: "Apenas o dono ou um administrador pode excluir o projeto." });
     });
   }
