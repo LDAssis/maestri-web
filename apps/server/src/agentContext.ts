@@ -12,6 +12,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { RunAs } from "./isolation.js";
+import { fsOps } from "./runAs.js";
+import type { FsOp } from "./fsOps.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 export const SKILL_NAME = "maestri-web";
@@ -74,57 +77,10 @@ const mtimeOf = (file: string) => {
   }
 };
 
-// Projeto isolado (Fase 3): o que o servidor (root) cria no HOME do projeto termina com o dono dele; dentro de uma pasta de
-// conta (compartilhada por grupo) o dono continua root, o grupo é o da conta e o grupo escreve.
-export interface Owner {
-  uid: number;
-  gid: number;
-  shared: string[];
-}
-
-function sharedRoot(file: string, own: Owner) {
-  return own.shared.find((d) => file === d || file.startsWith(d + path.sep));
-}
-
-function mkdirOwned(dir: string, own?: Owner) {
-  const made: string[] = [];
-  let cur = dir;
-  while (!fs.existsSync(cur)) {
-    made.unshift(cur);
-    const up = path.dirname(cur);
-    if (up === cur) break;
-    cur = up;
-  }
-  fs.mkdirSync(dir, { recursive: true });
-  if (!own) return;
-  for (const d of made) giveTo(d, own, true);
-}
-
-function giveTo(target: string, own: Owner, isDir: boolean) {
-  try {
-    const s = sharedRoot(target, own);
-    if (s) {
-      fs.chownSync(target, 0, fs.statSync(s).gid);
-      fs.chmodSync(target, isDir ? 0o2770 : 0o660);
-    } else fs.chownSync(target, own.uid, own.gid);
-  } catch {}
-}
-
-function writeIfChanged(file: string, content: string, own?: Owner) {
-  const known = written.get(file);
-  if (known && known.content === content && known.mtimeMs === mtimeOf(file)) return;
-  try {
-    if (!fs.existsSync(file) || fs.readFileSync(file, "utf-8") !== content) {
-      mkdirOwned(path.dirname(file), own);
-      fs.writeFileSync(file, content);
-      if (own) giveTo(file, own, false);
-    }
-    written.set(file, { content, mtimeMs: mtimeOf(file) });
-  } catch (e: any) {
-    console.warn(`Contexto do agente: não foi possível escrever ${file}: ${e?.message || e}`);
-  }
-}
-
+// Escritas no HOME/pasta de conta do projeto: em projeto isolado rodam COMO o usuário do projeto (fsOps.mjs sob setpriv), então um
+// symlink plantado pelo agente (~/.codex -> /algo-de-root) nunca leva o servidor (root) a escrever, ler ou dar chown fora do que o
+// próprio agente alcança. Sem isolamento, as mesmas operações rodam no processo (O_NOFOLLOW, tmp aleatório).
+type Job = { op: FsOp };
 function onPath(bin: string, PATH: string) {
   return PATH.split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, bin)));
 }
@@ -136,44 +92,46 @@ export function contextEnabled(env: NodeJS.ProcessEnv) {
 }
 
 // Garante as instruções para o ambiente do terminal que vai nascer (HOME, contas por CLI_CONFIG_DIR/CODEX_HOME)
-export function ensureAgentContext(env: NodeJS.ProcessEnv, own?: Owner) {
+export function ensureAgentContext(env: NodeJS.ProcessEnv, runAs: RunAs | null = null) {
   if (!contextEnabled(env)) return;
   const home = env.HOME || os.homedir();
   const PATH = env.PATH || "";
   const skill = skillContent();
   const has = (bin: string, dir: string) => onPath(bin, PATH) || fs.existsSync(dir);
+  const ops: FsOp[] = [];
+  const put = (file: string, content: string) => ops.push({ op: "write", path: file, data: content, ifChanged: true });
+  const block = (file: string, b: string) => ops.push({ op: "upsert", path: file, block: b, start: START, end: END });
 
   const claudeDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
-  if (has("claude", claudeDir)) writeIfChanged(path.join(claudeDir, "skills", SKILL_NAME, "SKILL.md"), skill, own);
+  if (has("claude", claudeDir)) put(path.join(claudeDir, "skills", SKILL_NAME, "SKILL.md"), skill);
 
   let geminiDir = path.join(home, ".gemini");
   try {
     geminiDir = fs.realpathSync(geminiDir); // conta gemini: o link aponta para a pasta compartilhada da conta
   } catch {}
-  if (has("agy", geminiDir)) writeIfChanged(path.join(geminiDir, "config", "skills", SKILL_NAME, "SKILL.md"), skill, own);
+  if (has("agy", geminiDir)) put(path.join(geminiDir, "config", "skills", SKILL_NAME, "SKILL.md"), skill);
 
   const codexDir = env.CODEX_HOME || path.join(home, ".codex");
   if (has("codex", codexDir)) {
     const skillFile = path.join(codexDir, "skills", SKILL_NAME, "SKILL.md");
-    writeIfChanged(skillFile, skill, own);
-    const agents = path.join(codexDir, "AGENTS.md");
-    writeIfChanged(agents, upsertBlock(readOr(agents), agentsBlock(skillFile)), own);
+    put(skillFile, skill);
+    block(path.join(codexDir, "AGENTS.md"), agentsBlock(skillFile));
   }
 
   const opencodeDir = path.join(env.XDG_CONFIG_HOME || path.join(home, ".config"), "opencode");
   if (has("opencode", opencodeDir)) {
     const skillFile = path.join(opencodeDir, "maestri-web.md");
-    writeIfChanged(skillFile, skill, own);
-    const agents = path.join(opencodeDir, "AGENTS.md");
-    writeIfChanged(agents, upsertBlock(readOr(agents), agentsBlock(skillFile)), own);
+    put(skillFile, skill);
+    block(path.join(opencodeDir, "AGENTS.md"), agentsBlock(skillFile));
   }
-}
-
-function readOr(file: string) {
+  if (!ops.length) return;
   try {
-    return fs.readFileSync(file, "utf-8");
-  } catch {
-    return "";
+    const res = fsOps(ops, runAs);
+    res.forEach((r, i) => {
+      if (r && typeof r === "object" && "error" in r) console.warn(`Contexto do agente: não foi possível escrever ${(ops[i] as any).path}: ${r.error}`);
+    });
+  } catch (e: any) {
+    console.warn(`Contexto do agente: falha ao escrever: ${e?.message || e}`);
   }
 }
 

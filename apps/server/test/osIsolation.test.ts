@@ -678,3 +678,112 @@ test("sessão: a chave reservada da conta gemini nunca chega ao terminal (e proj
   assert.ok(!fs.existsSync(own) || !fs.lstatSync(own).isSymbolicLink() || fs.readlinkSync(own) !== target, "o HOME do servidor não vira link");
   sm.kill("pg", "n");
 });
+
+// ======================================================================================================================
+// FASE 4 (defensor) — B7: escopo do token de terminal sob variações de URL/método/cabeçalho. Falhou = ACHADO (não corrigir aqui).
+// ======================================================================================================================
+test("B7.1 token de terminal: nenhuma variação de caminho alcança outro projeto, outro nó, rotas admin ou globais", async () => {
+  const t = terminalTokens.issue({ projectId: P1, nodeId: "n1" });
+  const me = bearer(t.token);
+  const own = `/api/projects/${P1}/nodes/n1`;
+  const foreign = [`/api/projects/${P2}/canvas`, `/api/projects/${P2}/nodes/n2/context`, `/api/projects/${P1}/nodes/n2/context`, `/api/projects/${P1}/canvas`, "/api/admin/users", "/api/projects", "/api/accounts", "/api/settings/global", "/api/users/directory", "/api/clis"];
+  const enc = (s: string) => s.replace(/\//g, "%2F");
+  const variants = (u: string): string[] => {
+    const rest = u.replace(/^\/api\//, "");
+    return [
+      u, `${u}/`, `${u}?x=1`, `${u}?token=${t.token}`, `${u};a=b`, `${u}#frag`, `//${u.slice(1)}`, `/${u}`, u.replace("/api/", "/API/"), u.toUpperCase(),
+      `/api/${enc(rest)}`, `/api%2F${rest}`, `/api/./${rest}`, `/api//${rest}`, `/%61pi/${rest}`, u.replace(/\//g, "/%2e/"), u.replace(/\//g, "\\"),
+      `${own}/../../../${rest}`, `${own}/%2e%2e/%2e%2e/%2e%2e/${rest}`, `${own}/..%2f..%2f..%2f${rest}`, `${own}/%2e%2e%2f%2e%2e%2f${rest}`, `${own}//..//..//${rest}`,
+      `${own}/notes/..%2f..%2f..%2f..%2f${rest}`, `${own}/notes/${enc(`../../../../${rest}`)}`, `${own}%2f..%2f..%2f..%2f${rest}`, `${own}%00/${rest}`, `${own}\\..\\..\\${rest}`,
+    ];
+  };
+  const failures: string[] = [];
+  for (const target of foreign) {
+    for (const v of variants(target)) {
+      const r = await call("GET", v, me);
+      const leaked = r.status < 300 && /"nodes"|"users"|"projects"|"accounts"|"clis"|"settings"|defaultCmd|repoPath/.test(JSON.stringify(r.body ?? r.text));
+      if (r.status < 300 || leaked) failures.push(`GET ${v} -> ${r.status}`);
+    }
+  }
+  assert.deepEqual(failures, [], "o token do terminal passou o escopo");
+  terminalTokens.revoke(t.ptyId);
+});
+
+test("B7.2 métodos e cabeçalhos: HEAD/OPTIONS/POST/PUT/DELETE em rotas fora do escopo; Authorization com dois tokens; minúsculas; token na query; sem espaço", async () => {
+  const t = terminalTokens.issue({ projectId: P1, nodeId: "n1" });
+  const targets = [`/api/projects/${P2}/canvas`, `/api/admin/users`, `/api/settings/global`, `/api/projects`];
+  for (const u of targets) {
+    for (const m of ["HEAD", "POST", "PUT", "PATCH", "DELETE"]) {
+      const r = await call(m, u, bearer(t.token), m === "HEAD" ? undefined : {});
+      assert.ok(r.status >= 400, `${m} ${u} -> ${r.status}`);
+    }
+    const o = await call("OPTIONS", u, { ...bearer(t.token), origin: "http://evil.example", "access-control-request-method": "GET" });
+    assert.ok(!/nodes|users|repoPath/.test(String(o.text)), `OPTIONS ${u} devolveu dados`);
+  }
+  const ctx = `/api/projects/${P1}/nodes/n1/context`;
+  assert.equal((await call("GET", ctx, bearer(t.token))).status, 200);
+  // combinar credenciais não vira privilégio
+  for (const h of [`Bearer ${t.token}, Bearer chave-interna-iso`, `Bearer ${t.token} Bearer chave-interna-iso`, `Bearer chave-interna-iso, Bearer ${t.token}`, `bearer ${t.token}`, `Bearer  ${t.token}`, `Bearer ${t.token}\u0000x`]) {
+    const r = await call("GET", `/api/projects/${P2}/canvas`, { authorization: h });
+    assert.ok(r.status >= 400, `Authorization: ${h.replace(t.token, "<tok>")} -> ${r.status}`);
+  }
+  // token interno/sessão na query string NUNCA autentica HTTP
+  assert.equal((await call("GET", `/api/projects/${P2}/canvas?token=chave-interna-iso`)).status, 401);
+  assert.equal((await call("GET", `/api/projects/${P2}/canvas?token=${t.token}`)).status, 401);
+  // o token de terminal não vira sessão nem é aceito como sessão em /api/auth
+  assert.ok((await call("GET", "/api/auth/state", bearer(t.token))).status < 500);
+  assert.notEqual((await call("POST", "/api/auth/logout", bearer(t.token))).status, 200);
+  assert.equal((await call("GET", ctx, bearer(t.token))).status, 200, "continua válido depois das tentativas");
+  terminalTokens.revoke(t.ptyId);
+  assert.equal((await call("GET", ctx, bearer(t.token))).status, 401);
+});
+
+test("B7.3 token de um terminal não vale para o OUTRO nó do mesmo projeto nem para o mesmo nó de outro projeto; ids parecidos (n1 vs n10, p1 vs p1x)", async () => {
+  const t = terminalTokens.issue({ projectId: P1, nodeId: "n1" });
+  for (const u of [`/api/projects/${P1}/nodes/n10/context`, `/api/projects/${P1}/nodes/N1/context`, `/api/projects/${P1}/nodes/n1x/context`, `/api/projects/${P1}x/nodes/n1/context`, `/api/projects/${P2}/nodes/n1/context`, `/api/projects/${P1.toUpperCase()}/nodes/n1/context`]) {
+    const r = await call("GET", u, bearer(t.token));
+    assert.ok(r.status >= 400, `${u} -> ${r.status}`);
+  }
+  terminalTokens.revokeAll();
+});
+
+test("B7.4 reuso: token morre no restart e no kill do PTY real; arquivo some; permissões 0400/0711 (posix)", { skip: skipPty }, async () => {
+  const sm = new SessionManager({ apiUrl: () => "http://x/api", token: "", tokens: terminalTokens } as any);
+  const cwd = fs.mkdtempSync(path.join(tmp, "b74-"));
+  const s = sm.ensure(P1, "n1", { cwd, cmd: "" });
+  const file1 = path.join(terminalTokens.directory, s.ptyId);
+  const tok1 = fs.readFileSync(file1, "utf8");
+  assert.equal(fs.statSync(file1).mode & 0o777, 0o400);
+  assert.equal(fs.statSync(terminalTokens.directory).mode & 0o777, 0o711);
+  assert.equal((await call("GET", `/api/projects/${P1}/nodes/n1/context`, bearer(tok1))).status, 200);
+  sm.restart(P1, "n1");
+  assert.equal((await call("GET", `/api/projects/${P1}/nodes/n1/context`, bearer(tok1))).status, 401, "token antigo vale depois do restart");
+  assert.ok(!fs.existsSync(file1));
+  const file2 = path.join(terminalTokens.directory, s.ptyId);
+  const tok2 = fs.readFileSync(file2, "utf8");
+  assert.notEqual(tok1, tok2);
+  assert.equal((await call("GET", `/api/projects/${P1}/nodes/n1/context`, bearer(tok2))).status, 200);
+  // o shell sair sozinho também revoga
+  sm.write(P1, "n1", "exit\r");
+  for (let i = 0; i < 100 && terminalTokens.verify(tok2); i++) await sleep(50);
+  assert.equal(terminalTokens.verify(tok2), null, "token continua válido depois que o PTY saiu");
+  assert.equal((await call("GET", `/api/projects/${P1}/nodes/n1/context`, bearer(tok2))).status, 401);
+  assert.ok(!fs.existsSync(file2));
+  sm.killAll();
+  assert.equal(terminalTokens.size(), 0);
+});
+
+test("B7.5 SEM NENHUM token: variações de codificação do prefixo /api/ (ex.: /%61pi/) não pulam a autenticação nem o guarda de projetos", async () => {
+  const targets = ["admin/users", "admin/invites", "projects", `projects/${P2}/canvas`, `projects/${P2}/nodes/n2/context`, "accounts", "settings/global", "users/directory", "clis"];
+  const prefixes = ["/%61pi/", "/a%70i/", "/ap%69/", "/%41PI/", "/api%2F", "/%2e/api/", "//api/", "/./api/", "/api/./", "/ap%2569/"];
+  const failures: string[] = [];
+  for (const t of targets) {
+    for (const p of prefixes) {
+      for (const hdr of [undefined, bearer("token-lixo")]) {
+        const r = await call("GET", `${p}${t}`, hdr);
+        if (r.status < 400) failures.push(`GET ${p}${t}${hdr ? " (token lixo)" : " (sem token)"} -> ${r.status}`);
+      }
+    }
+  }
+  assert.deepEqual(failures, [], "requisições sem credencial atravessaram a autenticação");
+});

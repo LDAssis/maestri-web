@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { ZipArchive } from "archiver";
-import { ApiError, resolveRoot, safeRelPath } from "./files.js";
+import { ApiError, hasGitPart, openInside, resolveRoot, safeRelPath } from "./files.js";
 import { isInside } from "./projectDirs.js";
 
 interface Deps {
@@ -37,6 +37,13 @@ interface Entry {
 const ttl = () => {
   const n = Number(process.env.MAESTRI_DOWNLOAD_TTL_MS);
   return Number.isFinite(n) && n > 0 ? n : 60_000;
+};
+
+// Tipos que o navegador executaria (HTML/SVG/JS...) saem como binário inerte: nunca rodam na origem do app
+const ACTIVE = new Set([".html", ".htm", ".xhtml", ".svg", ".js", ".mjs", ".xml", ".xsl", ".css", ".shtml"]);
+const contentTypeOf = (name: string) => {
+  const ext = path.extname(name).toLowerCase();
+  return ACTIVE.has(ext) ? "application/octet-stream" : MIME[ext] ?? "application/octet-stream";
 };
 
 // Só esta rota escapa do token de auth (o navegador baixa por <a href>, sem header)
@@ -98,6 +105,7 @@ export function registerDownloadsApi({ fastify, projectRepo }: Deps) {
         throw new ApiError(404, "Arquivo ou pasta não encontrado.");
       }
       if (!isInside(dir, real)) throw new ApiError(403, "O caminho está fora da raiz.");
+      if (hasGitPart(dir, real)) throw new ApiError(403, "O diretório .git não é exposto.");
       const st = fs.statSync(real);
       let entry: Omit<Entry, "expires">;
       let size: number | undefined;
@@ -138,15 +146,18 @@ export function registerDownloadsApi({ fastify, projectRepo }: Deps) {
     } catch {
       return reply.status(404).send({ error: "Arquivo não encontrado." });
     }
-    reply.header("Content-Disposition", disposition(e.name)).header("Cache-Control", "no-store");
+    reply.header("Content-Disposition", disposition(e.name)).header("Cache-Control", "no-store")
+      .header("X-Content-Type-Options", "nosniff").header("Content-Security-Policy", "sandbox; default-src 'none'");
     if (e.kind === "file") {
-      reply.header("Content-Type", MIME[path.extname(e.name).toLowerCase()] ?? "application/octet-stream");
+      reply.header("Content-Type", contentTypeOf(e.name));
+      let fd: number;
       try {
-        reply.header("Content-Length", fs.statSync(e.real).size);
+        fd = openInside(e.dir, e.real); // descritor verificado: trocar o symlink agora não muda o que é enviado
+        reply.header("Content-Length", fs.fstatSync(fd).size);
       } catch {
         return reply.status(404).send({ error: "Arquivo não encontrado." });
       }
-      return reply.send(fs.createReadStream(e.real));
+      return reply.send(fs.createReadStream("", { fd }));
     }
     const archive = new ZipArchive({ zlib: { level: 6 } });
     archive.on("warning", () => {});
@@ -156,7 +167,8 @@ export function registerDownloadsApi({ fastify, projectRepo }: Deps) {
     });
     reply.raw.on("close", () => archive.destroy());
     const prefix = e.name.replace(/\.zip$/, "");
-    for (const f of walk(e.real, e.dir, e.excludeHeavy, e.excludeSecrets)) archive.file(f.abs, { name: `${prefix}/${f.rel}` });
+    // abertura lazy com O_NOFOLLOW: arquivo trocado por symlink depois da varredura não é seguido
+    for (const f of walk(e.real, e.dir, e.excludeHeavy, e.excludeSecrets)) archive.append(fs.createReadStream(f.abs, { flags: (fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0)) as any }), { name: `${prefix}/${f.rel}` });
     archive.finalize().catch(() => {});
     reply.header("Content-Type", "application/zip");
     return reply.send(archive);

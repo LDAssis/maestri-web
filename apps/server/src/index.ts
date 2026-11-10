@@ -509,10 +509,19 @@ fastify.get("/api/projects", async (req) => {
 });
 
 fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }>("/api/projects", async (req, reply) => {
-  const { name, description = "", repoPath } = req.body ?? {};
-  if (!name || typeof name !== "string" || !name.trim()) {
+  const { name: rawName, description: rawDescription = "", repoPath } = (req.body ?? {}) as { name?: unknown; description?: unknown; repoPath?: unknown };
+  // Nome (1-100, sem caracteres de controle) e descrição (texto, até 500): o valor é guardado e mostrado a todos que acessam o projeto
+  if (typeof rawName !== "string" || !rawName.trim()) {
     return reply.status(400).send({ error: "Nome do projeto é obrigatório." });
   }
+  const name = rawName.trim();
+  if (name.length > 100 || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(name)) {
+    return reply.status(400).send({ error: "Nome do projeto inválido: 1 a 100 caracteres, sem caracteres de controle." });
+  }
+  if (typeof rawDescription !== "string" || rawDescription.length > 500 || /\x00/.test(rawDescription)) {
+    return reply.status(400).send({ error: "Descrição inválida: texto de até 500 caracteres." });
+  }
+  const description = rawDescription;
 
   const wantsRepoPath = repoPath !== undefined && repoPath !== null && repoPath !== "";
   if (wantsRepoPath && !acl.isAdminReq(req)) {

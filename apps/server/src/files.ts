@@ -28,6 +28,27 @@ function git(cwd: string, args: string[]): Promise<string> {
   });
 }
 
+// O destino REAL (depois de resolver symlinks) passa por dentro de .git? (o bloqueio lexical do safeRelPath não vê um link para .git/config)
+export function hasGitPart(root: string, real: string) {
+  return path.relative(root, real).split(path.sep).some((s) => s.toLowerCase() === ".git");
+}
+
+// Abre o arquivo SEM seguir symlink no último componente e confere, pelo próprio descritor, que ele está dentro da raiz (Linux:
+// /proc/self/fd). Fecha a janela entre o realpath e a leitura: trocar o link depois da checagem não leva a outro arquivo.
+export function openInside(root: string, real: string): number {
+  const fd = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    if (process.platform === "linux") {
+      const actual = fs.realpathSync(`/proc/self/fd/${fd}`).replace(/ \(deleted\)$/, "");
+      if (!isInside(root, actual) || hasGitPart(root, actual)) throw new ApiError(403, "O arquivo está fora da raiz.");
+    }
+    return fd;
+  } catch (e) {
+    fs.closeSync(fd);
+    throw e;
+  }
+}
+
 // Caminho relativo seguro (lexicalmente): sem absolutos, "..", NUL nem o diretório .git
 export function safeRelPath(p: unknown): string {
   if (typeof p !== "string" || !p || p.includes("\0")) throw new ApiError(400, "Informe o path.");
@@ -111,10 +132,24 @@ export function registerFilesApi({ fastify, projectRepo }: Deps) {
     }
     const inside = path.relative(dir, real);
     if (inside.startsWith("..") || path.isAbsolute(inside)) throw new ApiError(403, "O arquivo está fora da raiz.");
-    const st = fs.statSync(real);
-    if (!st.isFile()) throw new ApiError(400, "O path não é um arquivo.");
-    if (st.size > CONTENT_MAX) throw new ApiError(413, `Arquivo grande demais (${st.size} bytes; máximo ${CONTENT_MAX}).`);
-    const buf = fs.readFileSync(real);
+    if (hasGitPart(dir, real)) throw new ApiError(403, "O diretório .git não é exposto.");
+    let fd: number;
+    try {
+      fd = openInside(dir, real);
+    } catch (e) {
+      if (e instanceof ApiError) throw e;
+      throw new ApiError(404, "Arquivo não encontrado.");
+    }
+    let buf: Buffer;
+    let st: fs.Stats;
+    try {
+      st = fs.fstatSync(fd);
+      if (!st.isFile()) throw new ApiError(400, "O path não é um arquivo.");
+      if (st.size > CONTENT_MAX) throw new ApiError(413, `Arquivo grande demais (${st.size} bytes; máximo ${CONTENT_MAX}).`);
+      buf = fs.readFileSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     if (buf.subarray(0, 8192).includes(0)) return { path: rel, size: st.size, binary: true };
     return { path: rel, content: buf.toString("utf8"), size: st.size, binary: false };
   }));

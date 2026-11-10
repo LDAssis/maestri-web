@@ -25,7 +25,7 @@ if (!enabled) {
     NODE_ENV: "test", REPO_PATH: repo, MAESTRI_TOKEN: "chave-interna-linux", MAESTRI_PR_POLL_MS: "3600000",
     MAESTRI_ISOLATION: "1", MAESTRI_ISOLATION_ROOT: path.join(base, "srv"), MAESTRI_ISOLATION_USER_PREFIX: "mtest-", MAESTRI_ISOLATION_GROUP_PREFIX: "mtestac-",
     MAESTRI_ISOLATION_CGROUP: cgroup ? "1" : "0", MAESTRI_TOK_DIR: path.join(base, "srv", "tok"),
-    SERVER_SECRET_XYZ: "vaza-do-servidor",
+    SERVER_SECRET_XYZ: "vaza-do-servidor", MAESTRI_AGENT_CONTEXT: "1", // contexto ligado: exercita o que o servidor (root) escreve no HOME do projeto
   });
   fs.mkdirSync(path.join(base, "srv"), { recursive: true });
   fs.chmodSync(path.join(base, "srv"), 0o711);
@@ -375,7 +375,7 @@ console.log("ST=" + out.join(","));
     await until(() => !(tryShOut("id", ["-nG", proj.B.user]) ?? "").includes(geminiGroup), "grupo gemini removido");
     const agw = term(proj.B.id, "agw");
     await until(() => agw.all.includes("Nenhuma conta de assinatura liberada para este projeto — peça ao admin"), "bloqueio do agy sem conta");
-    const gl = await agw.run("echo HAS=$(test -e ~/.gemini && echo sim || echo nao) GN=$(id -nG)");
+    const gl = await agw.run("echo HAS=$(test -L ~/.gemini && echo sim || echo nao) GN=$(id -nG)");
     assert.equal(val(gl.out, "HAS"), "nao", "link revogado: o agy vê 'não logado', sem apontar para a conta");
     assert.ok(!val(gl.out, "GN").includes(path.basename(geminiGroup)));
     agw.close();
@@ -421,6 +421,280 @@ console.log("ST=" + out.join(","));
     assert.equal(fs.readFileSync(path.join(slice, "pids.max"), "utf8").trim(), "512");
     assert.equal(fs.readFileSync(path.join(slice, "cpu.max"), "utf8").trim().split(" ")[0], "200000");
     t.close();
+  });
+
+  // =====================================================================================================================
+  // FASE 4 (defensor) — A3: o SERVIDOR (root) seguindo symlink plantado pelo agente; A4: git/gh do servidor com repositório hostil.
+  // Cada teste planta o ataque como o dono do projeto (o agente), dispara a ação pela API e exige que NADA fora do projeto mude.
+  // Teste que falha = ACHADO (não corrigir aqui). Alvo ("victim"): pasta/arquivo de root fora do projeto, em /tmp/mtest-iso-<pid>/victim.
+  // =====================================================================================================================
+  const victim = path.join(base, "victim");
+  const victimFile = path.join(victim, "alvo.txt");
+  const ORIGINAL = "ORIGINAL-DE-ROOT\n";
+  const resetVictim = () => {
+    fs.rmSync(victim, { recursive: true, force: true });
+    fs.mkdirSync(victim, { mode: 0o700 });
+    fs.writeFileSync(victimFile, ORIGINAL, { mode: 0o600 });
+    fs.chmodSync(victim, 0o700);
+  };
+  // O alvo continua intacto: conteúdo, dono root, modos e nenhum arquivo novo dentro dele
+  const assertVictimIntact = (what: string) => {
+    assert.equal(fs.readFileSync(victimFile, "utf8"), ORIGINAL, `${what}: o servidor (root) escreveu/alterou um arquivo FORA do projeto através do symlink`);
+    const f = fs.statSync(victimFile);
+    assert.deepEqual([f.uid, f.mode & 0o777], [0, 0o600], `${what}: dono/modo do arquivo alvo mudaram (chown/chmod pelo servidor via symlink)`);
+    const d = fs.statSync(victim);
+    assert.deepEqual([d.uid, d.mode & 0o777], [0, 0o700], `${what}: dono/modo da pasta alvo mudaram`);
+    assert.deepEqual(fs.readdirSync(victim), ["alvo.txt"], `${what}: arquivos novos apareceram na pasta alvo`);
+  };
+  // O agente cria o symlink dentro do projeto/HOME (dono = usuário do projeto)
+  const plant = (link: string, target: string, who = proj.A) => {
+    fs.rmSync(link, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(target, link);
+    fs.lchownSync(link, who.uid, who.uid);
+  };
+  const cleanGit = (dir: string) => {
+    fs.writeFileSync(path.join(dir, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tfilemode = true\n");
+    fs.rmSync(path.join(dir, ".git", "hooks"), { recursive: true, force: true });
+    fs.mkdirSync(path.join(dir, ".git", "hooks"));
+    fs.rmSync(path.join(dir, ".gitattributes"), { force: true });
+    for (const w of fs.existsSync(path.join(dir, ".worktrees")) ? fs.readdirSync(path.join(dir, ".worktrees")) : []) tryShOut("git", ["-C", dir, "worktree", "remove", "--force", path.join(dir, ".worktrees", w)]);
+    tryShOut("git", ["-C", dir, "worktree", "prune"]);
+  };
+  const killSession = async (p: string, n: string) => {
+    await call("DELETE", `/api/projects/${p}/sessions/${n}`);
+  };
+  let floorSeq = 0;
+  const newFloor = async (body: Record<string, unknown> = {}) => {
+    const r = await call("POST", `/api/projects/${proj.A.id}/floors`, internal, { name: `sec${++floorSeq}`, ...body });
+    return r;
+  };
+
+  test("A3.1 roles: .maestri apontando para fora (symlink de diretório) — POST /roles não escreve fora do projeto", async () => {
+    resetVictim();
+    try {
+      plant(path.join(proj.A.dir, ".maestri"), victim);
+      const r = await call("POST", `/api/projects/${proj.A.id}/roles`, internal, { name: "Papel", prompt: "oi" });
+      assertVictimIntact(`POST /roles (status ${r.status}) com .maestri -> ${victim}`);
+    } finally {
+      fs.rmSync(path.join(proj.A.dir, ".maestri"), { recursive: true, force: true });
+    }
+  });
+
+  test("A3.2 roles: arquivo temporário previsível (<arquivo>.<pid do servidor>.tmp) como symlink — PUT /roles não clobera arquivo de root", async () => {
+    resetVictim();
+    const created = await call("POST", `/api/projects/${proj.A.id}/roles`, internal, { name: "Papel2", prompt: "oi" });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const id = String(created.body.role.id);
+    const roleJson = path.join(proj.A.dir, ".maestri", "roles", id.toLowerCase(), "role.json");
+    try {
+      // o pid do servidor é público (ps); o agente adivinha o nome do tmp
+      plant(`${roleJson}.${process.pid}.tmp`, victimFile);
+      const r = await call("PUT", `/api/projects/${proj.A.id}/roles/${id}`, internal, { prompt: "novo prompt" });
+      assert.ok(r.status < 500, JSON.stringify(r.body));
+      assertVictimIntact(`PUT /roles/:id com ${path.basename(roleJson)}.${process.pid}.tmp -> arquivo de root`);
+    } finally {
+      fs.rmSync(path.join(proj.A.dir, ".maestri"), { recursive: true, force: true });
+    }
+  });
+
+  test("A3.3 andares: .git/info/exclude como symlink — criar andar não faz o servidor (root) anexar texto a arquivo de root", async () => {
+    resetVictim();
+    cleanGit(proj.A.dir);
+    const exclude = path.join(proj.A.dir, ".git", "info", "exclude");
+    try {
+      plant(exclude, victimFile);
+      const r = await newFloor();
+      assert.ok(r.status < 600, JSON.stringify(r.body));
+      assertVictimIntact(`POST /floors (status ${r.status}) com .git/info/exclude -> arquivo de root`);
+    } finally {
+      fs.rmSync(exclude, { force: true });
+      fs.writeFileSync(exclude, "");
+      fs.chownSync(exclude, proj.A.uid, proj.A.uid);
+      cleanGit(proj.A.dir);
+    }
+  });
+
+  test("A3.4 andares (copyGround): arquivo não rastreado que é symlink para arquivo de root — o servidor não copia o conteúdo para dentro do projeto", async () => {
+    resetVictim();
+    cleanGit(proj.A.dir);
+    const SECRET = "SEGREDO-LEGIVEL-SO-POR-ROOT";
+    fs.writeFileSync(victimFile, SECRET + "\n", { mode: 0o600 });
+    const leak = path.join(proj.A.dir, "vazamento.txt");
+    try {
+      plant(leak, victimFile);
+      const r = await newFloor({ copyGround: true });
+      assert.ok(r.status < 500, JSON.stringify(r.body));
+      const wt = path.join(proj.A.dir, ".worktrees");
+      const hits: string[] = [];
+      const walk = (d: string) => {
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          const p = path.join(d, e.name);
+          if (e.isDirectory() && e.name !== ".git") walk(p);
+          else if (e.isFile()) {
+            try {
+              if (fs.readFileSync(p, "utf8").includes(SECRET)) hits.push(p);
+            } catch {}
+          }
+        }
+      };
+      if (fs.existsSync(wt)) walk(wt);
+      assert.deepEqual(hits, [], "o servidor (root) copiou o conteúdo de um arquivo de root (via symlink do agente) para dentro do projeto: leitura arbitrária como root");
+    } finally {
+      fs.rmSync(leak, { force: true });
+      cleanGit(proj.A.dir);
+    }
+  });
+
+  test("A3.5 contexto do agente: ~/.codex como symlink — o servidor (root) não escreve a skill/AGENTS nem dá chown fora do HOME", async () => {
+    resetVictim();
+    await killSession(proj.A.id, "t");
+    const home = iso.homeOf(proj.A.user);
+    try {
+      plant(path.join(home, ".codex"), victim);
+      const t = term(proj.A.id, "t");
+      await t.run("echo PRONTO");
+      t.close();
+      assertVictimIntact("spawn do terminal (ensureAgentContext) com ~/.codex -> pasta de root");
+    } finally {
+      fs.rmSync(path.join(home, ".codex"), { recursive: true, force: true });
+      await killSession(proj.A.id, "t");
+    }
+  });
+
+  test("A3.6 agente com role: .maestri-roles como symlink — POST /agents (withRolePrompt) não escreve fora do projeto", async () => {
+    resetVictim();
+    const role = await call("POST", `/api/projects/${proj.A.id}/roles`, internal, { name: "Papel3", prompt: "seja útil" });
+    assert.equal(role.status, 201, JSON.stringify(role.body));
+    try {
+      plant(path.join(proj.A.dir, ".maestri-roles"), victim);
+      const r = await call("POST", `/api/projects/${proj.A.id}/agents`, internal, { title: "Com Papel", preset: "claude", roleId: role.body.role.id });
+      assert.ok(r.status < 300 || /EACCES|ELOOP|ENOTDIR/.test(JSON.stringify(r.body)), `o servidor deveria ter tentado escrever (e ser barrado como o usuário) para o teste ser conclusivo: ${r.status} ${JSON.stringify(r.body)}`);
+      assertVictimIntact("POST /agents com .maestri-roles -> pasta de root");
+    } finally {
+      fs.rmSync(path.join(proj.A.dir, ".maestri-roles"), { recursive: true, force: true });
+      fs.rmSync(path.join(proj.A.dir, ".maestri"), { recursive: true, force: true });
+    }
+  });
+
+  test("A3.7 partituras: .maestri/partituras como symlink — salvar partitura (fsOps como usuário do projeto) não escreve fora do projeto", async () => {
+    resetVictim();
+    const cv = (await call("GET", `/api/projects/${proj.A.id}/canvas`)).body;
+    if (!cv.nodes.some((n: any) => n.id === "mst")) {
+      const up = await call("POST", `/api/projects/${proj.A.id}/canvas`, internal, { nodes: [...cv.nodes, { id: "mst", type: "agentTerminal", position: { x: 900, y: 0 }, data: { title: "Maestro", isMaestro: true } }], edges: cv.edges });
+      assert.equal(up.status, 200, JSON.stringify(up.body));
+    }
+    try {
+      fs.mkdirSync(path.join(proj.A.dir, ".maestri"), { recursive: true });
+      fs.chownSync(path.join(proj.A.dir, ".maestri"), proj.A.uid, proj.A.uid);
+      plant(path.join(proj.A.dir, ".maestri", "partituras"), victim);
+      const tk = terminalTokens.issue({ projectId: proj.A.id, nodeId: "mst" });
+      const r = await call("POST", `/api/projects/${proj.A.id}/nodes/mst/partituras/create`, bearer(tk.token), { name: "Plano", scope: "current" });
+      assert.ok(r.status < 300 || /EACCES|ELOOP|ENOTDIR/.test(JSON.stringify(r.body)), `o servidor deveria ter tentado escrever (e ser barrado como o usuário) para o teste ser conclusivo: ${r.status} ${JSON.stringify(r.body)}`);
+      terminalTokens.revoke(tk.ptyId);
+      assertVictimIntact(`salvar partitura (status ${r.status}) com .maestri/partituras -> pasta de root`);
+    } finally {
+      fs.rmSync(path.join(proj.A.dir, ".maestri"), { recursive: true, force: true });
+    }
+  });
+
+  // ---- A4: git/gh do servidor com repositório controlado pelo agente ----
+  const markers = path.join(base, "markers");
+  const uidsIn = (f: string) => (fs.existsSync(f) ? fs.readFileSync(f, "utf8").split("\n").filter(Boolean) : []);
+  const prepMarkers = () => {
+    fs.rmSync(markers, { recursive: true, force: true });
+    fs.mkdirSync(markers, { mode: 0o777 });
+    fs.chmodSync(markers, 0o777);
+  };
+  // roda git como o dono do projeto (o agente): prepara um repositório com arquivo rastreado (sem índice o fsmonitor nem é consultado)
+  const asProject = (dir: string, args: string[]) =>
+    sh("setpriv", [`--reuid=${proj.A.uid}`, `--regid=${sh("id", ["-g", proj.A.user])}`, "--init-groups", "env", "-i", `HOME=${iso.homeOf(proj.A.user)}`, "PATH=/usr/bin:/bin", "git", "-C", dir, "-c", "user.name=a", "-c", "user.email=a@a", ...args]);
+  const hostileConfig = (dir: string, m: string) => {
+    cleanGit(dir);
+    fs.writeFileSync(path.join(dir, "x.pwn"), "inicial\n");
+    fs.writeFileSync(path.join(dir, "seed.txt"), "seed\n");
+    fs.writeFileSync(path.join(dir, ".gitattributes"), "*.pwn filter=pwn\n");
+    tryShOut("chown", ["-R", `${proj.A.uid}:${sh("id", ["-g", proj.A.user])}`, dir]);
+    asProject(dir, ["add", "-A"]);
+    try {
+      asProject(dir, ["commit", "-qm", "seed"]);
+    } catch {} // já commitado em um teste anterior
+    fs.appendFileSync(
+      path.join(dir, ".git", "config"),
+      `[core]\n\tfsmonitor = "sh -c 'id -u >> ${m}/fsmonitor; echo' --"\n[filter "pwn"]\n\tclean = "sh -c 'id -u >> ${m}/filter; cat' --"\n\tsmudge = "sh -c 'id -u >> ${m}/smudge; cat' --"\n`,
+    );
+    fs.writeFileSync(path.join(dir, "x.pwn"), "modificado\n"); // sujo: o status roda o filtro clean
+    fs.chownSync(path.join(dir, "x.pwn"), proj.A.uid, proj.A.uid);
+    const hook = path.join(dir, ".git", "hooks", "post-checkout");
+    fs.writeFileSync(hook, `#!/bin/sh\nid -u >> ${m}/hook\n`, { mode: 0o755 });
+    fs.chownSync(hook, proj.A.uid, proj.A.uid);
+    // o agente é dono do .git: tudo isso é dele
+    tryShOut("chown", ["-R", `${proj.A.uid}:${sh("id", ["-g", proj.A.user])}`, path.join(dir, ".git")]);
+  };
+  const noRoot = (f: string, what: string) => {
+    const u = uidsIn(f);
+    assert.ok(u.length > 0, `${what}: o vetor não executou (teste inconclusivo)`);
+    assert.ok(!u.includes("0"), `${what}: o servidor executou código do repositório do agente COMO ROOT (uids: ${[...new Set(u)].join(",")})`);
+    assert.deepEqual([...new Set(u)], [String(proj.A.uid)], `${what}: deveria rodar como o usuário do projeto`);
+  };
+
+  test("A4.1 git do servidor: core.fsmonitor / filtro / hook no .git do agente executam como o usuário do projeto, nunca root (files, worktrees, andares)", async () => {
+    prepMarkers();
+    hostileConfig(proj.A.dir, markers);
+    try {
+      await call("GET", `/api/projects/${proj.A.id}/files`);
+      await call("GET", `/api/projects/${proj.A.id}/worktrees`);
+      await call("GET", `/api/projects/${proj.A.id}/floors`);
+      noRoot(path.join(markers, "fsmonitor"), "fsmonitor (GET /files, /worktrees, /floors)");
+      const r = await newFloor(); // worktree add dispara post-checkout
+      assert.ok(r.status < 500, JSON.stringify(r.body));
+      noRoot(path.join(markers, "hook"), "hook post-checkout (POST /floors)");
+    } finally {
+      cleanGit(proj.A.dir);
+      fs.rmSync(path.join(proj.A.dir, "x.pwn"), { force: true });
+    }
+  });
+
+  test("A4.2 fluxo de PR: o gh do servidor roda como o usuário do projeto (não root) e o git que ele dispara não executa o .git hostil como root", async () => {
+    prepMarkers();
+    hostileConfig(proj.A.dir, markers);
+    const bin = path.join(base, "fakebin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\nid -u >> ${markers}/gh\ngit status >/dev/null 2>&1\necho '[]'\n`, { mode: 0o755 });
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${bin}:${oldPath}`;
+    try {
+      const f = await newFloor();
+      assert.ok(f.status < 500, JSON.stringify(f.body));
+      fs.rmSync(path.join(markers, "fsmonitor"), { force: true });
+      const r = await call("POST", `/api/projects/${proj.A.id}/floors/detect-prs`, internal, { now: true });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.ok(uidsIn(path.join(markers, "gh")).length > 0, "o gh falso não foi chamado (teste inconclusivo)");
+      assert.ok(!uidsIn(path.join(markers, "gh")).includes("0"), "o servidor executa `gh` COMO ROOT com cwd dentro do repositório controlado pelo agente (floorsApi.ts gh())");
+      assert.ok(!uidsIn(path.join(markers, "fsmonitor")).includes("0"), "o git disparado pelo gh executou o core.fsmonitor do agente COMO ROOT");
+    } finally {
+      process.env.PATH = oldPath;
+      cleanGit(proj.A.dir);
+      fs.rmSync(path.join(proj.A.dir, "x.pwn"), { force: true });
+    }
+  });
+
+  test("A4.3 git do servidor: core.hooksPath apontando para hook do agente roda como o usuário do projeto (worktree add / land)", async () => {
+    prepMarkers();
+    cleanGit(proj.A.dir);
+    fs.appendFileSync(path.join(proj.A.dir, ".git", "config"), `[core]\n\thooksPath = ${markers}/hooks\n`);
+    fs.mkdirSync(path.join(markers, "hooks"));
+    fs.writeFileSync(path.join(markers, "hooks", "post-checkout"), `#!/bin/sh\nid -u >> ${markers}/hookspath\n`, { mode: 0o755 });
+    tryShOut("chown", ["-R", `${proj.A.uid}:${sh("id", ["-g", proj.A.user])}`, path.join(proj.A.dir, ".git")]);
+    try {
+      await call("GET", `/api/projects/${proj.A.id}/files`);
+      const f = await newFloor();
+      assert.ok(f.status < 500, JSON.stringify(f.body));
+      await call("POST", `/api/projects/${proj.A.id}/floors/${(f.body.floor?.name ?? f.body.name ?? `sec${floorSeq}`)}/land`, internal, {});
+      noRoot(path.join(markers, "hookspath"), "core.hooksPath (POST /floors, /land)");
+    } finally {
+      cleanGit(proj.A.dir);
+    }
   });
 
   test("excluir projeto: mata o que sobrou do usuário, apaga usuário/grupo/HOME/TMPDIR e (com deleteFolder) a pasta; o outro projeto não é tocado", async () => {

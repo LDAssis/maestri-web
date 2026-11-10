@@ -3,6 +3,7 @@ declare module "archiver" {
   export class ZipArchive extends Readable {
     constructor(options?: { zlib?: { level?: number } });
     file(path: string, data: { name: string }): this;
+    append(source: Readable | Buffer | string, data: { name: string }): this;
     finalize(): Promise<void>;
   }
 }

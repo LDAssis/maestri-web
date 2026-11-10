@@ -114,7 +114,7 @@ function spawnPty(cwd: string, cols: number, rows: number, extraEnv: Record<stri
     const env = buildPtyEnv({ extra: { ...plainEnv, MAESTRI_TOKEN_FILE: t.file }, runAs });
     // Instruções do canvas para o claude/codex/opencode/agy que rodar neste terminal (inclui contas por config dir)
     // (o liga/desliga vem do ambiente do SERVIDOR: o PTY não herda NODE_ENV nem MAESTRI_AGENT_CONTEXT)
-    ensureAgentContext({ ...env, NODE_ENV: process.env.NODE_ENV, MAESTRI_AGENT_CONTEXT: process.env.MAESTRI_AGENT_CONTEXT } as NodeJS.ProcessEnv, runAs ? { uid: runAs.uid, gid: runAs.gid, shared: ctx.sharedDirs ?? [] } : undefined);
+    ensureAgentContext({ ...env, NODE_ENV: process.env.NODE_ENV, MAESTRI_AGENT_CONTEXT: process.env.MAESTRI_AGENT_CONTEXT } as NodeJS.ProcessEnv, runAs);
     // statusLine do usuário (mesma config do claude deste terminal): o usage-report encadeia nela em vez de substituí-la
     const userSl = usageEnabled(process.env) ? userStatusLine(env) : undefined;
     if (userSl) env.MAESTRI_USER_STATUSLINE = userSl;

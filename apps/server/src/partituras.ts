@@ -10,7 +10,7 @@ import type { CanvasStore } from "./canvas.js";
 import type { SessionManager } from "./sessions.js";
 import { ApiError, PRESETS, SIZES, freePosition } from "./agents.js";
 import { isText, lc, type NodeApi } from "./nodeApi.js";
-import { fixOwner, mkdirOwned } from "./runAs.js";
+import { fsOpsAt, fsOpsAtStrict } from "./runAs.js";
 import { listRoles, readRole, writeRole } from "./roles.js";
 import { deliverRole } from "./agentSetup.js";
 import { GROUND, floorOf, type FloorStore } from "./floors.js";
@@ -98,14 +98,11 @@ export function registerPartituras(d: Deps) {
   }
   function save(repo: string, scope: Scope, rec: Obj, previous?: string): string {
     const dir = dirOf(repo, scope);
-    mkdirOwned(dir);
     let file = path.join(dir, `${slugOf(rec.name)}.partitura.json`);
     for (let n = 2; fs.existsSync(file) && file !== previous; n++) file = path.join(dir, `${slugOf(rec.name)}-${n}.partitura.json`);
-    const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(rec, null, 2));
-    fixOwner(tmp); // partitura de projeto: o agente edita (dono do projeto)
-    fs.renameSync(tmp, file);
-    if (previous && previous !== file) fs.rmSync(previous, { force: true });
+    // como o usuário do projeto (partitura de projeto é do agente), atômico e sem seguir symlink
+    fsOpsAtStrict(repo, [{ op: "mkdirp", path: dir }, { op: "write", path: file, data: JSON.stringify(rec, null, 2) }]);
+    if (previous && previous !== file) fsOpsAt(repo, [{ op: "rm", path: previous }]);
     return file;
   }
   const checkName = (v: unknown) => {
@@ -442,7 +439,7 @@ export function registerPartituras(d: Deps) {
   fastify.post(`${base}/partituras/delete`, wrap((c, req) => {
     requireMaestro(c, "apagar partituras");
     const cur = find(ctxRepo(c), req.body?.name);
-    fs.rmSync(cur.file, { force: true });
+    fsOpsAt(cur.file, [{ op: "rm", path: cur.file }]);
     return { ok: true, name: cur.rec.name };
   }));
 }
