@@ -31,7 +31,8 @@ import { registerFloorsApi } from "./floorsApi.js";
 import { FloorStore, floorOf } from "./floors.js";
 import { registerRoutinesApi } from "./routines.js";
 import { registerFilesApi } from "./files.js";
-import { registerDownloadsApi, isPublicDownload } from "./fileDownload.js";
+import { registerDownloadsApi } from "./fileDownload.js";
+import { reqPath, needsAuth } from "./reqPath.js";
 import { AuthService } from "./auth/service.js";
 import { registerAuthApi } from "./auth/authApi.js";
 import { registerAdminApi } from "./auth/adminApi.js";
@@ -76,11 +77,7 @@ await fastify.register(cors, { origin: authToken ? true : allowedOrigins });
 
 fastify.get("/api/health", async () => ({ ok: true, authRequired: !!authToken, setupRequired: authService.users.count() === 0 }));
 
-// Rotas públicas (login/configuração/convites); o resto de /api/* exige sessão de usuário OU o token interno (agentes/CLI)
-const isPublicAuthRoute = (method: string, pathname: string) =>
-  (method === "GET" && (pathname === "/api/auth/state" || /^\/api\/invites\/[^/]+$/.test(pathname))) ||
-  (method === "POST" && (pathname === "/api/auth/setup" || pathname === "/api/auth/login" || /^\/api\/invites\/[^/]+\/accept$/.test(pathname)));
-
+// Rotas públicas: lista em reqPath.ts (PUBLIC_ROUTES); o resto exige sessão de usuário, token de terminal OU o token interno
 fastify.addHook("onRequest", async (req, reply) => {
   if (!authToken) {
     // sem MAESTRI_TOKEN (dev em loopback): tudo aberto, com privilégio interno
@@ -89,8 +86,11 @@ fastify.addHook("onRequest", async (req, reply) => {
     return;
   }
   if (req.method === "OPTIONS") return;
-  const pathname = req.url.split("?")[0];
-  if (!pathname.startsWith("/api/") || pathname === "/api/health" || isPublicDownload(req.method, pathname) || isPublicAuthRoute(req.method, pathname)) return;
+  // Decide pela rota CASADA e pelo caminho decodificado, nunca pelo req.url bruto (/%61pi/... casa /api/...)
+  const rp = reqPath(req);
+  if (!rp) return reply.code(400).send({ error: "Caminho inválido." });
+  if (!needsAuth(req.method, rp)) return;
+  const pathname = rp.path;
   const match = /^Bearer (.+)$/.exec(req.headers.authorization || "");
   // Token por terminal (Fase 3): só a API do próprio projeto/nó; nunca admin, usuário, outro projeto nem rota global
   const term = terminalTokens.verify(match?.[1]);
