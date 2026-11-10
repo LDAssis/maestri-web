@@ -31,7 +31,8 @@ import { registerFloorsApi } from "./floorsApi.js";
 import { FloorStore, floorOf } from "./floors.js";
 import { registerRoutinesApi } from "./routines.js";
 import { registerFilesApi } from "./files.js";
-import { registerDownloadsApi, isPublicDownload } from "./fileDownload.js";
+import { registerDownloadsApi } from "./fileDownload.js";
+import { reqPath, needsAuth } from "./reqPath.js";
 import { AuthService } from "./auth/service.js";
 import { registerAuthApi } from "./auth/authApi.js";
 import { registerAdminApi } from "./auth/adminApi.js";
@@ -45,6 +46,7 @@ import { Isolation, loadIsolationConfig } from "./isolation.js";
 import { TerminalTokens, terminalScopeCheck } from "./terminalTokens.js";
 import { AccountAccess, NO_ACCOUNT_MESSAGE } from "./accountAccess.js";
 import { setRunAsResolver } from "./runAs.js";
+import { AccountPermWatcher } from "./accountPerms.js";
 import { accountProgramOf } from "./resume.js";
 import { GEMINI_LINK_ENV } from "./accounts.js";
 
@@ -60,6 +62,10 @@ process.on("unhandledRejection", (reason) => {
 // Loga só o pathname: a query do WS carrega ?token= e não pode ir para o log
 export const fastify = Fastify({
   logger: { serializers: { req: (req) => ({ method: req.method, url: req.url.split("?")[0] }) } },
+  // Atrás do túnel (cloudflared/proxy no mesmo host) toda requisição chega de 127.0.0.1: sem isto, req.ip é o mesmo para
+  // todo mundo e o limite de tentativas de login vira um balde GLOBAL (10 senhas erradas de qualquer um travam o login de
+  // todos). Confia no X-Forwarded-For só quando a conexão vem do loopback; acesso direto pela LAN usa o IP real.
+  trustProxy: process.env.MAESTRI_TRUST_PROXY ?? "127.0.0.1,::1",
 });
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
@@ -76,11 +82,7 @@ await fastify.register(cors, { origin: authToken ? true : allowedOrigins });
 
 fastify.get("/api/health", async () => ({ ok: true, authRequired: !!authToken, setupRequired: authService.users.count() === 0 }));
 
-// Rotas públicas (login/configuração/convites); o resto de /api/* exige sessão de usuário OU o token interno (agentes/CLI)
-const isPublicAuthRoute = (method: string, pathname: string) =>
-  (method === "GET" && (pathname === "/api/auth/state" || /^\/api\/invites\/[^/]+$/.test(pathname))) ||
-  (method === "POST" && (pathname === "/api/auth/setup" || pathname === "/api/auth/login" || /^\/api\/invites\/[^/]+\/accept$/.test(pathname)));
-
+// Rotas públicas: lista em reqPath.ts (PUBLIC_ROUTES); o resto exige sessão de usuário, token de terminal OU o token interno
 fastify.addHook("onRequest", async (req, reply) => {
   if (!authToken) {
     // sem MAESTRI_TOKEN (dev em loopback): tudo aberto, com privilégio interno
@@ -89,8 +91,11 @@ fastify.addHook("onRequest", async (req, reply) => {
     return;
   }
   if (req.method === "OPTIONS") return;
-  const pathname = req.url.split("?")[0];
-  if (!pathname.startsWith("/api/") || pathname === "/api/health" || isPublicDownload(req.method, pathname) || isPublicAuthRoute(req.method, pathname)) return;
+  // Decide pela rota CASADA e pelo caminho decodificado, nunca pelo req.url bruto (/%61pi/... casa /api/...)
+  const rp = reqPath(req);
+  if (!rp) return reply.code(400).send({ error: "Caminho inválido." });
+  if (!needsAuth(req.method, rp)) return;
+  const pathname = rp.path;
   const match = /^Bearer (.+)$/.exec(req.headers.authorization || "");
   // Token por terminal (Fase 3): só a API do próprio projeto/nó; nunca admin, usuário, outro projeto nem rota global
   const term = terminalTokens.verify(match?.[1]);
@@ -255,6 +260,11 @@ accountAccess.onRevoked = (p, _groups) => {
   canvas.notify(p.id, { type: "notify", from: { nodeId: "", title: "Maestri" }, text: "Uma conta de assinatura foi revogada para este projeto: os terminais foram reiniciados." });
 };
 acl.onOwnerChange = () => accountAccess.syncAll();
+// Os CLIs gravam o login com chmod 0600 (ignora umask) e o dono vira o projeto que logou: sem isto os outros projetos da mesma conta
+// perdem o login. O servidor (root) mantém tudo dentro das pastas de conta legível/gravável pelo grupo (inotify + varredura de 30 s).
+const accountWatcher = new AccountPermWatcher(iso.cfg.accountsDir);
+if (iso.enabled) accountWatcher.start();
+fastify.addHook("onClose", async () => accountWatcher.stop());
 if (iso.enabled) accountAccess.syncAll();
 const attachments = new AttachmentStore(dataDir);
 export const crossLinks = new CrossLinks(path.join(dataDir, "links.json"));
@@ -509,10 +519,19 @@ fastify.get("/api/projects", async (req) => {
 });
 
 fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }>("/api/projects", async (req, reply) => {
-  const { name, description = "", repoPath } = req.body ?? {};
-  if (!name || typeof name !== "string" || !name.trim()) {
+  const { name: rawName, description: rawDescription = "", repoPath } = (req.body ?? {}) as { name?: unknown; description?: unknown; repoPath?: unknown };
+  // Nome (1-100, sem caracteres de controle) e descrição (texto, até 500): o valor é guardado e mostrado a todos que acessam o projeto
+  if (typeof rawName !== "string" || !rawName.trim()) {
     return reply.status(400).send({ error: "Nome do projeto é obrigatório." });
   }
+  const name = rawName.trim();
+  if (name.length > 100 || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(name)) {
+    return reply.status(400).send({ error: "Nome do projeto inválido: 1 a 100 caracteres, sem caracteres de controle." });
+  }
+  if (typeof rawDescription !== "string" || rawDescription.length > 500 || /\x00/.test(rawDescription)) {
+    return reply.status(400).send({ error: "Descrição inválida: texto de até 500 caracteres." });
+  }
+  const description = rawDescription;
 
   const wantsRepoPath = repoPath !== undefined && repoPath !== null && repoPath !== "";
   if (wantsRepoPath && !acl.isAdminReq(req)) {

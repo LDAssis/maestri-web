@@ -401,6 +401,8 @@ export class CliTools {
           info.loggedIn = false;
           info.loginDetail = `Conta "${STANDARD_ACCOUNT}" ainda não criada`;
         } else if (bin) {
+          // o CLI grava o login com 0600: só vale como "logado" o que os projetos do grupo conseguem ler
+          if (d.program && acc.name) this.accounts.normalizeTree(d.program, acc.name);
           const env = this.env(acc.env);
           const pr = await this.probe(d, bin, env, acc.name, refresh);
           info.version = pr.version;

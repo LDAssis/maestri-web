@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fsOpsAt } from "./runAs.js";
 import type { FastifyInstance } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import type { SessionManager } from "./sessions.js";
@@ -303,7 +304,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
     let finalScope: Scope = cur.scope;
     if (scope !== undefined && scope !== cur.scope) {
       if (allRoles(repo).some((r) => r.scope === scope && lc(r.role.name) === lc(role.name))) throw new ApiError(409, `Já existe um role "${role.name}" em ${scope}.`);
-      fs.rmSync(path.join(rolesDir(rootOf(repo, cur.scope)), String(role.id).toLowerCase()), { recursive: true, force: true });
+      fsOpsAt(rootOf(repo, cur.scope), [{ op: "rm", path: path.join(rolesDir(rootOf(repo, cur.scope)), String(role.id).toLowerCase()), recursive: true }]);
       finalScope = scope;
     }
     writeRole(rootOf(repo, finalScope), role);
@@ -331,7 +332,7 @@ export function registerTeamApi({ fastify, sessions, canvas, projectRepo, dataDi
       throw new ApiError(409, `O role "${role.name}" ainda é usado por: ${users.map((n) => n.data?.title).join(", ")}. Use --force para desatribuí-lo (os terminais reiniciam).`);
     }
     for (const n of users) applyCmd(c, repo, n, baseCmdOf(n), null, { role: PRESET_LABELS[n.data?.preset] ?? "Agente", roleId: null });
-    fs.rmSync(path.join(rolesDir(rootOf(repo, scope)), String(role.id).toLowerCase()), { recursive: true, force: true });
+    fsOpsAt(rootOf(repo, scope), [{ op: "rm", path: path.join(rolesDir(rootOf(repo, scope)), String(role.id).toLowerCase()), recursive: true }]);
     canvas.notify(c.projectId, { type: "roles" });
     return { ok: true, name: role.name, unassigned: users.length };
   }));

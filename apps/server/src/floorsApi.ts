@@ -1,6 +1,6 @@
 import { desktopNotify } from "./desktopNotify.js";
 import { execFile } from "node:child_process";
-import { SAFE_DIR_ENV, mkdirOwned, fixOwner } from "./runAs.js";
+import { ghExecFile, fsOpsAt, mkdirOwned, ensureWorktreesExcluded } from "./runAs.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -30,7 +30,7 @@ const SKIP_COPY = /(^|\/)(node_modules|\.next|dist|build|out|target|\.turbo|\.ca
 // GitHub CLI (gh): erros viram mensagens claras; o JSON de `gh pr view` vem em stdout
 function gh(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("gh", args, { cwd, env: { ...process.env, ...SAFE_DIR_ENV }, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 30_000 }, (err, stdout, stderr) => {
+    ghExecFile(cwd, args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 30_000 }, (err, stdout, stderr) => {
       if (!err) return resolve(stdout);
       if ((err as any).code === "ENOENT") return reject(new ApiError(409, "O GitHub CLI (gh) não está instalado ou não está no PATH."));
       const msg = (stderr || stdout || err.message).trim();
@@ -123,29 +123,17 @@ export function registerFloorsApi({ fastify, sessions, canvas, projectRepo, floo
     const copied: string[] = [];
     try {
       const files = (await git(repo, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
-      for (const rel of files) {
-        if (SKIP_COPY.test(rel)) continue;
-        try {
-          const src = path.join(repo, rel);
-          if (!fs.statSync(src).isFile()) continue;
-          mkdirOwned(path.dirname(path.join(dest, rel)));
-          fs.copyFileSync(src, path.join(dest, rel));
-          fixOwner(path.join(dest, rel));
-          copied.push(rel);
-        } catch {}
-      }
+      // Como o usuário do projeto e SEM seguir symlink: um arquivo "não rastreado" que é link para um arquivo de root não vira cópia
+      const todo = files.filter((rel) => !SKIP_COPY.test(rel));
+      const res = fsOpsAt(repo, todo.map((rel) => ({ op: "copy" as const, src: path.join(repo, rel), dest: path.join(dest, rel) })));
+      todo.forEach((rel, i) => res[i] === true && copied.push(rel));
     } catch {}
     return copied;
   }
 
   async function hideWorktrees(repo: string) {
     const exclude = path.resolve(repo, (await git(repo, ["rev-parse", "--git-path", "info/exclude"])).trim());
-    const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
-    if (!/^\/?\.worktrees\/?$/m.test(cur)) {
-      mkdirOwned(path.dirname(exclude));
-      fs.appendFileSync(exclude, `${cur && !cur.endsWith("\n") ? "\n" : ""}/.worktrees/\n`);
-      fixOwner(exclude);
-    }
+    ensureWorktreesExcluded(exclude);
   }
 
   // --- listar ---

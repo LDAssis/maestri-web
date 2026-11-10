@@ -1,4 +1,4 @@
-import { gitExecFile, mkdirOwned, fixOwner } from "./runAs.js";
+import { gitExecFile, mkdirOwned, ensureWorktreesExcluded } from "./runAs.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -171,12 +171,7 @@ export function registerWorktreeApi({ fastify, sessions, canvas, projectRepo }: 
     }
     // Repos sem .gitignore para .worktrees: esconde os andares do status/ls-files do principal
     const exclude = path.resolve(c.repo, (await git(c.repo, ["rev-parse", "--git-path", "info/exclude"])).trim());
-    const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
-    if (!/^\/?\.worktrees\/?$/m.test(cur)) {
-      mkdirOwned(path.dirname(exclude));
-      fs.appendFileSync(exclude, `${cur && !cur.endsWith("\n") ? "\n" : ""}/.worktrees/\n`);
-      fixOwner(exclude);
-    }
+    ensureWorktreesExcluded(exclude);
 
     canvas.applyAndBroadcast(c.projectId, { kind: "patchNodeData", id: node.id, data: { worktree: name, branch, worktreePath: wtPath } }, "worktrees");
     sessions.restart(c.projectId, node.id, wtPath);

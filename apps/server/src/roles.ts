@@ -7,7 +7,7 @@ import { ApiError, PRESETS, PRESET_LABELS, SIZES, freePosition, validCmd } from 
 import { arrangeColor, deliverRole } from "./agentSetup.js";
 import { ICONS } from "./notesApi.js";
 import { validModel } from "./resume.js";
-import { fixOwner, mkdirOwned } from "./runAs.js";
+import { fsOpsAt, fsOpsAtStrict } from "./runAs.js";
 
 type Obj = Record<string, any>;
 
@@ -42,12 +42,8 @@ export function readRole(repo: string, roleId: string): Obj | null {
 
 export function writeRole(repo: string, role: Obj) {
   const dir = path.join(rolesDir(repo), String(role.id).toLowerCase());
-  mkdirOwned(dir);
   const file = path.join(dir, "role.json");
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(role, null, 2));
-  fixOwner(tmp);
-  fs.renameSync(tmp, file);
+  fsOpsAtStrict(repo, [{ op: "mkdirp", path: dir }, { op: "write", path: file, data: JSON.stringify(role, null, 2) }]); // atômico, como o usuário do projeto
 }
 
 export function listRoles(repo: string): Obj[] {
@@ -140,7 +136,8 @@ export function registerRolesApi({ fastify, canvas, projectRepo, createFloorFor,
 
   fastify.delete("/api/projects/:p/roles/:roleId", wrap(({ projectId, repo }, req) => {
     const role = roleOr404(repo, req.params.roleId);
-    fs.rmSync(path.join(rolesDir(repo), String(role.id).toLowerCase()), { recursive: true, force: true });
+    const rd = path.join(rolesDir(repo), String(role.id).toLowerCase());
+    fsOpsAt(repo, [{ op: "rm", path: rd, recursive: true }]);
     changed(projectId);
     return { ok: true };
   }));

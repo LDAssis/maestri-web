@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import { apiFetch, wsUrl } from "@/lib/api";
 import { usePresenceStore } from "@/lib/presence";
@@ -121,11 +122,17 @@ export default function TerminalView({
       fontFamily: "Consolas, 'Courier New', monospace",
       fontSize: 12,
       lineHeight: 1.2,
-      convertEol: true,
+      // Sem convertEol: o PTY já converte \n em \r\n no modo normal, e TUIs em modo raw (agy, claude) usam \n puro para
+      // descer uma linha MANTENDO a coluna. Converter aqui jogava o cursor para a coluna 0 e embaralhava menus e logos.
+      allowProposedApi: true, // exigido pelo addon unicode11
     });
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+    // Larguras do Unicode 11 (emoji/símbolos com 2 colunas), as mesmas que os TUIs modernos assumem; com a tabela
+    // padrão (Unicode 6) o xterm e o app discordavam da largura e as linhas seguintes saíam deslocadas.
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
     term.open(containerRef.current);
     termRef.current = term;
 
