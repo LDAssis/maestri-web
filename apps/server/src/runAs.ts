@@ -82,6 +82,29 @@ export function fixOwner(target: string, recursive = false) {
   walk(target);
 }
 
+// $HOME/.gemini -> pasta da conta gemini (agy e gemini-cli). target "" = sem conta liberada: tira o link (o agente vê "não logado"
+// em vez de erro de permissão). Se já existe um .gemini de verdade (dados do próprio projeto), ele é guardado ao lado, não apagado.
+export function linkGeminiHome(home: string, uid: number | null, gid: number | null, target: string) {
+  const link = path.join(home, ".gemini");
+  let st: fs.Stats | null = null;
+  try {
+    st = fs.lstatSync(link);
+  } catch {}
+  if (st?.isSymbolicLink()) {
+    if (target && fs.readlinkSync(link) === target) return;
+    fs.unlinkSync(link);
+  } else if (st && target) {
+    fs.renameSync(link, link + ".local-" + Date.now());
+  }
+  if (!target) return;
+  fs.symlinkSync(target, link, "dir");
+  if (uid != null && gid != null) {
+    try {
+      fs.lchownSync(link, uid, gid);
+    } catch {}
+  }
+}
+
 // Cria os diretórios que faltam já com o dono do projeto (mkdir -p + chown de cada um que nasceu)
 export function mkdirOwned(dir: string) {
   const made: string[] = [];

@@ -10,6 +10,8 @@ import { ensureAgentContext } from "./agentContext.js";
 import type { SessionHistory } from "./sessionHistory.js";
 import { TerminalTokens } from "./terminalTokens.js";
 import { isolatedArgv, type RunAs } from "./isolation.js";
+import { linkGeminiHome } from "./runAs.js";
+import { GEMINI_LINK_ENV } from "./accounts.js";
 
 const isWindows = process.platform === "win32";
 const gitBashPath = "C:\\Program Files\\Git\\bin\\bash.exe";
@@ -106,7 +108,10 @@ function spawnPty(cwd: string, cols: number, rows: number, extraEnv: Record<stri
   const { runAs } = ctx;
   const t = ctx.tokens.issue({ projectId: ctx.projectId, nodeId: ctx.nodeId, uid: runAs?.uid ?? null, gid: runAs?.gid ?? null });
   try {
-    const env = buildPtyEnv({ extra: { ...extraEnv, MAESTRI_TOKEN_FILE: t.file }, runAs });
+    // Conta gemini (agy/gemini-cli): link $HOME/.gemini -> pasta da conta, só no HOME de um projeto isolado (nunca no /root)
+    const { [GEMINI_LINK_ENV]: geminiLink, ...plainEnv } = extraEnv;
+    if (runAs && geminiLink !== undefined) linkGeminiHome(runAs.home, runAs.uid, runAs.gid, geminiLink);
+    const env = buildPtyEnv({ extra: { ...plainEnv, MAESTRI_TOKEN_FILE: t.file }, runAs });
     // Instruções do canvas para o claude/codex/opencode/agy que rodar neste terminal (inclui contas por config dir)
     // (o liga/desliga vem do ambiente do SERVIDOR: o PTY não herda NODE_ENV nem MAESTRI_AGENT_CONTEXT)
     ensureAgentContext({ ...env, NODE_ENV: process.env.NODE_ENV, MAESTRI_AGENT_CONTEXT: process.env.MAESTRI_AGENT_CONTEXT } as NodeJS.ProcessEnv, runAs ? { uid: runAs.uid, gid: runAs.gid, shared: ctx.sharedDirs ?? [] } : undefined);

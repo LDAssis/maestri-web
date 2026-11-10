@@ -3,13 +3,15 @@
 //   npx tsx scripts/migrate-isolation.ts                      # dry-run de todos os projetos
 //   npx tsx scripts/migrate-isolation.ts --project proj-123   # só um
 //   npx tsx scripts/migrate-isolation.ts --apply              # executa (root, Linux; pare o serviço antes)
+//   npx tsx scripts/migrate-isolation.ts --accounts-only --apply   # só as contas (projetos já migrados): move, cria Padrão (claude, codex, gemini) e normaliza permissões
 //
 // Para cada projeto cuja pasta está em /root/maestri-projects: mata processos que estão nela, faz backup tar em
 // /srv/maestri/backups, cria o usuário mp-<id>, move a pasta para /srv/maestri/projects, chown -R, chmod, repara as worktrees,
 // reescreve os caminhos nos dados do canvas/andares e atualiza projects.json (repoPath, osUser, uid, gid, isolated).
 // Projetos com pasta externa (ex.: o próprio maestri-web) só ganham isolated:false.
 // Contas de assinatura: move .maestri_data/accounts para /srv/maestri/accounts (root:mac-<programa>-<nome>, 2770) e cria a conta
-// "Padrão" copiando o essencial do login do root (SEM o histórico de conversas) — sem apagar o original.
+// "Padrão" (claude, codex e gemini = gemini-cli + agy, que dividem ~/.gemini) copiando o essencial do login do root (SEM o histórico
+// de conversas) — sem apagar o original. Em toda rodada as contas existentes têm dono/grupo/modo normalizados (grupo da conta rw).
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -23,6 +25,7 @@ type Obj = Record<string, any>;
 export interface MigrateOptions {
   apply: boolean;
   only?: string; // id de um projeto
+  accountsOnly?: boolean; // pula os projetos (já migrados) e roda só a parte de contas
   dataDir: string; // .maestri_data
   legacyRoot: string; // /root/maestri-projects
   home: string; // /root (login do admin: .claude, .claude.json, .codex)
@@ -47,6 +50,8 @@ export interface MigrateReport {
 // Pastas que NÃO vão para a conta "Padrão": histórico de conversas e estado por projeto do root (vazariam entre projetos)
 const CLAUDE_KEEP = [".credentials.json", "settings.json", "settings.local.json", "CLAUDE.md", "commands", "agents", "skills", "plugins"];
 const CODEX_KEEP = ["auth.json", "config.toml", "AGENTS.md", "skills", "prompts"];
+// ~/.gemini (gemini-cli e agy): só login/config; fora history/, tmp/, projects.json (histórico), conversas (*.db), cache, bin e logs
+const GEMINI_KEEP = ["oauth_creds.json", "google_accounts.json", "installation_id", "settings.json", "skills", "config", "antigravity-cli/antigravity-oauth-token", "antigravity-cli/settings.json", "antigravity-cli/installation_id"];
 
 // Processos cujo cwd está dentro da pasta (terminais/agentes do projeto)
 export function killProcessesIn(dir: string): number {
@@ -129,7 +134,7 @@ export function runMigration(o: MigrateOptions): MigrateReport {
   }
 
   // ---------- projetos ----------
-  const targets = projects.filter((p) => !o.only || p.id === o.only);
+  const targets = o.accountsOnly ? [] : projects.filter((p) => !o.only || p.id === o.only);
   if (o.only && !targets.length) warn(`Projeto "${o.only}" não encontrado em projects.json.`);
   for (const p of targets) {
     const dir = abs(p);
@@ -190,7 +195,7 @@ export function runMigration(o: MigrateOptions): MigrateReport {
   if (o.apply && projectsChanged) saveProjects(); // inclui as marcações isolated:false dos externos
 
   // Pastas do legacyRoot que nenhum projeto usa (ex.: "src"): só reporta
-  try {
+  if (!o.accountsOnly) try {
     const used = new Set(projects.map((p) => abs(p)));
     for (const e of fs.readdirSync(o.legacyRoot, { withFileTypes: true })) {
       const full = path.join(o.legacyRoot, e.name);
@@ -253,6 +258,22 @@ export function runMigration(o: MigrateOptions): MigrateReport {
       },
     },
     {
+      program: "gemini",
+      to: path.join(o.cfg.accountsDir, "gemini", "Padrão"),
+      has: fs.existsSync(path.join(o.home, ".gemini")),
+      copy: () => {
+        const dest = path.join(o.cfg.accountsDir, "gemini", "Padrão");
+        fs.mkdirSync(dest, { recursive: true });
+        for (const k of GEMINI_KEEP) {
+          const src = path.join(o.home, ".gemini", k);
+          if (!fs.existsSync(src)) continue;
+          fs.mkdirSync(path.dirname(path.join(dest, k)), { recursive: true });
+          // o histórico por projeto do config/ (config/projects) fica de fora
+          fs.cpSync(src, path.join(dest, k), { recursive: true, preserveTimestamps: true, filter: (s) => !/[\\/]config[\\/]projects([\\/]|$)/.test(s) });
+        }
+      },
+    },
+    {
       program: "codex",
       to: path.join(o.cfg.accountsDir, "codex", "Padrão"),
       has: fs.existsSync(path.join(o.home, ".codex")),
@@ -281,6 +302,20 @@ export function runMigration(o: MigrateOptions): MigrateReport {
     iso.ensureAccountDir(s.program, "Padrão", s.to, true);
     r.accounts.push(`${s.program}/Padrão`);
   }
+
+  // Contas já existentes (movidas antes, criadas pela UI, ou logins refeitos pelo servidor como root): dono/grupo/modo corretos
+  // (grupo da conta rw). Idempotente e sem efeito colateral quando já está certo.
+  for (const program of ["claude", "codex", "gemini"]) {
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(path.join(o.cfg.accountsDir, program), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    } catch {}
+    for (const name of names) {
+      if (!o.apply) continue;
+      iso.ensureAccountDir(program, name, path.join(o.cfg.accountsDir, program, name), true);
+    }
+  }
+  if (!o.apply) log("Contas existentes: as permissões serão normalizadas (grupo da conta rw) no --apply.");
 
   // Pré-requisito: o usuário do projeto precisa executar claude/codex (nada embaixo de /root)
   for (const bin of ["claude", "codex", "node", "git"]) {
@@ -312,6 +347,6 @@ if (isMain) {
   const dataDir = path.resolve(arg("--data-dir") ?? path.join(process.env.REPO_PATH ?? repoRoot, ".maestri_data"));
   const home = arg("--home") ?? process.env.HOME ?? os.homedir();
   const cfg = { ...loadIsolationConfig(process.env, "linux", 0), enabled: true };
-  const rep = runMigration({ apply, only: arg("--project"), dataDir, legacyRoot: path.resolve(arg("--legacy-root") ?? path.join(home, "maestri-projects")), home, cfg });
+  const rep = runMigration({ apply, accountsOnly: argv.includes("--accounts-only"), only: arg("--project"), dataDir, legacyRoot: path.resolve(arg("--legacy-root") ?? path.join(home, "maestri-projects")), home, cfg });
   console.log(`\nResumo: migrados ${rep.migrated.length}, já migrados ${rep.alreadyDone.length}, externos ${rep.external.length}, contas ${rep.accounts.length}, avisos ${rep.warnings.length}.`);
 }

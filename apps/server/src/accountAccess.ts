@@ -2,11 +2,11 @@
 // próprio. O admin libera contas POR USUÁRIO (User.accounts); um projeto pode usar as contas liberadas ao DONO (admin: todas), e o
 // usuário do projeto entra/sai dos grupos conforme isso. Revogar tira do grupo e reinicia os terminais do projeto.
 import type { AccountStore, AccountProgram } from "./accounts.js";
-import { DEFAULT_ACCOUNT, STANDARD_ACCOUNT } from "./accounts.js";
+import { ACCOUNT_PROGRAMS, DEFAULT_ACCOUNT, STANDARD_ACCOUNT } from "./accounts.js";
 import type { Isolation, ProjectLike } from "./isolation.js";
 import type { AuthService } from "./auth/service.js";
 import type { User } from "./auth/users.js";
-import { programOf } from "./resume.js";
+import { accountProgramOf } from "./resume.js";
 
 export interface AccountProject extends ProjectLike {
   ownerId?: string;
@@ -45,8 +45,8 @@ export class AccountAccess {
 
   // Conta que um terminal do projeto usa: "Default"/vazio = "Padrão" (o login do admin) quando o projeto é isolado
   resolve(p: AccountProject, cmd: string | undefined, account: unknown): { env: Record<string, string> } | { blocked: string } | { env: {} } {
-    const program = programOf(cmd);
-    if (program !== "claude" && program !== "codex") return { env: {} };
+    const program = accountProgramOf(cmd);
+    if (!program) return { env: {} };
     if (!this.iso.isIsolated(p)) return { env: this.store.envFor(cmd, account) }; // projeto externo (root): como antes
     const asked = typeof account === "string" && account.trim() && lc(account) !== lc(DEFAULT_ACCOUNT) ? account.trim() : STANDARD_ACCOUNT;
     const real = this.store.find(program, asked);
@@ -100,7 +100,7 @@ export class AccountAccess {
     const out: AccountRef[] = [];
     for (const g of grants) {
       if (typeof g?.program !== "string" || typeof g?.name !== "string") return null;
-      const real = (["claude", "codex"] as const).includes(g.program as AccountProgram) ? this.store.find(g.program as AccountProgram, g.name) : null;
+      const real = (ACCOUNT_PROGRAMS as readonly string[]).includes(g.program) ? this.store.find(g.program as AccountProgram, g.name) : null;
       if (!real || real === DEFAULT_ACCOUNT) return null;
       if (!out.some((a) => a.program === g.program && a.name === real)) out.push({ program: g.program as AccountProgram, name: real });
     }

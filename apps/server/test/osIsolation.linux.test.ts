@@ -109,6 +109,8 @@ if (!enabled) {
   let adminTok = "";
   let accountDir = "";
   let accountGroup = "";
+  let geminiDir = "";
+  let geminiGroup = "";
   const created: string[] = [];
   const proj: Record<string, { id: string; dir: string; user: string; uid: number }> = {};
 
@@ -123,6 +125,7 @@ if (!enabled) {
       nodes: [
         { id: "t", type: "agentTerminal", position: { x: 0, y: 0 }, data: { title: "T" } },
         { id: "ag", type: "agentTerminal", position: { x: 300, y: 0 }, data: { title: "AG", baseCmd: "claude" } },
+        { id: "agw", type: "agentTerminal", position: { x: 600, y: 0 }, data: { title: "AGW", baseCmd: "agy" } },
       ],
       edges: [],
     });
@@ -141,8 +144,13 @@ if (!enabled) {
     assert.equal(a.status, 200, JSON.stringify(a.body));
     accountDir = path.join(iso.cfg.accountsDir, "claude", "Padrão");
     accountGroup = iso.groupFor("claude", "Padrão");
+    // conta gemini (agy + gemini-cli): criada ANTES dos projetos? não: depois, para exercitar o onChange que ressincroniza os grupos
     await newProject("A");
     await newProject("B");
+    const gm = await call("POST", "/api/accounts", internal, { program: "gemini", name: "Padrão" });
+    assert.equal(gm.status, 200, JSON.stringify(gm.body));
+    geminiDir = path.join(iso.cfg.accountsDir, "gemini", "Padrão");
+    geminiGroup = iso.groupFor("gemini", "Padrão");
     fs.writeFileSync(path.join(proj.B.dir, "segredo-b.txt"), "SEGREDO-DE-B");
     fs.chownSync(path.join(proj.B.dir, "segredo-b.txt"), proj.B.uid, proj.B.uid);
     fs.chmodSync(path.join(proj.B.dir, "segredo-b.txt"), 0o640);
@@ -186,19 +194,19 @@ if (!enabled) {
     assert.equal(fs.statSync(path.join(dataDir, "projects.json")).mode & 0o777, 0o600);
   });
 
-  test("PTY: roda com o uid certo, grupos sem 0, umask 027, HOME/TMPDIR do projeto, no-new-privs, sem sudo", async () => {
+  test("PTY: roda com o uid certo, grupos sem 0, umask 007, HOME/TMPDIR do projeto, no-new-privs, sem sudo", async () => {
     const t = term(proj.A.id, "t");
     const r = await t.run("echo UID=$(id -u) GID=$(id -g) GR=$(id -G) GN=$(id -nG) H=$HOME T=$TMPDIR U=$USER P=$(pwd) M=$(umask) NNP=$(awk '/NoNewPrivs/{print $2}' /proc/self/status) SH=$SHELL");
     const o = r.out;
-    assert.equal(val(o, "UID"), String(proj.A.uid));
-    assert.equal(val(o, "GID"), String(proj.A.uid));
+    assert.equal(val(o, "UID"), String(proj.A.uid), JSON.stringify({ proj, o: clean(o).slice(-700) }));
+    assert.equal(val(o, "GID"), sh("id", ["-g", proj.A.user]), "gid primário do usuário (o gid pode diferir do uid se o número já estava em uso)");
     assert.ok(!val(o, "GR").split(" ").includes("0"), `grupos do PTY não incluem root: ${val(o, "GR")}`);
     assert.ok(val(o, "GN").includes(accountGroup), `entrou no grupo da conta liberada ao dono (admin): ${val(o, "GN")}`);
     assert.equal(val(o, "H"), iso.homeOf(proj.A.user));
     assert.equal(val(o, "T"), iso.tmpOf(proj.A.user));
     assert.equal(val(o, "U"), proj.A.user);
     assert.equal(val(o, "P"), proj.A.dir);
-    assert.equal(val(o, "M"), "0027");
+    assert.equal(val(o, "M"), "0007");
     assert.equal(val(o, "NNP"), "1");
     assert.ok(proj.A.uid > 0);
     const sudo = await t.run("sudo -n true 2>&1");
@@ -206,7 +214,7 @@ if (!enabled) {
     const su = await t.run("su -c id root </dev/null 2>&1 | head -1; echo done");
     assert.ok(!/uid=0/.test(su.out.replace(/su -c id root[^\n]*\n/, "")), "su não vira root");
     const f = await t.run("touch novo.txt && echo MODE=$(stat -c %a novo.txt) OWNER=$(stat -c %U novo.txt)");
-    assert.equal(val(f.out, "MODE"), "640", "arquivos novos nascem 0640 (umask 027)");
+    assert.equal(val(f.out, "MODE"), "660", "arquivos novos nascem 0660 (umask 007; o grupo primário é só do usuário)");
     assert.equal(val(f.out, "OWNER"), proj.A.user);
     t.close();
   });
@@ -302,6 +310,36 @@ console.log("ST=" + out.join(","));
     t.close();
   });
 
+  test("conta gemini (agy): ~/.gemini do PTY é um LINK para a conta; login 0600 de root vira legível pelo grupo após normalizar; dois projetos compartilham", async () => {
+    assert.ok((tryShOut("id", ["-nG", proj.A.user]) ?? "").includes(geminiGroup), "criar a conta ressincronizou os grupos dos projetos do admin");
+    // login feito pelo servidor (root) deixa 0600 root:root: o projeto não leria
+    fs.mkdirSync(path.join(geminiDir, "antigravity-cli"), { recursive: true });
+    fs.writeFileSync(path.join(geminiDir, "antigravity-cli", "antigravity-oauth-token"), "TOKEN-AGY", { mode: 0o600 });
+    fs.writeFileSync(path.join(geminiDir, "oauth_creds.json"), '{"gemini":1}', { mode: 0o600 });
+    const a = term(proj.A.id, "agw");
+    const denied = await a.run("echo T=$(cat ~/.gemini/antigravity-cli/antigravity-oauth-token 2>&1 | head -1)");
+    assert.match(val(denied.out, "T"), /Permission denied/);
+    iso.ensureAccountDir("gemini", "Padrão", geminiDir, true); // o que o servidor faz ao fim do login do menu / a migração
+    const r = await a.run("echo L=$(readlink ~/.gemini) T=$(cat ~/.gemini/antigravity-cli/antigravity-oauth-token) K=$(printenv MAESTRI_ACCOUNT_LINK_GEMINI) C=$(cat ~/.gemini/oauth_creds.json)");
+    assert.equal(val(r.out, "L"), geminiDir);
+    assert.equal(val(r.out, "T"), "TOKEN-AGY");
+    assert.equal(val(r.out, "K"), "", "a chave reservada não vai para o ambiente do terminal");
+    assert.equal(val(r.out, "C"), '{"gemini":1}');
+    assert.equal(fs.lstatSync(path.join(iso.homeOf(proj.A.user), ".gemini")).uid, proj.A.uid, "o link é do usuário do projeto");
+    // o projeto grava na conta (refresh de token) e o OUTRO projeto da mesma conta consegue regravar (grupo rw, umask 007)
+    const w = await a.run("echo novo > ~/.gemini/antigravity-cli/refresh && echo M=$(stat -c %a ~/.gemini/antigravity-cli/refresh) G=$(stat -c %G ~/.gemini/antigravity-cli/refresh)");
+    assert.equal(val(w.out, "M"), "660");
+    assert.equal(val(w.out, "G"), path.basename(geminiGroup));
+    const b = term(proj.B.id, "agw");
+    const wb = await b.run("echo L=$(readlink ~/.gemini) && echo mais >> ~/.gemini/antigravity-cli/refresh && echo APPENDED=$(wc -l < ~/.gemini/antigravity-cli/refresh)");
+    assert.equal(val(wb.out, "L"), geminiDir);
+    assert.equal(val(wb.out, "APPENDED"), "2", "o outro projeto regrava o arquivo criado pelo primeiro");
+    // projeto externo nunca ganha link (o ~/.gemini do root é o login do admin)
+    assert.ok(!fs.existsSync("/tmp/.gemini-should-not-exist"));
+    a.close();
+    b.close();
+  });
+
   test("contas: Default usa a conta Padrão do dono (env), grupo da conta escreve na pasta; revogar tira o grupo, reinicia o PTY e bloqueia o agente", async () => {
     const ag = term(proj.B.id, "ag");
     const r = await ag.run("echo CFG=$CLAUDE_CONFIG_DIR GN=$(id -nG); touch " + accountDir + "/probe-b && echo WROTE=sim");
@@ -333,6 +371,14 @@ console.log("ST=" + out.join(","));
     assert.ok(!val(after.out, "GN").includes(accountGroup), "novo shell sem o grupo");
     assert.match(after.out, /Permission denied/);
     assert.equal(val(after.out, "CFG"), "");
+    // gemini: o dono novo (sem liberação gemini) perde o link e o grupo; o agente é bloqueado com a mensagem do contrato
+    await until(() => !(tryShOut("id", ["-nG", proj.B.user]) ?? "").includes(geminiGroup), "grupo gemini removido");
+    const agw = term(proj.B.id, "agw");
+    await until(() => agw.all.includes("Nenhuma conta de assinatura liberada para este projeto — peça ao admin"), "bloqueio do agy sem conta");
+    const gl = await agw.run("echo HAS=$(test -e ~/.gemini && echo sim || echo nao) GN=$(id -nG)");
+    assert.equal(val(gl.out, "HAS"), "nao", "link revogado: o agy vê 'não logado', sem apontar para a conta");
+    assert.ok(!val(gl.out, "GN").includes(path.basename(geminiGroup)));
+    agw.close();
     // admin libera a conta ao novo dono: o grupo volta
     const g = await call("PUT", `/api/admin/users/${comum}/accounts`, { authorization: `Bearer ${adminTok}` }, { grants: [{ program: "claude", name: "Padrão" }] });
     assert.equal(g.status, 200, JSON.stringify(g.body));

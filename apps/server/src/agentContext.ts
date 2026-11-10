@@ -146,7 +146,10 @@ export function ensureAgentContext(env: NodeJS.ProcessEnv, own?: Owner) {
   const claudeDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
   if (has("claude", claudeDir)) writeIfChanged(path.join(claudeDir, "skills", SKILL_NAME, "SKILL.md"), skill, own);
 
-  const geminiDir = path.join(home, ".gemini");
+  let geminiDir = path.join(home, ".gemini");
+  try {
+    geminiDir = fs.realpathSync(geminiDir); // conta gemini: o link aponta para a pasta compartilhada da conta
+  } catch {}
   if (has("agy", geminiDir)) writeIfChanged(path.join(geminiDir, "config", "skills", SKILL_NAME, "SKILL.md"), skill, own);
 
   const codexDir = env.CODEX_HOME || path.join(home, ".codex");

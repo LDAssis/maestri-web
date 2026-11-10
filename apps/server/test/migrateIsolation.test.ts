@@ -48,6 +48,15 @@ function setup() {
   fs.writeFileSync(path.join(home, ".codex", "sessions", "s.jsonl"), "SEGREDO");
   fs.writeFileSync(path.join(home, ".codex", "auth.json"), '{"tokens":1}');
   fs.writeFileSync(path.join(home, ".codex", "config.toml"), "x=1");
+  // ~/.gemini do root (gemini-cli + agy): login e config vão; histórico, conversas, cache e logs não
+  const g = path.join(home, ".gemini");
+  for (const d of ["antigravity-cli/conversations", "antigravity-cli/cache", "history/root", "tmp/root/chats", "config/projects", "config/plugins", "skills/s"]) fs.mkdirSync(path.join(g, d), { recursive: true });
+  for (const [f, c] of [
+    ["oauth_creds.json", "{}tok"], ["google_accounts.json", "{}acc"], ["settings.json", "{}set"], ["installation_id", "id1"], ["state.json", "estado"], ["projects.json", "HISTORICO"],
+    ["antigravity-cli/antigravity-oauth-token", "agy-token"], ["antigravity-cli/settings.json", "{}s"], ["antigravity-cli/cli.log", "LOG"],
+    ["antigravity-cli/conversations/a.db", "CONVERSA"], ["antigravity-cli/cache/c.json", "cache"], ["history/root/h", "HIST"], ["tmp/root/chats/c", "CHAT"],
+    ["config/mcp_config.json", "{}mcp"], ["config/projects/default.json", "PROJ-HIST"], ["config/plugins/p.json", "{}p"], ["skills/s/SKILL.md", "skill"],
+  ]) fs.writeFileSync(path.join(g, f), c);
 
   const calls: string[] = [];
   const users = new Map<string, number>();
@@ -93,6 +102,7 @@ test("dry-run (padrão): lista o que faria e não altera NADA", () => {
   assert.match(text, /conta claude\/Trabalho: mover/);
   assert.match(text, /conta claude\/Padrão: copiar/);
   assert.match(text, /conta codex\/Padrão: copiar/);
+  assert.match(text, /conta gemini\/Padrão: copiar/);
   assert.deepEqual(r.migrated, []);
   assert.deepEqual(r.external.sort(), ["proj-c", "proj-d"]);
   assert.deepEqual(r.orphanDirs, [path.join(w.legacy, "src")], "a pasta 'src' é reportada e não mexida");
@@ -144,7 +154,17 @@ test("--apply: move, backup, usuário, chown, caminhos reescritos, externos marc
   assert.ok(fs.existsSync(path.join(w.home, ".claude", ".credentials.json")), "o login do root continua lá (cópia, não mover)");
   assert.ok(fs.existsSync(path.join(w.home, ".claude", "projects", "-x", "conversa.jsonl")));
   assert.ok(w.groups.size >= 3, "um grupo por conta");
-  assert.deepEqual(r.accounts.sort(), ["claude/Padrão", "claude/Trabalho", "codex/Padrão"]);
+  assert.deepEqual(r.accounts.sort(), ["claude/Padrão", "claude/Trabalho", "codex/Padrão", "gemini/Padrão"]);
+  // gemini/Padrão (agy + gemini-cli): login e config; sem histórico, conversas, cache, logs nem tmp
+  const gem = path.join(w.cfg.accountsDir, "gemini", "Padrão");
+  const tree = (d: string, rel = ""): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? tree(path.join(d, e.name), path.join(rel, e.name)) : [path.join(rel, e.name).replace(/\\/g, "/")]));
+  assert.deepEqual(tree(gem).sort(), [
+    "antigravity-cli/antigravity-oauth-token", "antigravity-cli/settings.json",
+    "config/mcp_config.json", "config/plugins/p.json", "google_accounts.json", "installation_id", "oauth_creds.json", "settings.json", "skills/s/SKILL.md",
+  ].sort());
+  assert.ok(!JSON.stringify(tree(gem)).match(/HIST|conversations|cache|cli\.log|projects|tmp|state\.json/i));
+  assert.ok(fs.existsSync(path.join(w.home, ".gemini", "oauth_creds.json")), "o login do root continua lá");
+  assert.ok([...w.groups].some((g) => g.includes("gemini")), "grupo da conta gemini");
   rmTmp(w.tmp);
 });
 
@@ -160,7 +180,7 @@ test("idempotente: rodar de novo não faz nada; --project limita a um projeto", 
   assert.deepEqual(again.migrated, []);
   assert.deepEqual(again.alreadyDone, ["proj-b"]);
   assert.equal(w.calls.filter((c) => c.startsWith("useradd")).length, 1);
-  assert.equal(w.calls.slice(n).filter((c) => /^(tar|useradd|chown|userdel)/.test(c)).length, 0);
+  assert.equal(w.calls.slice(n).filter((c) => /^(tar|useradd|chown|userdel)/.test(c) && !c.includes(w.cfg.accountsDir)).length, 0, "só a renormalização das contas pode rodar");
   // tudo: A migra, B já estava, externos marcados; segunda passada total não altera mais nada
   const all = runMigration({ ...w.base, apply: true });
   assert.deepEqual(all.migrated, ["proj-a"]);
@@ -171,5 +191,28 @@ test("idempotente: rodar de novo não faz nada; --project limita a um projeto", 
   assert.deepEqual(last.actions, [], "nada a fazer");
   assert.equal(fs.readFileSync(path.join(w.dataDir, "projects.json"), "utf8"), snap);
   assert.equal(runMigration({ ...w.base, apply: false, only: "nao-existe" }).warnings.length >= 1, true);
+  rmTmp(w.tmp);
+});
+
+test("--accounts-only: projetos já migrados não são tocados; só as contas (inclui gemini/Padrão) e a normalização", () => {
+  const w = setup();
+  const before = fs.readFileSync(path.join(w.dataDir, "projects.json"), "utf8");
+  const dry = runMigration({ ...w.base, apply: false, accountsOnly: true });
+  assert.deepEqual(dry.migrated, []);
+  assert.ok(dry.actions.every((a) => a.startsWith("conta")), dry.actions.join(" | "));
+  const r = runMigration({ ...w.base, apply: true, accountsOnly: true });
+  assert.deepEqual(r.migrated, []);
+  assert.equal(fs.readFileSync(path.join(w.dataDir, "projects.json"), "utf8"), before, "projects.json intacto");
+  assert.ok(fs.existsSync(path.join(w.legacy, "alfa", "codigo.txt")), "nenhuma pasta movida");
+  assert.ok(!w.calls.some((c) => c.startsWith("useradd")), "nenhum usuário criado");
+  assert.deepEqual(r.accounts.sort(), ["claude/Padrão", "claude/Trabalho", "codex/Padrão", "gemini/Padrão"]);
+  // segunda rodada: nada a copiar/mover; só renormaliza as pastas (chown/chmod recursivos nas contas existentes)
+  const n = w.calls.length;
+  const again = runMigration({ ...w.base, apply: true, accountsOnly: true });
+  assert.deepEqual(again.accounts, []);
+  assert.deepEqual(again.actions, []);
+  const later = w.calls.slice(n);
+  assert.ok(later.some((c) => c.startsWith("chmod -R g+rwX,o-rwx ") && c.includes("gemini")), "renormaliza as contas existentes");
+  assert.ok(!later.some((c) => c.startsWith("tar") || c.startsWith("useradd")));
   rmTmp(w.tmp);
 });

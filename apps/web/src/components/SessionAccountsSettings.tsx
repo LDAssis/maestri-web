@@ -2,11 +2,12 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { Bell, RotateCcw, Trash2, UserCog } from "lucide-react";
+import { ACCOUNT_PROGRAMS, accountProgramLabel, type AccountProgram } from "@/lib/accounts";
 import { apiFetch } from "@/lib/api";
 import { isAdminUser } from "./EntryGate";
 
 interface Account {
-  program: "claude" | "codex";
+  program: AccountProgram;
   name: string;
   usedBy: string[];
 }
@@ -18,7 +19,7 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
   const [desktop, setDesktop] = useState(true);
   const [desktopForced, setDesktopForced] = useState(false); // MAESTRI_DESKTOP_NOTIFY no servidor manda mais que a preferência
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [program, setProgram] = useState<"claude" | "codex">("claude");
+  const [program, setProgram] = useState<AccountProgram>("claude");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -147,7 +148,7 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
             const k = `${a.program}/${a.name}`;
             return (
               <li key={k} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-2 py-1">
-                <span className="rounded bg-slate-800 px-1.5 text-[10px] text-slate-300">{a.program}</span>
+                <span className="rounded bg-slate-800 px-1.5 text-[10px] text-slate-300">{accountProgramLabel(a.program)}</span>
                 <span className="flex-1 truncate text-slate-200">{a.name}</span>
                 {a.usedBy.length > 0 && <span className="truncate text-[10px] text-slate-500" title={a.usedBy.join(", ")}>em uso: {a.usedBy.join(", ")}</span>}
                 {!isAdmin ? null : confirmDel === k ? (
@@ -167,9 +168,8 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
         </ul>
         {isAdmin ? (
         <form onSubmit={create} className="flex gap-2">
-          <select value={program} onChange={(e) => setProgram(e.target.value as "claude" | "codex")} aria-label="CLI da conta" className={input}>
-            <option value="claude">claude</option>
-            <option value="codex">codex</option>
+          <select value={program} onChange={(e) => setProgram(e.target.value as AccountProgram)} aria-label="CLI da conta" className={input}>
+            {ACCOUNT_PROGRAMS.map((p) => <option key={p} value={p}>{accountProgramLabel(p)}</option>)}
           </select>
           <input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="Nome da conta (ex: Work)" aria-label="Nome da conta" className={`${input} flex-1`} />
           <button type="submit" disabled={!name.trim()} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-40">

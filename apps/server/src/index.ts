@@ -45,6 +45,8 @@ import { Isolation, loadIsolationConfig } from "./isolation.js";
 import { TerminalTokens, terminalScopeCheck } from "./terminalTokens.js";
 import { AccountAccess, NO_ACCOUNT_MESSAGE } from "./accountAccess.js";
 import { setRunAsResolver } from "./runAs.js";
+import { accountProgramOf } from "./resume.js";
+import { GEMINI_LINK_ENV } from "./accounts.js";
 
 // Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
 process.on("uncaughtException", (err) => {
@@ -289,7 +291,9 @@ const sessions = new SessionManager({
     const p = projects.find((x) => x.id === projectId);
     if (!p) return accounts.envFor(n?.data?.baseCmd ?? n?.data?.defaultCmd, n?.data?.account);
     const r = accountAccess.resolve(p, n?.data?.baseCmd ?? n?.data?.defaultCmd, n?.data?.account);
-    return "env" in r ? r.env : {};
+    if ("env" in r) return r.env;
+    // sem conta liberada: agy/gemini não devem seguir apontando para uma conta revogada
+    return accountProgramOf(n?.data?.baseCmd ?? n?.data?.defaultCmd) === "gemini" ? { [GEMINI_LINK_ENV]: "" } : {};
   },
   model: (projectId, nodeId) => {
     const m = canvas.state(projectId).nodes?.find((x) => x.id === nodeId)?.data?.model;
@@ -378,7 +382,7 @@ prPoll.unref();
 fastify.addHook("onClose", async () => clearInterval(prPoll));
 registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds: () => projects.map((p) => p.id), settings: settingsAccess, access: accountAccess, projectOf: (id) => projects.find((p) => p.id === id), canSee: (id) => acl.canSeeCurrent(id) });
 // Menu de CLIs: só admin (REST pelo guarda central; o WS do job confere aqui)
-registerCliToolsApi({ fastify, accounts, wsAuthorized: (socket, req, url) => {
+registerCliToolsApi({ fastify, accounts, isolated: iso.enabled, wsAuthorized: (socket, req, url) => {
   if (!wsAuthorized(socket, req, url)) return false;
   const u = (socket as any).authUser;
   if (u && u.role !== "admin") {

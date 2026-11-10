@@ -2,16 +2,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ApiError } from "./agents.js";
-import { programOf } from "./resume.js";
+import { accountProgramOf } from "./resume.js";
 import type { Isolation } from "./isolation.js";
 
-export const ACCOUNT_PROGRAMS = ["claude", "codex"] as const;
+export const ACCOUNT_PROGRAMS = ["claude", "codex", "gemini"] as const;
 export type AccountProgram = (typeof ACCOUNT_PROGRAMS)[number];
 export const DEFAULT_ACCOUNT = "Default";
 // Fase 3: o login do admin (/root/.claude, /root/.codex) vira esta conta, liberada a todo admin; "Default" nos projetos isolados aponta para ela
 export const STANDARD_ACCOUNT = "Padrão";
 // Variável de ambiente que isola o login de cada CLI
-const ENV_VAR: Record<AccountProgram, string> = { claude: "CLAUDE_CONFIG_DIR", codex: "CODEX_HOME" };
+// gemini (gemini-cli E agy): o agy só respeita HOME (~/.gemini fixo), então não há variável: o PTY recebe um LINK
+// $HOME/.gemini -> pasta da conta. Esta chave reservada leva o alvo até o spawn (que a tira do ambiente do terminal).
+export const GEMINI_LINK_ENV = "MAESTRI_ACCOUNT_LINK_GEMINI";
+const ENV_VAR: Record<AccountProgram, string> = { claude: "CLAUDE_CONFIG_DIR", codex: "CODEX_HOME", gemini: GEMINI_LINK_ENV };
 const NAME_RE = /^[\p{L}\d][\p{L}\d _.-]{0,39}$/u;
 
 const lc = (s: string) => s.trim().toLowerCase();
@@ -79,6 +82,12 @@ export class AccountStore {
     return n;
   }
 
+  // Depois de um login feito pelo servidor (root): arquivos 0600 de root não serviriam aos projetos; refaz dono/grupo/modo
+  normalize(program: AccountProgram, name: string) {
+    const real = this.find(program, name);
+    if (real && real !== DEFAULT_ACCOUNT && this.opts.iso?.enabled) this.opts.iso.ensureAccountDir(program, real, this.dir(program, real), true);
+  }
+
   delete(program: AccountProgram, name: string) {
     const real = this.find(program, name);
     if (!real || real === DEFAULT_ACCOUNT) throw new ApiError(404, `Conta "${name}" não encontrada para ${program}.`);
@@ -90,8 +99,8 @@ export class AccountStore {
 
   // Valida a conta para o comando (programa claude/codex) e devolve o nome canônico; "Default" = sem conta
   resolveFor(cmd: string, name: string): string | undefined {
-    const program = programOf(cmd);
-    if (program !== "claude" && program !== "codex") throw new ApiError(400, "Contas só existem para comandos claude e codex.");
+    const program = accountProgramOf(cmd);
+    if (!program) throw new ApiError(400, "Contas só existem para comandos claude, codex, agy e gemini.");
     const real = this.find(program, name);
     if (!real) throw new ApiError(404, `Conta "${name}" não encontrada para ${program} (veja "maestri account list").`);
     return real === DEFAULT_ACCOUNT ? undefined : real;
@@ -107,7 +116,7 @@ export class AccountStore {
 
   // Variável de ambiente que o terminal recebe ao iniciar
   envFor(cmd: string | undefined, account: unknown): Record<string, string> {
-    const program = programOf(cmd);
-    return program === "claude" || program === "codex" ? this.envForProgram(program, account) : {};
+    const program = accountProgramOf(cmd);
+    return program ? this.envForProgram(program, account) : {};
   }
 }

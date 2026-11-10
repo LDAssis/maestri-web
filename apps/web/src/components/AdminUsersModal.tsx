@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy, FolderGit2, KeyRound, Bot, Link2, Loader2, Plus, ShieldCheck, Trash2, UserCheck, UserX, Users, X } from "lucide-react";
+import { ACCOUNT_PROGRAMS, accountProgramLabel, type AccountProgram } from "@/lib/accounts";
 import { apiFetch } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import { Avatar, errorOf, type MaestriUser } from "./EntryGate";
@@ -151,12 +152,12 @@ function UserProjectsPanel({ user, onClose }: { user: AdminUser; onClose: () => 
   );
 }
 interface GrantAccount {
-  program: "claude" | "codex";
+  program: AccountProgram;
   name: string;
   granted: boolean;
 }
 
-// Contas de assinatura (claude/codex) liberadas para o usuário; admin tem todas
+// Contas de assinatura (Claude, Codex, Gemini / Antigravity) liberadas para o usuário; admin tem todas
 function UserAccountsPanel({ user, onClose }: { user: AdminUser; onClose: () => void }) {
   const [all, setAll] = useState<GrantAccount[] | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -228,7 +229,7 @@ function UserAccountsPanel({ user, onClose }: { user: AdminUser; onClose: () => 
               <li key={k}>
                 <label className={`flex items-center gap-2.5 px-3 py-2 text-xs ${isAdmin ? "text-slate-500" : "cursor-pointer text-slate-200 hover:bg-slate-900"}`}>
                   <input type="checkbox" checked={isAdmin || sel.has(k)} disabled={isAdmin} onChange={() => toggle(k)} className="accent-indigo-500" />
-                  <span className="rounded bg-slate-800 px-1.5 text-[10px] text-slate-300">{a.program}</span>
+                  <span className="rounded bg-slate-800 px-1.5 text-[10px] text-slate-300">{accountProgramLabel(a.program)}</span>
                   <span className="flex-1 truncate">{a.name}</span>
                 </label>
               </li>
@@ -386,7 +387,7 @@ function UsersTab({ me }: { me: MaestriUser }) {
                         <FolderGit2 className="h-4 w-4" />
                         Projetos
                       </button>
-                      <button className={textBtn} onClick={() => { setProjUser(null); setAccUser(u); }} title="Contas de assinatura (claude/codex) liberadas" aria-label={`Contas de assinatura de ${u.name}`}>
+                      <button className={textBtn} onClick={() => { setProjUser(null); setAccUser(u); }} title="Contas de assinatura (Claude, Codex, Gemini / Antigravity) liberadas" aria-label={`Contas de assinatura de ${u.name}`}>
                         <Bot className="h-4 w-4" />
                         Contas
                       </button>

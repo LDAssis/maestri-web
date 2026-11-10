@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import { ApiError } from "./agents.js";
 import { AccountStore, type AccountProgram } from "./accounts.js";
-import { programOf } from "./resume.js";
+import { accountProgramOf as programOf } from "./resume.js";
 import type { NodeApi } from "./nodeApi.js";
 import type { SettingsAccess } from "./teamApi.js";
 import type { AccountAccess, AccountProject } from "./accountAccess.js";

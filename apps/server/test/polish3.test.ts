@@ -239,7 +239,7 @@ test("recruit --account: o terminal recebe CLAUDE_CONFIG_DIR/CODEX_HOME; preset 
 
   // erros
   assert.match((await M("recruit", "E1", "--command", "claude", "--account", "Fantasma")).stderr, /não encontrada para claude/);
-  assert.match((await M("recruit", "E2", "--command", "npm run dev", "--account", "Work")).stderr, /só existem para comandos claude e codex/);
+  assert.match((await M("recruit", "E2", "--command", "npm run dev", "--account", "Work")).stderr, /só existem para comandos claude, codex, agy e gemini/);
   assert.match((await M("recruit", "E3", "--command", "codex", "--account", "Pessoal2")).stderr, /não encontrada/);
   assert.equal(await byTitle("E1"), undefined);
 
@@ -254,12 +254,12 @@ test("recruit --account: o terminal recebe CLAUDE_CONFIG_DIR/CODEX_HOME; preset 
   await ok(M("recruit", "Override", "--preset", "Claude Work", "--account", "Default"));
   assert.equal((await byTitle("Override")).data.account, undefined);
   assert.match((await M("preset", "set", "Claude Work", "--account", "Nada")).stderr, /não encontrada/);
-  assert.match((await M("preset", "create", "Shelly", "--account", "Work")).stderr, /só existem para comandos claude e codex/);
+  assert.match((await M("preset", "create", "Shelly", "--account", "Work")).stderr, /só existem para comandos claude, codex, agy e gemini/);
   await ok(M("preset", "set", "Claude Work", "--account", ""));
   assert.doesNotMatch((await ok(M("preset", "show", "Claude Work"))).stdout, /conta:/);
   await ok(M("preset", "set", "Claude Work", "--account", "Work"));
   // trocar o comando para um programa sem contas é recusado enquanto a conta está pinada
-  assert.match((await M("preset", "set", "Claude Work", "--command", "echo oi")).stderr, /só existem para comandos claude e codex/);
+  assert.match((await M("preset", "set", "Claude Work", "--command", "echo oi")).stderr, /só existem para comandos claude, codex, agy e gemini/);
 
   // cópia de mim herda a minha conta (mesmo CLI)
   await ok(M("recruit", "--replace", "Chefe", "--account", "Work")).catch(() => {});

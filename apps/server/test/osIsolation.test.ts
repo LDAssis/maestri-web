@@ -228,11 +228,11 @@ test("buildPtyEnv (linux): lista branca, nada do ambiente do servidor e nunca o 
   assert.deepEqual(scrubbedEnv({ MAESTRI_TOKEN: "s", PATH: "/p", SEGREDO: "z", HOME: "/h" }, "linux"), { PATH: "/p", HOME: "/h" });
 });
 
-test("isolatedArgv: setpriv com uid/gid, grupos do usuário (--init-groups), no-new-privs, env -i com a lista branca e umask 027", () => {
+test("isolatedArgv: setpriv com uid/gid, grupos do usuário (--init-groups), no-new-privs, env -i com a lista branca e umask 007", () => {
   const run = { user: "mp-x", uid: 20001, gid: 20001, home: "/h", tmp: "/t", scope: [] as string[] };
   const a = isolatedArgv(run, ["HOME=/h", "PATH=/usr/bin"]);
   assert.equal(a.file, "/usr/bin/setpriv");
-  assert.deepEqual(a.args, ["--reuid=20001", "--regid=20001", "--init-groups", "--no-new-privs", "env", "-i", "HOME=/h", "PATH=/usr/bin", "bash", "-c", "umask 027; exec bash --login -i"]);
+  assert.deepEqual(a.args, ["--reuid=20001", "--regid=20001", "--init-groups", "--no-new-privs", "env", "-i", "HOME=/h", "PATH=/usr/bin", "bash", "-c", "umask 007; exec bash --login -i"]);
   const b = isolatedArgv({ ...run, scope: ["systemd-run", "--scope", "--quiet", "--slice=mp-x.slice", "--"] }, ["A=1"]);
   assert.equal(b.file, "systemd-run");
   assert.deepEqual(b.args.slice(0, 6), ["--scope", "--quiet", "--slice=mp-x.slice", "--", "/usr/bin/setpriv", "--reuid=20001"]);
@@ -602,4 +602,79 @@ test("sessão: gate escreve a mensagem em vez de iniciar o agente; o PTY recebe 
   sm.kill("px", "bloq");
   assert.equal(tokens.size(), 0);
   assert.deepEqual(fs.readdirSync(path.join(tmp, "tok-sess")), []);
+});
+
+// ---------- conta gemini (agy + gemini-cli) ----------
+const { accountProgramOf } = await import("../src/resume.js");
+const { linkGeminiHome } = await import("../src/runAs.js");
+const { GEMINI_LINK_ENV } = await import("../src/accounts.js");
+
+test("accountProgramOf: claude, codex e gemini (agy e gemini-cli dividem ~/.gemini), com wrappers e sh -c", () => {
+  for (const [cmd, want] of [
+    ["claude", "claude"], ["/usr/bin/codex --flag", "codex"], ["agy", "gemini"], ["gemini", "gemini"], ["env FOO=1 agy", "gemini"],
+    ["/root/.local/bin/agy", "gemini"], ["sh -c \"agy\"", "gemini"], ["opencode", null], ["bash", null], ["", null],
+  ] as const) assert.equal(accountProgramOf(cmd), want, cmd);
+  assert.equal(accountProgramOf(undefined), null);
+});
+
+test("conta gemini: terminal agy/gemini usa Padrão do dono pelo LINK ~/.gemini (não por variável); sem liberação bloqueia", () => {
+  const w = world();
+  w.accounts.create("gemini", STANDARD_ACCOUNT);
+  assert.equal(w.accounts.checkProgram("gemini"), "gemini");
+  assert.deepEqual(w.accounts.list().map((a) => `${a.program}/${a.name}`), ["gemini/Padrão"]);
+  const dir = w.accounts.dir("gemini", "Padrão");
+  assert.equal((w.access.resolve(w.proj, "agy", undefined) as any).blocked, NO_ACCOUNT_MESSAGE);
+  assert.equal((w.access.resolve(w.proj, "gemini", "Default") as any).blocked, NO_ACCOUNT_MESSAGE);
+  w.access.setGrants(w.dono, [{ program: "gemini", name: "Padrão" }]);
+  assert.deepEqual((w.access.resolve(w.proj, "agy", undefined) as any).env, { [GEMINI_LINK_ENV]: dir });
+  assert.deepEqual((w.access.resolve(w.proj, "env X=1 gemini", "Default") as any).env, { [GEMINI_LINK_ENV]: dir });
+  // uma conta só para os dois CLIs: um grupo só
+  assert.ok(w.sys.users.get("mp-proj-a")!.groups.has(w.iso.groupFor("gemini", "Padrão")));
+  assert.deepEqual(w.access.sharedDirs(w.proj), [dir]);
+  // projeto externo: nunca mexe no ~/.gemini do root (sem link)
+  w.proj.isolated = false;
+  assert.deepEqual(w.access.resolve(w.proj, "agy", undefined), { env: {} });
+  assert.equal(w.accounts.resolveFor("agy", "Padrão"), "Padrão");
+  assert.throws(() => w.accounts.resolveFor("bash", "Padrão"), /claude, codex, agy e gemini/);
+  // dono admin: gemini também liberado automaticamente
+  w.proj.isolated = true;
+  w.proj.ownerId = w.admin.id;
+  assert.deepEqual((w.access.resolve(w.proj, "agy", undefined) as any).env, { [GEMINI_LINK_ENV]: dir });
+});
+
+test("linkGeminiHome: cria o link, repointa, guarda um .gemini de verdade ao lado e remove sem conta", { skip: isWindows ? "symlink" : false }, () => {
+  const home = fs.mkdtempSync(path.join(tmp, "gh-"));
+  const a = path.join(tmp, "conta-a");
+  const b = path.join(tmp, "conta-b");
+  fs.mkdirSync(a);
+  fs.mkdirSync(b);
+  linkGeminiHome(home, null, null, a);
+  assert.equal(fs.readlinkSync(path.join(home, ".gemini")), a);
+  linkGeminiHome(home, null, null, a); // idempotente
+  linkGeminiHome(home, null, null, b);
+  assert.equal(fs.readlinkSync(path.join(home, ".gemini")), b);
+  linkGeminiHome(home, null, null, ""); // revogada: tira o link
+  assert.ok(!fs.existsSync(path.join(home, ".gemini")));
+  fs.mkdirSync(path.join(home, ".gemini"));
+  fs.writeFileSync(path.join(home, ".gemini", "dado-do-projeto"), "x");
+  linkGeminiHome(home, null, null, ""); // sem conta e sem link: não mexe no diretório de verdade
+  assert.ok(fs.existsSync(path.join(home, ".gemini", "dado-do-projeto")));
+  linkGeminiHome(home, null, null, a); // com conta: guarda o diretório do projeto ao lado
+  assert.equal(fs.readlinkSync(path.join(home, ".gemini")), a);
+  const kept = fs.readdirSync(home).find((n) => n.startsWith(".gemini.local-"))!;
+  assert.ok(fs.existsSync(path.join(home, kept, "dado-do-projeto")));
+});
+
+test("sessão: a chave reservada da conta gemini nunca chega ao terminal (e projeto não isolado não ganha link)", { skip: skipPty }, async () => {
+  const target = path.join(tmp, "conta-g");
+  fs.mkdirSync(target);
+  const tokens = new TerminalTokens(path.join(tmp, "tok-g"));
+  const sm = new SessionManager({ apiUrl: () => "http://x/api", token: "", tokens, env: () => ({ [GEMINI_LINK_ENV]: target }) } as any);
+  const cwd = fs.mkdtempSync(path.join(tmp, "cwd-"));
+  const s = sm.ensure("pg", "n", { cwd, cmd: "echo LINK[$" + GEMINI_LINK_ENV + "]" });
+  for (let i = 0; i < 100 && !/LINK\[\]/.test(s.scrollback); i++) await sleep(50);
+  assert.match(s.scrollback, /LINK\[\]/);
+  const own = path.join(process.env.HOME || "/nonexistent", ".gemini");
+  assert.ok(!fs.existsSync(own) || !fs.lstatSync(own).isSymbolicLink() || fs.readlinkSync(own) !== target, "o HOME do servidor não vira link");
+  sm.kill("pg", "n");
 });

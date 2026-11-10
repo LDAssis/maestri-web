@@ -7,7 +7,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { ApiError } from "./agents.js";
-import { DEFAULT_ACCOUNT, type AccountProgram, type AccountStore } from "./accounts.js";
+import { DEFAULT_ACCOUNT, GEMINI_LINK_ENV, STANDARD_ACCOUNT, type AccountProgram, type AccountStore } from "./accounts.js";
 import { killGroup } from "./sessions.js";
 
 export const CLI_IDS = ["claude", "codex", "agy", "opencode", "gemini"] as const;
@@ -37,7 +37,7 @@ export interface CliDef {
   loginArgs?: string[];
   logoutArgs?: string[];
   statusCheck: (ctx: Ctx) => Promise<StatusResult>;
-  program?: AccountProgram; // claude/codex: aceitam conta (CLAUDE_CONFIG_DIR / CODEX_HOME)
+  program?: AccountProgram; // claude/codex/gemini(agy+gemini-cli): aceitam conta (CLAUDE_CONFIG_DIR / CODEX_HOME / link ~/.gemini)
   waitFor?: RegExp; // saída que pede algo ao usuário (código colado / menu) => waiting_input
   autoReply?: { re: RegExp; send: string }[]; // responde sozinho a menus com a resposta padrão (cada um uma vez)
   pollStatus?: boolean; // TUI que não sai ao terminar o login: confere o status depois do input e encerra quando logou
@@ -162,6 +162,7 @@ export const CATALOG: CliDef[] = [
     installCmd: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
     versionArgs: ["--version"],
     loginArgs: [], // o login acontece dentro da TUI: rodar `agy` sem argumentos
+    program: "gemini", // agy e gemini-cli dividem ~/.gemini
     waitFor: /(authorization code|paste)/i,
     autoReply: [{ re: /select login method/i, send: "\r" }], // padrão: "1. Google OAuth"
     pollStatus: true,
@@ -199,6 +200,7 @@ export const CATALOG: CliDef[] = [
     installCmd: "npm install -g @google/gemini-cli",
     versionArgs: ["--version"],
     loginArgs: [], // TUI: confiar na pasta -> método de login (padrão "Sign in with Google") -> URL + código colado
+    program: "gemini",
     waitFor: /enter the authorization code/i,
     // A TUI desenha o link dos Termos (geminicli.com/.../tos-privacy) antes da URL OAuth; um retry imprime URL nova
     urlRe: /https:\/\/accounts\.google\.com\/o\/oauth2\/[^\s"'<>]+(?=\s)/,
@@ -209,7 +211,7 @@ export const CATALOG: CliDef[] = [
     pollStatus: true,
     async statusCheck({ bin, env }) {
       if (env.GEMINI_API_KEY) return { loggedIn: true, detail: "GEMINI_API_KEY" };
-      const root = env.GEMINI_CLI_HOME || homeDir();
+      const root = env.GEMINI_CLI_HOME || env.HOME || homeDir();
       if (nonEmptyFile(path.join(root, ".gemini", "oauth_creds.json"))) return { loggedIn: true, detail: "oauth_creds.json" };
       // sem credencial conhecida: o modo headless sai com 41 (FatalAuthenticationError) quando não há login
       const r = await run(bin, ["-p", "ping", "--output-format", "json"], env, checkTimeout());
@@ -271,7 +273,8 @@ const CODE_RE = /\b(?=[A-Z0-9-]*[A-Z])[A-Z0-9]{4}-[A-Z0-9]{4,5}\b/; // ABCD-1234
 export class CliTools {
   private jobs = new Map<string, Live>();
 
-  constructor(private accounts: AccountStore) {}
+  // isolated: com o isolamento no SO ligado o login do /root não vale para os projetos; o menu age na conta "Padrão" (ou na escolhida)
+  constructor(private accounts: AccountStore, private opts: { isolated?: boolean } = {}) {}
 
   installEnabled() {
     return process.env.MAESTRI_CLI_INSTALL !== "0";
@@ -285,7 +288,12 @@ export class CliTools {
   }
 
   // Conta pedida (só claude/codex; "Default" = login global do CLI) -> nome canônico e env
-  private resolveAccount(d: CliDef, raw: unknown): { name?: string; env: Record<string, string> } {
+  private resolveAccount(d: CliDef, raw: unknown): { name?: string; env: Record<string, string>; missing?: boolean } {
+    const isDefault = raw === undefined || raw === null || raw === "" || (typeof raw === "string" && raw.trim().toLowerCase() === DEFAULT_ACCOUNT.toLowerCase());
+    if (this.opts.isolated && d.program && isDefault) {
+      const std = this.accounts.find(d.program, STANDARD_ACCOUNT);
+      return std && std !== DEFAULT_ACCOUNT ? { name: std, env: this.accounts.envForProgram(d.program, std) } : { env: {}, missing: true };
+    }
     if (raw === undefined || raw === null || raw === "") return { env: {} };
     if (typeof raw !== "string") throw new ApiError(400, "account deve ser texto.");
     if (!d.program) {
@@ -298,9 +306,37 @@ export class CliTools {
   }
 
   private env(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...process.env, PATH: cliPath(), ...extra };
+    const { [GEMINI_LINK_ENV]: link, ...rest } = extra;
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: cliPath(), ...rest };
     if (isWindows) env.Path = env.PATH;
+    if (link) {
+      // agy só respeita HOME: o job roda com um HOME de passagem cujo .gemini é um link para a pasta da conta
+      try {
+        env.HOME = this.geminiHolder(link);
+      } catch {}
+    }
     return env;
+  }
+
+  private geminiHolder(target: string) {
+    const holder = path.join(path.dirname(path.dirname(target)), ".holders", "gemini-" + path.basename(target));
+    fs.mkdirSync(holder, { recursive: true, mode: 0o700 });
+    const l = path.join(holder, ".gemini");
+    try {
+      if (fs.readlinkSync(l) === target) return holder;
+      fs.unlinkSync(l);
+    } catch {}
+    fs.symlinkSync(target, l, "dir");
+    return holder;
+  }
+
+  // Login/logout feitos pelo servidor (root) deixam arquivos 0600 de root: refaz dono/grupo/modo para os projetos usarem
+  private normalizeAccount(d: CliDef, account?: string) {
+    if (d.program && account) {
+      try {
+        this.accounts.normalize(d.program, account);
+      } catch {}
+    }
   }
 
   private sweep() {
@@ -347,7 +383,7 @@ export class CliTools {
     }
     return Promise.all(
       CATALOG.map(async (d) => {
-        let acc: { name?: string; env: Record<string, string> } = { env: {} };
+        let acc: { name?: string; env: Record<string, string>; missing?: boolean } = { env: {} };
         try {
           acc = this.resolveAccount(d, account); // CLI que não tem essa conta (ou não aceita contas): vale o login padrão
         } catch {}
@@ -358,7 +394,13 @@ export class CliTools {
           accountsSupported: !!d.program, installCmd: d.installCmd,
         };
         if (job) info.activeJob = ref(job);
-        if (bin) {
+        if (bin && acc.missing) {
+          // isolamento ligado e a conta "Padrão" ainda não existe: não olhar o /root (mentiria); o login a cria
+          const v = await timeoutAfter(run(bin, d.versionArgs, this.env(), checkTimeout()), checkTimeout(), { code: null, out: "" } as RunResult);
+          info.version = v.code === 0 ? lastLine(v.out) || null : null;
+          info.loggedIn = false;
+          info.loginDetail = `Conta "${STANDARD_ACCOUNT}" ainda não criada`;
+        } else if (bin) {
           const env = this.env(acc.env);
           const pr = await this.probe(d, bin, env, acc.name, refresh);
           info.version = pr.version;
@@ -479,6 +521,7 @@ export class CliTools {
       const st = await d.statusCheck({ bin, env: this.env(this.accountEnv(j)) }).catch((): StatusResult => ({ loggedIn: null }));
       if (st.loggedIn === false) return this.setState(j, "failed", { exitCode, error: "O login terminou, mas o CLI continua deslogado." });
     }
+    this.normalizeAccount(d, j.account);
     this.setState(j, "done", { exitCode });
   }
 
@@ -502,9 +545,14 @@ export class CliTools {
 
   startLogin(id: string, account?: unknown): JobRef {
     const d = def(id);
-    const acc = this.resolveAccount(d, account);
+    let acc = this.resolveAccount(d, account);
     const bin = findBin(d.bin);
     if (!bin) throw new ApiError(400, `${d.label} não está instalado.`);
+    if (acc.missing) {
+      // isolamento ligado: o login do menu vai para a conta "Padrão" (criada agora se ainda não existe), nunca para o /root
+      const name = this.accounts.create(d.program!, STANDARD_ACCOUNT);
+      acc = { name, env: this.accounts.envForProgram(d.program!, name) };
+    }
     const j = this.newJob(d.id, "login", acc.name);
     // BROWSER vazio e sem DISPLAY: o CLI imprime a URL no terminal em vez de tentar abrir um navegador
     const env = this.env({ ...acc.env, BROWSER: "", NO_COLOR: "1" });
@@ -522,9 +570,11 @@ export class CliTools {
     const d = def(id);
     if (!d.logoutArgs) throw new ApiError(400, `${d.label}: logout não suportado pelo menu.`);
     const acc = this.resolveAccount(d, account);
+    if (acc.missing) throw new ApiError(404, `Conta "${STANDARD_ACCOUNT}" ainda não existe para ${d.label}.`);
     const bin = findBin(d.bin);
     if (!bin) throw new ApiError(400, `${d.label} não está instalado.`);
     const r = await run(bin, d.logoutArgs, this.env(acc.env), 15000);
+    this.normalizeAccount(d, acc.name);
     this.invalidate(d.id);
     if (r.code !== 0) throw new ApiError(500, lastLine(r.out) || "Falha ao sair.");
     return { ok: true };
@@ -568,6 +618,7 @@ export class CliTools {
         const bin = findBin(d.bin);
         const st = bin ? await d.statusCheck({ bin, env: this.env(this.accountEnv(j)) }) : { loggedIn: null };
         if (st.loggedIn === true && active(j)) {
+          this.normalizeAccount(d, j.account);
           this.setState(j, "done", { exitCode: 0 });
           if (j.p) killGroup(j.p);
         }

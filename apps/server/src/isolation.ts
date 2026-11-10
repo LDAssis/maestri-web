@@ -322,7 +322,9 @@ export class Isolation {
 
 // Monta o argv do PTY isolado (puro: testável sem root)
 export function isolatedArgv(r: RunAs, envPairs: string[], shellArgs: string[] = ["--login", "-i"]) {
-  const inner = `umask 027; exec bash ${shellArgs.join(" ")}`;
+  // umask 007: o grupo primário do usuário é só dele, então nada muda nos arquivos do projeto; na pasta da conta (setgid, grupo da
+  // conta) o grupo precisa escrever, senão o token renovado por um projeto não pode ser regravado por outro
+  const inner = `umask 007; exec bash ${shellArgs.join(" ")}`;
   return {
     file: r.scope.length ? r.scope[0] : SETPRIV,
     args: [

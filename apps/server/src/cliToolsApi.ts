@@ -9,10 +9,11 @@ interface Deps {
   fastify: FastifyInstance;
   accounts: AccountStore;
   wsAuthorized: (socket: WebSocket, req: FastifyRequest, url: URL) => boolean;
+  isolated?: boolean; // isolamento no SO ligado: o menu opera na conta "Padrão", não no /root
 }
 
-export function registerCliToolsApi({ fastify, accounts, wsAuthorized }: Deps) {
-  const tools = new CliTools(accounts);
+export function registerCliToolsApi({ fastify, accounts, wsAuthorized, isolated }: Deps) {
+  const tools = new CliTools(accounts, { isolated });
   fastify.addHook("onClose", async () => tools.killAll());
 
   // Corpo/param nunca vão para o log (o texto do input pode ser um código de login)
