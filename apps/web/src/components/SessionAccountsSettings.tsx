@@ -135,10 +135,14 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
           <UserCog className="h-3.5 w-3.5 text-indigo-400" /> Contas de CLI
         </div>
         <p className="mb-2 text-[11px] text-slate-400">
-          Cada conta tem um diretório de configuração isolado (CLAUDE_CONFIG_DIR / CODEX_HOME). Depois de criar, recrute um agente na conta (<code>maestri recruit --account</code>) e faça o login rodando o CLI naquele terminal. &quot;Default&quot; é o login existente.
+          Cada conta tem um diretório de configuração isolado (CLAUDE_CONFIG_DIR / CODEX_HOME). Depois de criar, recrute um agente na conta (<code>maestri recruit --account</code>) e faça o login rodando o CLI naquele terminal. &quot;Padrão&quot; é o login original do servidor, liberado a todo administrador. Cada usuário só vê as contas que um admin liberou para ele.
         </p>
         <ul className="mb-2 space-y-1" aria-label="Contas de CLI">
-          {accounts.length === 0 && <li className="text-[11px] text-slate-500">Nenhuma conta criada além de Default.</li>}
+          {accounts.length === 0 && (
+            <li role="status" className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
+              Nenhuma conta de assinatura liberada para este projeto. Peça a um administrador para liberar uma conta ao dono do projeto (Usuários e acessos → Contas).
+            </li>
+          )}
           {accounts.map((a) => {
             const k = `${a.program}/${a.name}`;
             return (
@@ -176,7 +180,6 @@ export default function SessionAccountsSettings({ projectId }: { projectId: stri
           <p className="text-[11px] text-slate-500">Só administradores criam ou apagam contas.</p>
         )}
         {error && <div role="alert" className="mt-1.5 text-[11px] text-amber-300">{error}</div>}
-        {notice && <div role="status" className="mt-1.5 text-[11px] text-sky-300">{notice}</div>}
         {notice && <div role="status" className="mt-1.5 text-[11px] text-sky-300">{notice}</div>}
       </div>
     </div>

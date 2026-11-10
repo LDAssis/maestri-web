@@ -82,7 +82,7 @@ apps/web (Next.js :3000)  ──HTTP/WS──►  apps/server (Fastify :4000)
                       terminal de cada agente ──────┘  CLI `maestri` (HTTP) com MAESTRI_* no ambiente
 ```
 
-- Cada terminal de agente roda com as variáveis `MAESTRI_API_URL`, `MAESTRI_PROJECT_ID`, `MAESTRI_NODE_ID`, `MAESTRI_TOKEN` e `MAESTRI_CLI` (caminho absoluto do binário) e com `apps/server/bin` no `PATH` — é assim que o agente enxerga a equipe e age no canvas.
+- Cada terminal de agente roda com as variáveis `MAESTRI_API_URL`, `MAESTRI_PROJECT_ID`, `MAESTRI_NODE_ID`, `MAESTRI_TOKEN_FILE` (arquivo com o token DESTE terminal) e `MAESTRI_CLI` (caminho absoluto do binário) e com `apps/server/bin` no `PATH` — é assim que o agente enxerga a equipe e age no canvas.
 - **Dados:** `.maestri_data/` (dentro de `REPO_PATH`) guarda projetos, canvas, configurações, rotinas, andares, anexos, contas e links entre workspaces. Projetos novos ganham uma pasta própria em `~/maestri-projects/` (`MAESTRI_PROJECTS_DIR`). Roles do projeto ficam em `<projeto>/.maestri/roles/` e andares com Git em `<projeto>/.worktrees/`.
 
 ---
@@ -158,7 +158,14 @@ As variáveis podem ficar num `.env` por app (ignorado pelo git): copie `apps/se
 | `MAESTRI_TOKEN` | — | Token de acesso à API e aos WebSockets (vazio = sem autenticação, só para uso local) |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | Origens CORS permitidas, separadas por vírgula (com `MAESTRI_TOKEN` definido, qualquer Origin é aceito) |
 | `REPO_PATH` | raiz do repositório | Diretório do projeto inicial; `.maestri_data/` fica dentro dele |
-| `MAESTRI_PROJECTS_DIR` | `~/maestri-projects` | Onde nascem as pastas dos projetos criados pela UI |
+| `MAESTRI_PROJECTS_DIR` | `~/maestri-projects` (com isolamento: `/srv/maestri/projects`) | Onde nascem as pastas dos projetos criados pela UI |
+| `MAESTRI_ISOLATION` | — | `1` liga o isolamento no SO (Linux, servidor como root): um usuário Linux por projeto. Veja "Isolamento no SO" abaixo |
+| `MAESTRI_ISOLATION_ROOT` | `/srv/maestri` | Raiz do isolamento: `projects/`, `home/<usuário>`, `tmp/<usuário>`, `accounts/`, `backups/` |
+| `MAESTRI_ACCOUNTS_DIR` | `<raiz>/accounts` | Contas de assinatura (claude/codex) com isolamento; sem ele ficam em `.maestri_data/accounts` |
+| `MAESTRI_LIMIT_MEMORY` / `MAESTRI_LIMIT_TASKS` / `MAESTRI_LIMIT_CPU` | `2G` / `512` / `200%` | Limites de cgroup (MemoryMax, TasksMax, CPUQuota) por projeto isolado; `MAESTRI_ISOLATION_CGROUP=0` desliga |
+| `MAESTRI_PTY_PATH` | — | Pastas extras (`:`) no PATH dos terminais isolados, p.ex. onde o `claude` está instalado para todos (o usuário do projeto não alcança `/root`) |
+| `MAESTRI_PTY_PASSTHROUGH` | — | Variáveis do servidor que o admin libera explicitamente para os terminais (p.ex. `HTTPS_PROXY,NO_PROXY`); nada mais do ambiente do servidor entra no PTY |
+| `MAESTRI_TOK_DIR` | `/run/maestri/tok` | Onde ficam os arquivos dos tokens por terminal (dono = usuário do projeto, 0400) |
 | `SHELL` | `/bin/bash` | Shell dos terminais dos agentes |
 | `MAESTRI_PORTAL_ALLOW_PRIVATE` | — | `1` libera o bloqueio de metadata/link-local e da API do próprio servidor nos portais (localhost em outras portas já é livre); necessário para abrir a própria UI do Maestri Web dentro de um portal |
 | `MAESTRI_PORTAL_NO_SANDBOX` | — | Qualquer valor inicia o Chromium com `--no-sandbox` (necessário em alguns contêineres/root) |
@@ -183,7 +190,14 @@ As variáveis podem ficar num `.env` por app (ignorado pelo git): copie `apps/se
 
 ### Dentro dos terminais (definidas pelo servidor)
 
-`MAESTRI_API_URL`, `MAESTRI_PROJECT_ID`, `MAESTRI_NODE_ID`, `MAESTRI_TOKEN` e `MAESTRI_CLI`. Se `maestri` não for encontrado no `PATH`, use `"$MAESTRI_CLI"`.
+`MAESTRI_API_URL`, `MAESTRI_PROJECT_ID`, `MAESTRI_NODE_ID`, `MAESTRI_TOKEN_FILE` e `MAESTRI_CLI`. Se `maestri` não for encontrado no `PATH`, use `"$MAESTRI_CLI"`. O token interno do servidor (`MAESTRI_TOKEN`) nunca entra no terminal.
+
+### Isolamento no SO (`MAESTRI_ISOLATION=1`)
+- **Um usuário Linux por projeto** (`mp-<id>`, uid 20000+, contador persistido). O PTY nasce por `setpriv --reuid --regid --init-groups --no-new-privs env -i …` (sem os grupos do root, sem setuid), `umask 027`, HOME e TMPDIR próprios e só uma lista branca de variáveis. Limites por projeto via cgroup (`systemd-run --scope` + slice `mp-<id>.slice`).
+- **Token por terminal** (`mt_…`): vale só para `/api/projects/<seu projeto>/nodes/<seu nó>/…` e `POST …/usage/report`; nada de admin, usuários, outros projetos, workspaces entre projetos ou configurações globais (403). Morre com o PTY.
+- **Pastas externas** (admin, `repoPath` fora de `projects/`) continuam rodando como root, com o selo "sem isolamento" (`isolated:false`), mas também com ambiente limpo e token por terminal.
+- **Contas de assinatura** ficam em `<raiz>/accounts/<programa>/<nome>` (root:`mac-<programa>-<nome>`, 2770). O admin libera contas por usuário (`GET/PUT /api/admin/users/:id/accounts`); o projeto usa as do dono (admin: todas) e o usuário do projeto entra/sai do grupo da conta. Revogar tira o grupo e reinicia os terminais do projeto. O login do admin vira a conta "Padrão".
+- **Migração** dos projetos existentes: `npx tsx apps/server/scripts/migrate-isolation.ts` (dry-run por padrão; `--apply` com o serviço parado, `--project <id>` para um só). Idempotente, faz backup em `<raiz>/backups`.
 
 ### Configurações na interface
 Comando de inicialização e atalhos de CLI (globais e por projeto), retomada de sessão, contas de CLI, roles, rotinas, notificações do sistema e organização da barra lateral.

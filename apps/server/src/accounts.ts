@@ -3,10 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { ApiError } from "./agents.js";
 import { programOf } from "./resume.js";
+import type { Isolation } from "./isolation.js";
 
 export const ACCOUNT_PROGRAMS = ["claude", "codex"] as const;
 export type AccountProgram = (typeof ACCOUNT_PROGRAMS)[number];
 export const DEFAULT_ACCOUNT = "Default";
+// Fase 3: o login do admin (/root/.claude, /root/.codex) vira esta conta, liberada a todo admin; "Default" nos projetos isolados aponta para ela
+export const STANDARD_ACCOUNT = "Padrão";
 // Variável de ambiente que isola o login de cada CLI
 const ENV_VAR: Record<AccountProgram, string> = { claude: "CLAUDE_CONFIG_DIR", codex: "CODEX_HOME" };
 const NAME_RE = /^[\p{L}\d][\p{L}\d _.-]{0,39}$/u;
@@ -14,10 +17,15 @@ const NAME_RE = /^[\p{L}\d][\p{L}\d _.-]{0,39}$/u;
 const lc = (s: string) => s.trim().toLowerCase();
 
 export class AccountStore {
-  constructor(private dataDir: string) {}
+  // accountsDir: raiz das contas (padrão <dataDir>/accounts; com isolamento, /srv/maestri/accounts)
+  constructor(private dataDir: string, private opts: { accountsDir?: string; iso?: Isolation; onChange?: () => void } = {}) {}
+
+  get accountsRoot() {
+    return this.opts.accountsDir ?? path.join(this.dataDir, "accounts");
+  }
 
   private root(program: AccountProgram) {
-    return path.join(this.dataDir, "accounts", program);
+    return path.join(this.accountsRoot, program);
   }
 
   dir(program: AccountProgram, name: string) {
@@ -57,11 +65,17 @@ export class AccountStore {
     if (this.find(program, n)) throw new ApiError(409, `Já existe a conta "${n}" para ${program}.`);
     // Cada conta guarda o login do CLI: só o dono do servidor entra (0700), sem depender do umask
     fs.mkdirSync(this.dir(program, n), { recursive: true, mode: 0o700 });
-    for (const d of [this.dir(program, n), this.root(program), path.join(this.dataDir, "accounts")]) {
-      try {
-        fs.chmodSync(d, 0o700);
-      } catch {}
+    if (this.opts.iso?.enabled) {
+      // Isolamento: pasta root:<grupo da conta> 2770; os projetos liberados entram no grupo
+      this.opts.iso.ensureAccountDir(program, n, this.dir(program, n));
+    } else {
+      for (const d of [this.dir(program, n), this.root(program), this.accountsRoot]) {
+        try {
+          fs.chmodSync(d, 0o700);
+        } catch {}
+      }
     }
+    this.opts.onChange?.();
     return n;
   }
 
@@ -69,6 +83,8 @@ export class AccountStore {
     const real = this.find(program, name);
     if (!real || real === DEFAULT_ACCOUNT) throw new ApiError(404, `Conta "${name}" não encontrada para ${program}.`);
     fs.rmSync(this.dir(program, real), { recursive: true, force: true });
+    this.opts.iso?.enabled && this.opts.iso.removeAccountGroup(program, real);
+    this.opts.onChange?.();
     return real;
   }
 

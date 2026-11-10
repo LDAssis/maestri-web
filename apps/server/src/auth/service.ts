@@ -13,6 +13,8 @@ declare module "fastify" {
     authUser?: User | null;
     authInternal?: boolean;
     authSessionId?: string;
+    // Token por terminal (Fase 3): só vale para o próprio projeto/nó; nunca é admin nem usuário
+    authTerminal?: { projectId: string; nodeId: string; ptyId: string };
   }
 }
 

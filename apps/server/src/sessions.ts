@@ -1,5 +1,6 @@
 import pty from "node-pty";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WebSocket } from "ws";
@@ -7,6 +8,8 @@ import { captureResume, resumeCommand, withModel, withUsageSettings } from "./re
 import { usageEnabled, userStatusLine } from "./usage.js";
 import { ensureAgentContext } from "./agentContext.js";
 import type { SessionHistory } from "./sessionHistory.js";
+import { TerminalTokens } from "./terminalTokens.js";
+import { isolatedArgv, type RunAs } from "./isolation.js";
 
 const isWindows = process.platform === "win32";
 const gitBashPath = "C:\\Program Files\\Git\\bin\\bash.exe";
@@ -52,25 +55,74 @@ export interface Session {
   // Cauda da saída (sem tratamento) para achar a linha de retomada que o agente imprime ao sair
   tail: string;
   idleTimer?: NodeJS.Timeout; // dispara onIdle depois de um tempo sem saída
+  ptyId: string; // token por terminal (Fase 3): revogado quando este PTY acaba
 }
 
-function spawnPty(cwd: string, cols: number, rows: number, extraEnv: Record<string, string>) {
+// Ambiente do PTY. Linux: lista branca (nada do ambiente do servidor: MAESTRI_TOKEN, segredos do /etc/maestri-web.env...);
+// demais plataformas (dev): o ambiente atual sem o token interno. O token do terminal vai por arquivo (MAESTRI_TOKEN_FILE).
+export function buildPtyEnv(i: { base?: NodeJS.ProcessEnv; extra: Record<string, string>; runAs: RunAs | null; platform?: string; bin?: string }): Record<string, string> {
+  const base = i.base ?? process.env;
+  const platform = i.platform ?? process.platform;
+  const bin = i.bin ?? binDir;
+  const out: Record<string, string> = {};
+  if (platform === "linux") {
+    // o usuário do projeto não alcança /root: nada dele no PATH
+    const basePath = (base.PATH || "/usr/local/bin:/usr/bin:/bin").split(path.delimiter).filter((d) => d && !(i.runAs && d.startsWith("/root")));
+    Object.assign(out, {
+      // MAESTRI_PTY_PATH: pastas extras (ex.: onde o claude está instalado para todos, já que o usuário do projeto não alcança /root)
+      PATH: [bin, ...basePath, ...(base.MAESTRI_PTY_PATH || "").split(path.delimiter).filter(Boolean)].join(path.delimiter),
+      LANG: base.LANG || "C.UTF-8",
+      TERM: "xterm-256color",
+      COLORTERM: "truecolor",
+      HOME: i.runAs ? i.runAs.home : base.HOME || os.homedir(),
+      USER: i.runAs ? i.runAs.user : base.USER || os.userInfo().username,
+      LOGNAME: i.runAs ? i.runAs.user : base.LOGNAME || base.USER || os.userInfo().username,
+      SHELL: i.runAs ? "/bin/bash" : base.SHELL || "/bin/bash",
+    });
+    if (base.LC_ALL) out.LC_ALL = base.LC_ALL;
+    if (base.TZ) out.TZ = base.TZ;
+    const tmp = i.runAs ? i.runAs.tmp : base.TMPDIR;
+    if (tmp) out.TMPDIR = tmp;
+    // extras que o admin libera explicitamente (ex.: proxies): MAESTRI_PTY_PASSTHROUGH=HTTPS_PROXY,NO_PROXY
+    for (const k of (base.MAESTRI_PTY_PASSTHROUGH || "").split(",").map((x) => x.trim()).filter(Boolean)) if (base[k] !== undefined && k !== "MAESTRI_TOKEN") out[k] = base[k]!;
+  } else {
+    for (const [k, v] of Object.entries(base)) if (v !== undefined && k !== "MAESTRI_TOKEN") out[k] = v;
+    Object.assign(out, { ...(isWindows ? { Path: enrichedPath } : {}), PATH: [bin, ...extraPaths, base.PATH || ""].join(path.delimiter), TERM: "xterm-256color", COLORTERM: "truecolor" });
+  }
+  for (const [k, v] of Object.entries(i.extra)) if (k !== "MAESTRI_TOKEN") out[k] = v;
+  return out;
+}
+
+interface SpawnCtx {
+  projectId: string;
+  nodeId: string;
+  runAs: RunAs | null;
+  tokens: TerminalTokens;
+  sharedDirs?: string[]; // pastas de conta (compartilhadas por grupo) que o servidor pode preparar para o agente
+}
+
+function spawnPty(cwd: string, cols: number, rows: number, extraEnv: Record<string, string>, ctx: SpawnCtx) {
   const shellArgs = defaultShell.includes("bash") ? ["--login", "-i"] : isWindows ? ["-NoLogo"] : [];
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    ...(isWindows ? { Path: enrichedPath } : {}),
-    PATH: enrichedPath,
-    TERM: "xterm-256color",
-    COLORTERM: "truecolor",
-    ...extraEnv,
-  };
-  // Instruções do canvas para o claude/codex/opencode/agy que rodar neste terminal (inclui contas por config dir)
-  ensureAgentContext(env);
-  // statusLine do usuário (mesma config do claude deste terminal): o usage-report encadeia nela em vez de substituí-la
-  const userSl = usageEnabled(env) ? userStatusLine(env) : undefined;
-  if (userSl) env.MAESTRI_USER_STATUSLINE = userSl;
-  else delete env.MAESTRI_USER_STATUSLINE;
-  return pty.spawn(defaultShell, shellArgs, { name: "xterm-256color", cols, rows, cwd, env });
+  const { runAs } = ctx;
+  const t = ctx.tokens.issue({ projectId: ctx.projectId, nodeId: ctx.nodeId, uid: runAs?.uid ?? null, gid: runAs?.gid ?? null });
+  try {
+    const env = buildPtyEnv({ extra: { ...extraEnv, MAESTRI_TOKEN_FILE: t.file }, runAs });
+    // Instruções do canvas para o claude/codex/opencode/agy que rodar neste terminal (inclui contas por config dir)
+    // (o liga/desliga vem do ambiente do SERVIDOR: o PTY não herda NODE_ENV nem MAESTRI_AGENT_CONTEXT)
+    ensureAgentContext({ ...env, NODE_ENV: process.env.NODE_ENV, MAESTRI_AGENT_CONTEXT: process.env.MAESTRI_AGENT_CONTEXT } as NodeJS.ProcessEnv, runAs ? { uid: runAs.uid, gid: runAs.gid, shared: ctx.sharedDirs ?? [] } : undefined);
+    // statusLine do usuário (mesma config do claude deste terminal): o usage-report encadeia nela em vez de substituí-la
+    const userSl = usageEnabled(process.env) ? userStatusLine(env) : undefined;
+    if (userSl) env.MAESTRI_USER_STATUSLINE = userSl;
+    else delete env.MAESTRI_USER_STATUSLINE;
+    if (!runAs) return { p: pty.spawn(defaultShell, shellArgs, { name: "xterm-256color", cols, rows, cwd, env }), ptyId: t.ptyId };
+    // Projeto isolado: setpriv troca uid/gid (e zera os grupos do root), env -i entrega SÓ a lista branca; nada herdado do servidor
+    const a = isolatedArgv(runAs, Object.entries(env).map(([k, v]) => k + "=" + v), shellArgs);
+    const p = pty.spawn(a.file, a.args, { name: "xterm-256color", cols, rows, cwd, env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" } });
+    return { p, ptyId: t.ptyId };
+  } catch (e) {
+    ctx.tokens.revoke(t.ptyId);
+    throw e;
+  }
 }
 
 // Controle em frame BINÁRIO (a saída do PTY segue em texto): tamanho aplicado ao PTY
@@ -109,15 +161,29 @@ export class SessionManager {
       model?: (projectId: string, nodeId: string) => string | undefined; // data.model do nó (vazio = padrão do CLI)
       // Terminal ficou ocioso depois de produzir saída (fim de um "turno" do agente); usado p/ detectar PRs dos andares
       onIdle?: (projectId: string, nodeId: string) => void;
+      // Fase 3: tokens por terminal, identidade de SO do projeto e bloqueio quando não há conta de assinatura liberada
+      tokens?: TerminalTokens;
+      runAs?: (projectId: string) => RunAs | null;
+      gate?: (projectId: string, nodeId: string) => string | null; // mensagem exibida no lugar de iniciar o agente
+      sharedDirs?: (projectId: string) => string[];
     },
-  ) {}
+  ) {
+    this.tokens = cli.tokens ?? new TerminalTokens();
+  }
+
+  readonly tokens: TerminalTokens;
+
+  private spawn(projectId: string, nodeId: string, cwd: string, cols: number, rows: number) {
+    return spawnPty(cwd, cols, rows, { ...this.env(projectId, nodeId), ...(this.cli.env?.(projectId, nodeId) ?? {}) }, {
+      projectId, nodeId, runAs: this.cli.runAs?.(projectId) ?? null, tokens: this.tokens, sharedDirs: this.cli.sharedDirs?.(projectId),
+    });
+  }
 
   private env(projectId: string, nodeId: string) {
     return {
       MAESTRI_API_URL: this.cli.apiUrl(),
       MAESTRI_PROJECT_ID: projectId,
       MAESTRI_NODE_ID: nodeId,
-      MAESTRI_TOKEN: this.cli.token,
       // Caminho absoluto do CLI: o recurso quando `maestri` não é encontrado no PATH ("$MAESTRI_CLI")
       MAESTRI_CLI: path.join(binDir, "maestri"), // sem .cmd: só existe o script sh (Git Bash no Windows)
     };
@@ -189,6 +255,7 @@ export class SessionManager {
     clearTimeout(s.idleTimer);
     const k = this.key(s.projectId, s.nodeId);
     if (this.sessions.get(k) === s) this.sessions.delete(k);
+    this.tokens.revoke(s.ptyId);
     this.broadcast(s, `\r\n\x1b[33m[PTY finalizado (exitCode: ${exitCode})]\x1b[0m\r\n`);
     for (const c of s.clients) {
       try {
@@ -210,16 +277,18 @@ export class SessionManager {
     const rows = 24;
     const h = this.cli.history;
     let cmd = this.compose(projectId, nodeId, opts.cmd);
+    const blocked = this.cli.gate?.(projectId, nodeId) ?? null;
     if (h) {
       if (opts.fresh) h.reset(projectId, nodeId);
       else if (h.started(projectId, nodeId) && this.cli.resume?.(projectId) !== false) cmd = resumeCommand(cmd, h.resume(projectId, nodeId));
       h.markStarted(projectId, nodeId);
     }
-    const p = spawnPty(opts.cwd, cols, rows, { ...this.env(projectId, nodeId), ...(this.cli.env?.(projectId, nodeId) ?? {}) });
+    if (blocked) cmd = "";
+    const { p, ptyId } = this.spawn(projectId, nodeId, opts.cwd, cols, rows);
     s = {
-      projectId, nodeId, pty: p, clients: new Set(), sizes: new Map(), cwd: opts.cwd, cmd, baseCmd: opts.cmd,
+      projectId, nodeId, pty: p, ptyId, clients: new Set(), sizes: new Map(), cwd: opts.cwd, cmd, baseCmd: opts.cmd,
       createdAt: new Date().toISOString(), cols, rows, dead: false, listeners: new Set(), lastOutputAt: 0, tail: "",
-      scrollback: `\r\n\x1b[32m[Maestri Web - ${isWindows ? "ConPTY" : "PTY"} Ativo]\x1b[0m Terminal pronto em: ${opts.cwd}\r\n`,
+      scrollback: `\r\n\x1b[32m[Maestri Web - ${isWindows ? "ConPTY" : "PTY"} Ativo]\x1b[0m Terminal pronto em: ${opts.cwd}\r\n` + (blocked ? `\r\n\x1b[31m${blocked}\x1b[0m\r\n` : ""),
     };
     this.sessions.set(k, s);
     this.wire(s, p);
@@ -360,10 +429,16 @@ export class SessionManager {
     // remonta a partir do comando do nó: o modelo pode ter mudado (a flag que nós mesmos pusemos não pode travar a troca)
     s.cmd = this.compose(projectId, nodeId, s.baseCmd);
     if (this.cli.history && this.cli.resume?.(projectId) !== false) s.cmd = resumeCommand(s.cmd, this.cli.history.resume(projectId, nodeId));
-    const p = spawnPty(s.cwd, s.cols, s.rows, { ...this.env(projectId, nodeId), ...(this.cli.env?.(projectId, nodeId) ?? {}) });
+    const blocked = this.cli.gate?.(projectId, nodeId) ?? null;
+    if (blocked) s.cmd = "";
+    const { p, ptyId } = this.spawn(projectId, nodeId, s.cwd, s.cols, s.rows);
+    const oldId = s.ptyId;
     s.pty = p;
+    s.ptyId = ptyId;
+    this.tokens.revoke(oldId);
     killGroup(old);
     this.push(s, "\r\n\x1b[33m[Sessão reiniciada]\x1b[0m\r\n");
+    if (blocked) this.push(s, `\r\n\x1b[31m${blocked}\x1b[0m\r\n`);
     this.wire(s, p);
     this.runCmd(s, p);
     return true;

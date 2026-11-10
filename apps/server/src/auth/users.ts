@@ -14,7 +14,7 @@ export interface User {
   createdAt: string;
   lastLoginAt: string | null;
   projects: string[]; // reservado (fase 2)
-  accounts: { program: string; name: string }[]; // reservado (fase 3)
+  accounts: { program: string; name: string }[]; // contas de assinatura liberadas (fase 3)
 }
 export interface PublicUser {
   id: string;
@@ -75,7 +75,7 @@ export class UserStore {
     this.save();
     return u;
   }
-  update(id: string, patch: Partial<Pick<User, "name" | "color" | "role" | "disabled" | "passHash" | "lastLoginAt">>) {
+  update(id: string, patch: Partial<Pick<User, "name" | "color" | "role" | "disabled" | "passHash" | "lastLoginAt" | "accounts">>) {
     const u = this.get(id);
     if (!u) return undefined;
     Object.assign(u, patch);

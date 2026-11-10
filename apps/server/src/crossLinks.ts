@@ -29,7 +29,7 @@ export class CrossLinks {
     if (!this.file) return;
     try {
       const tmp = `${this.file}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ links: this.links }, null, 2));
+      fs.writeFileSync(tmp, JSON.stringify({ links: this.links }, null, 2), { mode: 0o600 });
       fs.renameSync(tmp, this.file);
     } catch (e: any) {
       console.error("Erro ao persistir links entre workspaces:", e.message);

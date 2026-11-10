@@ -40,7 +40,11 @@ import { sweepBands } from "./team.js";
 import { registerPortalApi } from "./portalApi.js";
 import { setPortalSelfPorts } from "./portals.js";
 import { configureDesktopNotify, desktopNotifyEnabled } from "./desktopNotify.js";
-import { createProjectDir, findConflict, isInside, migrateProjects, overlaps, resolveInside } from "./projectDirs.js";
+import { createProjectDir, findConflict, isInside, migrateProjects, overlaps, realOrResolved, resolveInside } from "./projectDirs.js";
+import { Isolation, loadIsolationConfig } from "./isolation.js";
+import { TerminalTokens, terminalScopeCheck } from "./terminalTokens.js";
+import { AccountAccess, NO_ACCOUNT_MESSAGE } from "./accountAccess.js";
+import { setRunAsResolver } from "./runAs.js";
 
 // Previne queda do servidor por erros transitórios de socket (ex: EAGAIN)
 process.on("uncaughtException", (err) => {
@@ -63,6 +67,8 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
 
 // Token opcional: com ele, /api/* (exceto health) e WS exigem autenticação e o Origin é dispensado
 const authToken = process.env.MAESTRI_TOKEN || "";
+// Tokens por terminal: nascem com o PTY e morrem com ele (memória; o servidor guarda só o hash)
+export const terminalTokens = new TerminalTokens();
 
 await fastify.register(cors, { origin: authToken ? true : allowedOrigins });
 
@@ -84,6 +90,16 @@ fastify.addHook("onRequest", async (req, reply) => {
   const pathname = req.url.split("?")[0];
   if (!pathname.startsWith("/api/") || pathname === "/api/health" || isPublicDownload(req.method, pathname) || isPublicAuthRoute(req.method, pathname)) return;
   const match = /^Bearer (.+)$/.exec(req.headers.authorization || "");
+  // Token por terminal (Fase 3): só a API do próprio projeto/nó; nunca admin, usuário, outro projeto nem rota global
+  const term = terminalTokens.verify(match?.[1]);
+  if (term) {
+    const v = terminalScopeCheck(term, req.method, pathname);
+    if (!v.ok) return reply.code(v.status ?? 403).send({ error: v.error });
+    req.authInternal = false;
+    req.authUser = null;
+    req.authTerminal = { projectId: term.projectId, nodeId: term.nodeId, ptyId: term.ptyId };
+    return;
+  }
   const who = authService.authenticate(match?.[1]);
   if (!who) return reply.code(401).send({ error: "Token ausente ou inválido" });
   authService.attachReq(req, who);
@@ -95,8 +111,12 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const defaultRepo = path.resolve(process.env.REPO_PATH || repoRoot);
 const dataDir = path.resolve(defaultRepo, ".maestri_data");
 if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 }
+
+// Isolamento no SO (Fase 3): MAESTRI_ISOLATION=1 (Linux, root). Desligado = tudo como antes (dev/CI/Windows).
+export const iso = new Isolation(loadIsolationConfig(), dataDir);
+if (iso.enabled && !process.env.MAESTRI_PROJECTS_DIR) process.env.MAESTRI_PROJECTS_DIR = iso.cfg.projectsDir;
 
 // Contas, sessões e convites (Fase 1). O MAESTRI_TOKEN segue valendo como token interno dos agentes/CLI.
 export const authService = new AuthService(dataDir, authToken);
@@ -111,7 +131,7 @@ const acl = new ProjectAcl(
   },
 );
 acl.register(fastify);
-registerAdminApi({ fastify, auth: authService, acl });
+registerAdminApi({ fastify, auth: authService, acl, accountAccess: { view: (u: any) => accountAccess.view(u), setGrants: (u: any, g: any) => accountAccess.setGrants(u, g), syncOwnedBy: (id: string) => accountAccess.syncOwnedBy(id) } as unknown as AccountAccess });
 registerProjectAclApi(fastify, acl, authService);
 authService.onSetup = () => acl.migrate(); // o primeiro admin herda os projetos que ainda não têm dono
 
@@ -128,6 +148,11 @@ export interface Project {
   // Permissões (Fase 2): dono e membros (ids de usuário, sem o dono)
   ownerId?: string;
   members?: string[];
+  // Isolamento (Fase 3): usuário Linux do projeto; isolated:false = pasta externa (roda como root, selo "sem isolamento")
+  osUser?: string;
+  uid?: number;
+  gid?: number;
+  isolated?: boolean;
 }
 
 const projectsFile = path.join(dataDir, "projects.json");
@@ -176,9 +201,25 @@ projects = projects.map((p) => ({ ...p, repoPath: path.resolve(defaultRepo, p.re
 // Projetos antigos (sem ownerId) passam ao primeiro admin ativo; sem usuários ainda, migram quando o admin for criado (setup)
 acl.migrate();
 
+// Comandos do servidor (git, pre-run) rodam como o usuário do projeto isolado que contém o diretório
+setRunAsResolver((cwd) => {
+  if (!iso.enabled) return null;
+  const real = realOrResolved(cwd);
+  const p = projects.find((x) => iso.isIsolated(x) && isInside(realOrResolved(x.repoPath), real));
+  return p ? iso.runAs(p) : null;
+});
+// Ao subir: limites de cgroup de cada projeto e aviso de usuários mp-* sem projeto (nada é apagado sozinho)
+if (iso.enabled) {
+  for (const p of projects) if (iso.isIsolated(p)) iso.ensureSlice(p.osUser!);
+  const known = new Set(projects.map((p) => p.osUser).filter(Boolean));
+  const orphans = iso.listProjectUsers().filter((u) => !known.has(u));
+  if (orphans.length) console.warn(`Isolamento: usuários sem projeto (apague com userdel se não forem mais necessários): ${orphans.join(", ")}`);
+}
+
+// Todo arquivo de dados nasce 0600 (o diretório de dados é 0700): nenhum projeto isolado alcança isso
 function writeJsonAtomic(file: string, data: unknown) {
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 
@@ -197,12 +238,43 @@ const host = process.env.HOST || "127.0.0.1";
 
 // Retomada de sessão e contas de CLI (POLISH3): `canvas`/`readProjectSettings` são usados só em tempo de execução
 const sessionHistory = new SessionHistory(path.join(dataDir, "session_history.json"));
-const accounts = new AccountStore(dataDir);
+const accounts = new AccountStore(dataDir, { accountsDir: iso.enabled ? iso.cfg.accountsDir : undefined, iso, onChange: () => accountAccess.syncAll() });
+// Quem pode usar qual conta (liberação por usuário; o projeto usa as do dono) e os grupos de SO que isso implica
+export const accountAccess = new AccountAccess(accounts, iso, authService, () => projects);
+accountAccess.onRevoked = (p, _groups) => {
+  // Sessões vivas mantêm o grupo antigo: reinicia os terminais do projeto (os novos nascem sem o grupo) e avisa no canvas
+  const live = sessions.list(p.id);
+  if (!live.length) return;
+  for (const s of live) {
+    try {
+      sessions.restart(p.id, s.nodeId);
+    } catch {}
+  }
+  canvas.notify(p.id, { type: "notify", from: { nodeId: "", title: "Maestri" }, text: "Uma conta de assinatura foi revogada para este projeto: os terminais foram reiniciados." });
+};
+acl.onOwnerChange = () => accountAccess.syncAll();
+if (iso.enabled) accountAccess.syncAll();
 const attachments = new AttachmentStore(dataDir);
 export const crossLinks = new CrossLinks(path.join(dataDir, "links.json"));
 const sessions = new SessionManager({
   apiUrl: () => `http://127.0.0.1:${(fastify.server.address() as { port?: number } | null)?.port ?? port}/api`,
   token: authToken,
+  tokens: terminalTokens,
+  runAs: (projectId) => {
+    const p = projects.find((x) => x.id === projectId);
+    return p ? iso.runAs(p) : null;
+  },
+  sharedDirs: (projectId) => {
+    const p = projects.find((x) => x.id === projectId);
+    return p ? accountAccess.sharedDirs(p) : [];
+  },
+  gate: (projectId, nodeId) => {
+    const p = projects.find((x) => x.id === projectId);
+    const n = canvas.state(projectId).nodes?.find((x) => x.id === nodeId);
+    if (!p) return null;
+    const r = accountAccess.resolve(p, n?.data?.baseCmd ?? n?.data?.defaultCmd, n?.data?.account);
+    return "blocked" in r ? r.blocked : null;
+  },
   history: sessionHistory,
   // Toggle "retomar sessão" do projeto (prefs_<id>.json, separado das configurações de CLI); ligado por padrão
   resume: (projectId) => readPrefs(projectId).resumeSession !== false,
@@ -214,7 +286,10 @@ const sessions = new SessionManager({
   },
   env: (projectId, nodeId) => {
     const n = canvas.state(projectId).nodes?.find((x) => x.id === nodeId);
-    return accounts.envFor(n?.data?.baseCmd ?? n?.data?.defaultCmd, n?.data?.account);
+    const p = projects.find((x) => x.id === projectId);
+    if (!p) return accounts.envFor(n?.data?.baseCmd ?? n?.data?.defaultCmd, n?.data?.account);
+    const r = accountAccess.resolve(p, n?.data?.baseCmd ?? n?.data?.defaultCmd, n?.data?.account);
+    return "env" in r ? r.env : {};
   },
   model: (projectId, nodeId) => {
     const m = canvas.state(projectId).nodes?.find((x) => x.id === nodeId)?.data?.model;
@@ -301,7 +376,7 @@ const prPoll = setInterval(() => {
 }, Number(process.env.MAESTRI_PR_POLL_MS) || 120_000);
 prPoll.unref();
 fastify.addHook("onClose", async () => clearInterval(prPoll));
-registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds: () => projects.map((p) => p.id), settings: settingsAccess });
+registerAccountsApi({ fastify, canvas, nodeApi, accounts, projectIds: () => projects.map((p) => p.id), settings: settingsAccess, access: accountAccess, projectOf: (id) => projects.find((p) => p.id === id), canSee: (id) => acl.canSeeCurrent(id) });
 // Menu de CLIs: só admin (REST pelo guarda central; o WS do job confere aqui)
 registerCliToolsApi({ fastify, accounts, wsAuthorized: (socket, req, url) => {
   if (!wsAuthorized(socket, req, url)) return false;
@@ -426,7 +501,7 @@ fastify.put<{ Params: { id: string }; Body: any }>("/api/projects/:id/settings",
 
 // Só os projetos acessíveis; cada item traz ownerId e access (owner | member | admin). Não-admin não recebe repoPath.
 fastify.get("/api/projects", async (req) => {
-  return projects.filter((p) => acl.reqAccess(req, p)).map((p) => acl.present(req, p));
+  return projects.filter((p) => acl.reqAccess(req, p)).map((p) => ({ ...acl.present(req, p), isolated: iso.isIsolated(p) }));
 });
 
 fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }>("/api/projects", async (req, reply) => {
@@ -444,9 +519,21 @@ fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }
   while (projects.some((p) => p.id === id)) id = `proj-${Math.random().toString(36).slice(2, 8)}`;
 
   let dir: string;
+  let osInfo: { osUser: string; uid: number; gid: number } | null = null;
   if (!wantsRepoPath) {
     // Sem repoPath: pasta nova só deste projeto (com git)
     dir = await createProjectDir(name, id);
+    if (iso.enabled && iso.isManagedDir(dir)) {
+      // Isolamento: usuário Linux próprio, HOME/TMPDIR e a pasta passa a ser dele
+      try {
+        osInfo = iso.provision(id);
+        iso.claimDir(dir, osInfo.uid, osInfo.gid);
+      } catch (e: any) {
+        iso.deprovision(iso.userName(id));
+        fs.rmSync(dir, { recursive: true, force: true });
+        return reply.status(500).send({ error: `Não foi possível criar o usuário isolado do projeto: ${String(e?.message || e).split("\n")[0]}` });
+      }
+    }
   } else {
     if (typeof repoPath !== "string") return reply.status(400).send({ error: "repoPath deve ser texto." });
     try {
@@ -465,15 +552,22 @@ fastify.post<{ Body: { name: string; description?: string; repoPath?: string } }
   }
 
   // Quem cria vira o dono; token interno/dev (sem conta) entrega ao primeiro admin
-  const newProject: Project = { id, name, description, repoPath: dir, createdAt: new Date().toISOString(), ownerId: req.authUser?.id ?? acl.firstAdminId(), members: [] };
+  const newProject: Project = {
+    id, name, description, repoPath: dir, createdAt: new Date().toISOString(), ownerId: req.authUser?.id ?? acl.firstAdminId(), members: [],
+    ...(osInfo ? { osUser: osInfo.osUser, uid: osInfo.uid, gid: osInfo.gid, isolated: true } : wantsRepoPath || iso.enabled ? { isolated: false } : {}),
+  };
   projects.push(newProject);
   saveProjects();
+  if (osInfo) accountAccess.syncProject(newProject); // entra nos grupos das contas liberadas ao dono
   for (const p of projects) canvas.notify(p.id, { type: "sidebar" });
-  return { ok: true, project: acl.present(req, newProject) };
+  return { ok: true, project: { ...acl.present(req, newProject), isolated: iso.isIsolated(newProject) } };
 });
 
 // DELETE /api/projects/:id e GET /api/projects/:id/delete-info (projectDeleteApi.ts)
-registerProjectDeleteApi({ fastify, projects, defaultRepo, dataDir, canvas, sessions, portals, routines, floors, sessionHistory, crossLinks, attachments, saveProjects });
+registerProjectDeleteApi({ fastify, projects, defaultRepo, dataDir, canvas, sessions, portals, routines, floors, sessionHistory, crossLinks, attachments, saveProjects, onDeleted: (p) => {
+  const u = (p as Project).osUser;
+  if (u) iso.deprovision(u); // mata o que sobrou do usuário, apaga usuário/grupo/HOME/TMPDIR (a pasta só vai com deleteFolder)
+} });
 
 // Estado do Canvas por Projeto
 fastify.get<{ Params: { id: string } }>("/api/projects/:id/canvas", async (req, reply) => {

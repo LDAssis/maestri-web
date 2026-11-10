@@ -46,7 +46,7 @@ export class UsageStore {
 
   constructor(
     private file: string | null,
-    private writeJson: (file: string, data: unknown) => void = (f, d) => fs.writeFileSync(f, JSON.stringify(d)),
+    private writeJson: (file: string, data: unknown) => void = (f, d) => fs.writeFileSync(f, JSON.stringify(d), { mode: 0o600 }),
     private debounceMs = 500,
   ) {
     if (file && fs.existsSync(file)) {

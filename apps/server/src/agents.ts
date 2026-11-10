@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { directProgramOf } from "./resume.js";
+import { fixOwner, mkdirOwned } from "./runAs.js";
 
 type Obj = Record<string, any>;
 
@@ -53,9 +54,10 @@ const shQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 // Caminho absoluto: o comando também funciona quando o cwd é um andar (worktree).
 export function withRolePrompt(repo: string, nodeId: string, cmd: string, prompt: string) {
   const dir = path.join(repo, ".maestri-roles");
-  fs.mkdirSync(dir, { recursive: true });
+  mkdirOwned(dir);
   const file = path.join(dir, `${nodeId}.md`);
   fs.writeFileSync(file, prompt);
+  fixOwner(file);
   // claude/codex pelo nome do executável (caminho absoluto, variáveis na frente), como a retomada de sessão detecta
   return directProgramOf(cmd) ? `${cmd} "$(cat ${shQuote(file.replace(/\\/g, "/"))})"` : cmd;
 }

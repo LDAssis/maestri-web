@@ -7,6 +7,7 @@ import { ApiError, PRESETS, PRESET_LABELS, SIZES, freePosition, validCmd } from 
 import { arrangeColor, deliverRole } from "./agentSetup.js";
 import { ICONS } from "./notesApi.js";
 import { validModel } from "./resume.js";
+import { fixOwner, mkdirOwned } from "./runAs.js";
 
 type Obj = Record<string, any>;
 
@@ -41,10 +42,11 @@ export function readRole(repo: string, roleId: string): Obj | null {
 
 export function writeRole(repo: string, role: Obj) {
   const dir = path.join(rolesDir(repo), String(role.id).toLowerCase());
-  fs.mkdirSync(dir, { recursive: true });
+  mkdirOwned(dir);
   const file = path.join(dir, "role.json");
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(role, null, 2));
+  fixOwner(tmp);
   fs.renameSync(tmp, file);
 }
 

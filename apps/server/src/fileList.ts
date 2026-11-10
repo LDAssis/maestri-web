@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { gitExecFile } from "./runAs.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -14,7 +14,7 @@ export const HEAVY_DIRS = new Set(["node_modules", ".git", ".next", ".turbo", ".
 
 function git(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("git", args, { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) =>
+    gitExecFile(cwd, args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) =>
       err ? reject(new Error((stderr || err.message).trim())) : resolve(stdout),
     );
   });

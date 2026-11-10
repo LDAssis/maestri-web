@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { gitExecFile, mkdirOwned, fixOwner } from "./runAs.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -29,7 +29,7 @@ export class GitError extends Error {
 // Sempre execFile com argv: nenhum valor externo passa por shell
 export function git(cwd: string, args: string[], env: Record<string, string> = {}): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("git", args, { cwd, env: { ...process.env, ...env }, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
+    gitExecFile(cwd, args, { env, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (!err) return resolve(stdout);
       reject(new GitError((stderr || stdout || err.message).trim(), stdout, (err as any).code));
     });
@@ -162,7 +162,7 @@ export function registerWorktreeApi({ fastify, sessions, canvas, projectRepo }: 
     }
 
     const wtPath = path.join(c.repo, ".worktrees", name);
-    fs.mkdirSync(path.dirname(wtPath), { recursive: true });
+    mkdirOwned(path.dirname(wtPath));
     const branch = `agent/${name}`;
     try {
       await git(c.repo, ["worktree", "add", "-b", branch, wtPath, baseName]);
@@ -173,8 +173,9 @@ export function registerWorktreeApi({ fastify, sessions, canvas, projectRepo }: 
     const exclude = path.resolve(c.repo, (await git(c.repo, ["rev-parse", "--git-path", "info/exclude"])).trim());
     const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
     if (!/^\/?\.worktrees\/?$/m.test(cur)) {
-      fs.mkdirSync(path.dirname(exclude), { recursive: true });
+      mkdirOwned(path.dirname(exclude));
       fs.appendFileSync(exclude, `${cur && !cur.endsWith("\n") ? "\n" : ""}/.worktrees/\n`);
+      fixOwner(exclude);
     }
 
     canvas.applyAndBroadcast(c.projectId, { kind: "patchNodeData", id: node.id, data: { worktree: name, branch, worktreePath: wtPath } }, "worktrees");

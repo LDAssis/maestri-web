@@ -32,6 +32,7 @@ interface Deps {
   crossLinks: CrossLinks;
   attachments: AttachmentStore;
   saveProjects: () => void;
+  onDeleted?: (project: ProjectLite) => void; // Fase 3: remove o usuário/HOME do projeto no SO
 }
 
 const idPattern = /^[\w-]+$/;
@@ -116,6 +117,7 @@ export function registerProjectDeleteApi(d: Deps) {
     for (const p of projects) d.canvas.notify(p.id, { type: "sidebar" });
 
     d.sessions.killProject(id);
+    d.onDeleted?.(project);
     d.portals.closeProject(id);
     d.canvas.drop(id);
     d.routines.removeProject(id);

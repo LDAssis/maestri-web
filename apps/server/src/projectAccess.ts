@@ -43,6 +43,8 @@ export interface PublicUser {
 export const dirUser = (u: User): PublicUser => ({ id: u.id, name: u.name, email: u.email, color: u.color });
 
 export class ProjectAcl {
+  // Mudou o dono de algum projeto (transferência/exclusão de usuário): as contas liberadas ao dono mudam junto (Fase 3)
+  onOwnerChange?: () => void;
   private sockets = new Set<{ userId: string; projectId: string; kind: "project" | "terminal" | "portal"; socket: WebSocket }>();
 
   constructor(
@@ -88,6 +90,7 @@ export class ProjectAcl {
   canSeeCurrent = (projectId: string) => {
     const req = reqStore.getStore();
     if (!req) return true;
+    if (req.authTerminal) return projectId === req.authTerminal.projectId; // token de terminal: só o próprio projeto
     const p = this.find(projectId);
     return !!p && !!this.reqAccess(req, p);
   };
@@ -128,9 +131,10 @@ export class ProjectAcl {
 
   // Item de projeto como o chamador pode ver: não-admin não recebe repoPath nem a lista de membros
   present(req: FastifyRequest, p: AclProject) {
-    const { members, repoPath, ...rest } = p;
+    // osUser/uid/gid (Fase 3) são detalhe de SO: só o admin vê
+    const { members, repoPath, osUser, uid, gid, ...rest } = p as AclProject & { osUser?: string; uid?: number; gid?: number };
     const base = { ...rest, ownerId: p.ownerId ?? null, access: this.describe(req, p) };
-    return this.isAdminReq(req) ? { ...base, repoPath, members: members ?? [] } : base;
+    return this.isAdminReq(req) ? { ...base, repoPath, members: members ?? [], ...(osUser ? { osUser, uid, gid } : {}) } : base;
   }
 
   // ---------- sockets por projeto (revogação) ----------
@@ -210,6 +214,7 @@ export class ProjectAcl {
     p.ownerId = userId;
     this.persist();
     this.notifyAll();
+    this.onOwnerChange?.();
   }
 
   // Admin excluiu o usuário: projetos dele passam a quem excluiu; ele sai de todos os members
@@ -225,6 +230,7 @@ export class ProjectAcl {
     }
     this.persist();
     this.notifyAll();
+    this.onOwnerChange?.();
   }
 
   // Projetos em que o usuário está explicitamente (dono/membro) ou é admin

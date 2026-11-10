@@ -2,7 +2,7 @@ import { desktopNotify } from "./desktopNotify.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawnScript } from "./runAs.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { CanvasStore } from "./canvas.js";
 import type { Session, SessionManager } from "./sessions.js";
@@ -90,7 +90,7 @@ const PRE_RUN_OUTPUT_MAX = 100_000;
 // no timeout (ou ao estourar a saída), mata o grupo inteiro: `exec` só matava o sh e deixava os filhos (sleep, git...) vivos.
 export function runPreRun(script: string, cwd: string, env: Record<string, string>) {
   return new Promise<{ ok: boolean; stdout: string; reason?: string }>((resolve) => {
-    const child = spawn("sh", ["-c", script], { cwd, env: { ...process.env, ...env }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnScript(script, cwd, env);
     let stdout = "";
     let stderr = "";
     let why = "";
@@ -105,14 +105,14 @@ export function runPreRun(script: string, cwd: string, env: Record<string, strin
       why = `pre-run excedeu ${preRunTimeoutMs() / 1000}s`;
       killGroup();
     }, preRunTimeoutMs());
-    child.stdout.on("data", (d) => {
+    child.stdout!.on("data", (d) => {
       stdout += d;
       if (stdout.length > PRE_RUN_OUTPUT_MAX) {
         why = "pre-run produziu saída demais";
         killGroup();
       }
     });
-    child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-2000)));
+    child.stderr!.on("data", (d) => (stderr = (stderr + d).slice(-2000)));
     child.on("error", (e) => {
       clearTimeout(timer);
       resolve({ ok: false, stdout: "", reason: `pre-run não iniciou: ${e.message}` });
@@ -281,7 +281,7 @@ const parsePreRun = (v: unknown) => {
 
 function writeJsonAtomic(file: string, data: unknown) {
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 

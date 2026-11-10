@@ -49,8 +49,21 @@ function shouldReport(nodeId, fingerprint) {
   return true;
 }
 
+// MAESTRI_TOKEN_FILE (token do terminal, só o dono lê) vence; MAESTRI_TOKEN é o recurso do Maestri nativo/dev
+function readToken() {
+  const f = process.env.MAESTRI_TOKEN_FILE;
+  if (f) {
+    try {
+      const t = fs.readFileSync(f, "utf8").trim();
+      if (t) return t;
+    } catch {}
+  }
+  return process.env.MAESTRI_TOKEN;
+}
+
 async function post(data) {
-  const { MAESTRI_API_URL: api, MAESTRI_PROJECT_ID: project, MAESTRI_NODE_ID: nodeId, MAESTRI_TOKEN: token } = process.env;
+  const { MAESTRI_API_URL: api, MAESTRI_PROJECT_ID: project, MAESTRI_NODE_ID: nodeId } = process.env;
+  const token = readToken();
   if (!api || !project || !nodeId) return;
   const m = data?.model;
   const model = typeof m === "string" ? m : m?.id || m?.display_name;
