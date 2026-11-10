@@ -62,6 +62,10 @@ process.on("unhandledRejection", (reason) => {
 // Loga só o pathname: a query do WS carrega ?token= e não pode ir para o log
 export const fastify = Fastify({
   logger: { serializers: { req: (req) => ({ method: req.method, url: req.url.split("?")[0] }) } },
+  // Atrás do túnel (cloudflared/proxy no mesmo host) toda requisição chega de 127.0.0.1: sem isto, req.ip é o mesmo para
+  // todo mundo e o limite de tentativas de login vira um balde GLOBAL (10 senhas erradas de qualquer um travam o login de
+  // todos). Confia no X-Forwarded-For só quando a conexão vem do loopback; acesso direto pela LAN usa o IP real.
+  trustProxy: process.env.MAESTRI_TRUST_PROXY ?? "127.0.0.1,::1",
 });
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
